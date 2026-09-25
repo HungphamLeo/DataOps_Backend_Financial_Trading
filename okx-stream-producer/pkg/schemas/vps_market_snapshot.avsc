@@ -1,0 +1,99 @@
+{
+  "type": "record",
+  "name": "VPSMarketSnapshot",
+  "namespace": "com.okx.vps.events",
+  "doc": "Market data snapshot from VPS Securities (Vietnam). Polled every 1 minute during VN trading hours (9:00-11:30 and 13:00-14:45 ICT, Mon-Fri). Covers HOSE, HNX, UPCOM exchanges.",
+  "fields": [
+    {
+      "name": "symbol",
+      "type": "string",
+      "doc": "Stock symbol, e.g. VNM, HPG, VIC, SSI"
+    },
+    {
+      "name": "exchange",
+      "type": {
+        "type": "enum",
+        "name": "VNExchange",
+        "symbols": ["HOSE", "HNX", "UPCOM"]
+      },
+      "doc": "Vietnamese stock exchange. HOSE=Ho Chi Minh Stock Exchange (large caps), HNX=Hanoi Stock Exchange, UPCOM=Unlisted Public Company Market"
+    },
+    {
+      "name": "price",
+      "type": "double",
+      "doc": "Last matched price (in VND thousands, e.g. 85.3 = 85,300 VND)"
+    },
+    {
+      "name": "bid",
+      "type": "double",
+      "doc": "Best bid price"
+    },
+    {
+      "name": "ask",
+      "type": "double",
+      "doc": "Best ask price"
+    },
+    {
+      "name": "open",
+      "type": "double",
+      "doc": "Opening price of the current session"
+    },
+    {
+      "name": "high",
+      "type": "double",
+      "doc": "Session high"
+    },
+    {
+      "name": "low",
+      "type": "double",
+      "doc": "Session low"
+    },
+    {
+      "name": "referencePrice",
+      "type": "double",
+      "doc": "Reference price (previous close, used for price band calculation)"
+    },
+    {
+      "name": "ceilingPrice",
+      "type": "double",
+      "doc": "Upper price band (+7% HOSE, +10% HNX). Order cannot exceed this."
+    },
+    {
+      "name": "floorPrice",
+      "type": "double",
+      "doc": "Lower price band (-7% HOSE, -10% HNX). Order cannot go below this."
+    },
+    {
+      "name": "volume",
+      "type": "double",
+      "doc": "Total matched volume in current session (shares)"
+    },
+    {
+      "name": "totalValue",
+      "type": "double",
+      "doc": "Total matched value in VND"
+    },
+    {
+      "name": "changePct",
+      "type": "double",
+      "doc": "Price change percentage from reference price"
+    },
+    {
+      "name": "sessionState",
+      "type": "string",
+      "doc": "Trading session state: ATO=opening auction, CONTINUOUS=normal trading, ATC=closing auction, BREAK=lunch break, CLOSED=market closed"
+    },
+    {
+      "name": "tsMs",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Snapshot timestamp (when VPS API was polled)"
+    },
+    {
+      "name": "producedAtMs",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Kafka producer timestamp"
+    }
+  ]
+}

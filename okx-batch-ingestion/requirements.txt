@@ -1,0 +1,36 @@
+# okx-batch-ingestion Python dependencies
+# LEARN: requirements.txt = pip install -r requirements.txt
+#        Pin versions để đảm bảo reproducibility (tránh "works on my machine" bugs)
+
+# ─── Data Ingestion ───────────────────────────────────────────────────────────
+requests==2.31.0          # HTTP client — OKX REST API + VPS REST API
+tenacity==8.2.3           # Retry library with exponential backoff
+tqdm==4.66.1              # Progress bars cho terminal backfill
+
+# ─── Data Validation ─────────────────────────────────────────────────────────
+pydantic==2.5.2           # Runtime type validation — reject bad data trước khi ghi
+
+# ─── Data Processing ─────────────────────────────────────────────────────────
+pandas==2.1.4             # DataFrame operations — transform, deduplicate, enrich
+pyarrow==14.0.2           # Apache Arrow — columnar in-memory format, Parquet I/O
+
+# ─── Delta Lake ───────────────────────────────────────────────────────────────
+# LEARN: deltalake (python) = Rust-based delta-rs bindings — NO Spark dependency
+#        Tốt cho single-machine batch writes (< 1TB)
+#        Spark Delta Lake = cho distributed processing (> 1TB, multiple machines)
+deltalake==0.15.1
+
+# ─── Kafka ────────────────────────────────────────────────────────────────────
+# NOTE: batch ingestion pipeline không đọc Kafka trực tiếp
+#       Nhưng dùng confluent-kafka nếu cần monitor DLQ topics
+confluent-kafka==2.3.0
+
+# ─── PySpark (cho spark_jobs.py) ─────────────────────────────────────────────
+# LEARN: pyspark >= 3.4 có Native Delta Lake support (không cần package riêng)
+pyspark==3.5.0            # Apache Spark Python API
+
+# ─── Storage ─────────────────────────────────────────────────────────────────
+boto3==1.34.0             # AWS SDK — dùng cho MinIO S3-compatible API
+
+# ─── Utilities ────────────────────────────────────────────────────────────────
+python-dotenv==1.0.0      # Load .env files vào environment variables

@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package dataquery.v1;
+
+option go_package = "github.com/HungphamLeo/BackendDataPlatform/protobuf/data-query;dataquerv1";
+
+import "google/protobuf/timestamp.proto";
+
+// DataQuery service: unified internal query interface
+service DataQuery {
+  rpc QueryMarketSummary(MarketSummaryRequest) returns (MarketSummaryResponse);
+  rpc QueryHistoricalRange(HistoricalRangeRequest) returns (HistoricalRangeResponse);
+  rpc QuerySignals(SignalRequest) returns (SignalResponse);
+}
+
+message MarketSummaryRequest {
+  string symbol   = 1;
+  string exchange = 2;
+}
+
+message MarketSummary {
+  string symbol         = 1;
+  string exchange       = 2;
+  double last_price     = 3;
+  double bid            = 4;
+  double ask            = 5;
+  double volume_24h     = 6;
+  double change_24h_pct = 7;
+  google.protobuf.Timestamp timestamp = 8;
+}
+
+message MarketSummaryResponse {
+  MarketSummary summary = 1;
+}
+
+message HistoricalRangeRequest {
+  string symbol   = 1;
+  string exchange = 2;
+  string interval = 3;
+  google.protobuf.Timestamp from = 4;
+  google.protobuf.Timestamp to   = 5;
+  int32  limit    = 6;
+}
+
+message OHLCVBar {
+  string symbol   = 1;
+  string exchange = 2;
+  string interval = 3;
+  double open     = 4;
+  double high     = 5;
+  double low      = 6;
+  double close    = 7;
+  double volume   = 8;
+  google.protobuf.Timestamp timestamp = 9;
+}
+
+message HistoricalRangeResponse {
+  repeated OHLCVBar bars = 1;
+}
+
+message SignalRequest {
+  string symbol   = 1;
+  string exchange = 2;
+  string interval = 3;
+}
+
+message Signal {
+  string symbol         = 1;
+  string exchange       = 2;
+  string interval       = 3;
+  string indicator_name = 4;
+  double value          = 5;
+  string meta_json      = 6;
+  google.protobuf.Timestamp timestamp = 7;
+}
+
+message SignalResponse {
+  repeated Signal signals = 1;
+}

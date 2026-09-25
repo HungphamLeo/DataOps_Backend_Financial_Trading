@@ -1,0 +1,55 @@
+{
+  "type": "record",
+  "name": "OKXOrderBookSnapshot",
+  "namespace": "com.okx.vps.events",
+  "doc": "Level 2 order book snapshot from OKX. Published every ~100ms on channel books5 (top 5 levels).",
+  "fields": [
+    {
+      "name": "instId",
+      "type": "string",
+      "doc": "Instrument ID, e.g. BTC-USDT"
+    },
+    {
+      "name": "tsMs",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Orderbook snapshot timestamp from OKX"
+    },
+    {
+      "name": "producedAtMs",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Kafka producer timestamp"
+    },
+    {
+      "name": "bids",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "PriceLevel",
+          "fields": [
+            { "name": "price",    "type": "double", "doc": "Price level" },
+            { "name": "quantity", "type": "double", "doc": "Total quantity at this level" },
+            { "name": "numOrders","type": "int",    "doc": "Number of orders at this level (0 if unknown)" }
+          ]
+        }
+      },
+      "doc": "Bid side (buyers): sorted descending by price. Best bid = bids[0]"
+    },
+    {
+      "name": "asks",
+      "type": {
+        "type": "array",
+        "items": "PriceLevel"
+      },
+      "doc": "Ask side (sellers): sorted ascending by price. Best ask = asks[0]"
+    },
+    {
+      "name": "checksum",
+      "type": ["null", "int"],
+      "default": null,
+      "doc": "OKX checksum for orderbook integrity verification (optional)"
+    }
+  ]
+}

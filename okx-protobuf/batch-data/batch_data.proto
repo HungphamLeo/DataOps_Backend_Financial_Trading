@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package batchdata.v1;
+
+option go_package = "github.com/HungphamLeo/BackendDataPlatform/protobuf/batch-data;batchdatav1";
+
+import "google/protobuf/timestamp.proto";
+
+// BatchData service: historical OHLCV and indicator results
+service BatchData {
+  rpc GetOHLCV(OHLCVRequest) returns (OHLCVResponse);
+  rpc GetIndicator(IndicatorRequest) returns (IndicatorResponse);
+  rpc ListAvailableSymbols(ListSymbolsRequest) returns (ListSymbolsResponse);
+}
+
+message OHLCVRequest {
+  string symbol   = 1;
+  string exchange = 2;
+  string interval = 3;
+  google.protobuf.Timestamp from = 4;
+  google.protobuf.Timestamp to   = 5;
+  int32  limit    = 6;
+}
+
+message OHLCVBar {
+  string symbol   = 1;
+  string exchange = 2;
+  string interval = 3;
+  double open     = 4;
+  double high     = 5;
+  double low      = 6;
+  double close    = 7;
+  double volume   = 8;
+  google.protobuf.Timestamp timestamp = 9;
+}
+
+message OHLCVResponse {
+  repeated OHLCVBar bars = 1;
+}
+
+message IndicatorRequest {
+  string symbol         = 1;
+  string exchange       = 2;
+  string interval       = 3;
+  string indicator_name = 4; // SMA, EMA, ATR, RSI, BBANDS
+  google.protobuf.Timestamp from = 5;
+  google.protobuf.Timestamp to   = 6;
+  int32  limit          = 7;
+}
+
+message IndicatorPoint {
+  string symbol         = 1;
+  string exchange       = 2;
+  string interval       = 3;
+  string indicator_name = 4;
+  double value          = 5;
+  string meta_json      = 6; // extra values e.g. upper/lower bands
+  google.protobuf.Timestamp timestamp = 7;
+}
+
+message IndicatorResponse {
+  repeated IndicatorPoint points = 1;
+}
+
+message ListSymbolsRequest {
+  string exchange = 1;
+}
+
+message ListSymbolsResponse {
+  repeated string symbols = 1;
+}

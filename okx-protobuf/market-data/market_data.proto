@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package marketdata.v1;
+
+option go_package = "github.com/HungphamLeo/BackendDataPlatform/protobuf/market-data;marketdatav1";
+
+import "google/protobuf/timestamp.proto";
+
+// MarketDataStream service: real-time market data access
+service MarketDataStream {
+  rpc GetTicker(TickerRequest) returns (TickerResponse);
+  rpc GetOrderBook(OrderBookRequest) returns (OrderBookResponse);
+  rpc GetKline(KlineRequest) returns (KlineResponse);
+  rpc StreamTicker(TickerRequest) returns (stream TickerResponse);
+}
+
+message TickerRequest {
+  string symbol   = 1;
+  string exchange = 2;
+}
+
+message TickerResponse {
+  string symbol    = 1;
+  string exchange  = 2;
+  double price     = 3;
+  double volume    = 4;
+  double bid       = 5;
+  double ask       = 6;
+  google.protobuf.Timestamp timestamp = 7;
+}
+
+message OrderBookRequest {
+  string symbol   = 1;
+  string exchange = 2;
+  int32  depth    = 3; // number of levels, default 10
+}
+
+message OrderBookEntry {
+  double price    = 1;
+  double quantity = 2;
+}
+
+message OrderBookResponse {
+  string symbol   = 1;
+  string exchange = 2;
+  repeated OrderBookEntry bids = 3;
+  repeated OrderBookEntry asks = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+message KlineRequest {
+  string symbol   = 1;
+  string exchange = 2;
+  string interval = 3; // 1m, 5m, 1h
+  google.protobuf.Timestamp from = 4;
+  google.protobuf.Timestamp to   = 5;
+  int32  limit    = 6;
+}
+
+message Kline {
+  string symbol   = 1;
+  string exchange = 2;
+  string interval = 3;
+  double open     = 4;
+  double high     = 5;
+  double low      = 6;
+  double close    = 7;
+  double volume   = 8;
+  google.protobuf.Timestamp timestamp = 9;
+}
+
+message KlineResponse {
+  repeated Kline klines = 1;
+}

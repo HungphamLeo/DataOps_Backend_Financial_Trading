@@ -1,0 +1,149 @@
+syntax = "proto3";
+
+// LEARN: Protobuf cho VN Stock Market service
+//        Separate proto file vì:
+//        1. VPS data có domain concepts riêng (VN exchanges, price bands, sessions)
+//        2. Loose coupling — analytics service và vnstock service deploy độc lập
+//        3. Team khác nhau có thể own từng proto
+
+package vnstock.v1;
+
+option go_package = "okx-protobuf/vnstock";
+
+// VNStockService phục vụ dữ liệu thị trường chứng khoán Việt Nam
+service VNStockService {
+  rpc GetMarketSnapshot(SnapshotRequest) returns (SnapshotResponse);
+  rpc GetOHLCV(VNOHLCVRequest) returns (VNOHLCVResponse);
+  rpc GetTopMovers(TopMoversRequest) returns (TopMoversResponse);
+  rpc GetMarketSummary(MarketSummaryRequest) returns (MarketSummaryResponse);
+
+  // Server-streaming: push market updates real-time
+  rpc StreamMarketData(StreamRequest) returns (stream MarketSnapshot);
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+// LEARN: enum trong protobuf — strongly typed, số hóa (tiết kiệm bytes)
+
+enum VNExchange {
+  EXCHANGE_UNSPECIFIED = 0;  // protobuf quy tắc: enum value 0 = default/unknown
+  HOSE = 1;  // Ho Chi Minh Stock Exchange — large caps (VNM, VIC, HPG...)
+  HNX  = 2;  // Hanoi Stock Exchange — mid caps
+  UPCOM = 3; // Unlisted Public Company Market — small caps / recent listings
+}
+
+enum SessionState {
+  SESSION_UNSPECIFIED = 0;
+  ATO         = 1;  // At the Opening — phiên đấu giá mở cửa (9:00-9:15)
+  CONTINUOUS  = 2;  // Khớp lệnh liên tục (9:15-11:30, 13:00-14:30)
+  ATC         = 3;  // At the Closing — phiên đấu giá đóng cửa (14:30-14:45)
+  BREAK       = 4;  // Nghỉ trưa (11:30-13:00)
+  CLOSED      = 5;  // Đóng cửa
+}
+
+// ─── Messages ─────────────────────────────────────────────────────────────────
+
+message SnapshotRequest {
+  repeated string symbols  = 1;  // danh sách mã CK: ["VNM", "HPG", "VIC"]
+  VNExchange      exchange = 2;
+}
+
+message MarketSnapshot {
+  string       symbol          = 1;
+  VNExchange   exchange        = 2;
+  double       price           = 3;  // VND thousands
+  double       bid             = 4;
+  double       ask             = 5;
+  double       open            = 6;
+  double       high            = 7;
+  double       low             = 8;
+  double       reference_price = 9;
+  double       ceiling_price   = 10; // +7% HOSE, +10% HNX
+  double       floor_price     = 11; // -7% HOSE, -10% HNX
+  double       volume          = 12; // matched volume (shares)
+  double       total_value     = 13; // VND
+  double       change_pct      = 14;
+  SessionState session_state   = 15;
+  int64        timestamp_ms    = 16;
+}
+
+message SnapshotResponse {
+  repeated MarketSnapshot snapshots = 1;
+  int64                   as_of_ms  = 2; // khi nào data được poll
+}
+
+// ─── OHLCV ───────────────────────────────────────────────────────────────────
+
+message VNOHLCVRequest {
+  string     symbol    = 1;
+  string     timeframe = 2;  // "1m", "1d", "1w"
+  int64      from_ms   = 3;
+  int64      to_ms     = 4;
+}
+
+message VNOHLCVCandle {
+  int64  timestamp_ms = 1;
+  double open         = 2;
+  double high         = 3;
+  double low          = 4;
+  double close        = 5;
+  double volume       = 6;
+  double total_value  = 7;
+}
+
+message VNOHLCVResponse {
+  string                symbol  = 1;
+  string                timeframe = 2;
+  repeated VNOHLCVCandle candles = 3;
+}
+
+// ─── Top Movers ───────────────────────────────────────────────────────────────
+
+message TopMoversRequest {
+  VNExchange exchange  = 1;
+  int32      limit     = 2;  // top N (default 10)
+  string     direction = 3;  // "gainers" | "losers" | "volume" | "both"
+}
+
+message TopMover {
+  string     symbol     = 1;
+  VNExchange exchange   = 2;
+  double     price      = 3;
+  double     change_pct = 4;
+  double     volume     = 5;
+}
+
+message TopMoversResponse {
+  repeated TopMover gainers = 1;  // top tăng mạnh nhất
+  repeated TopMover losers  = 2;  // top giảm mạnh nhất
+  repeated TopMover by_volume = 3; // top khối lượng
+}
+
+// ─── Market Summary ───────────────────────────────────────────────────────────
+// Tổng quan thị trường theo sàn (giống VN-Index summary)
+
+message MarketSummaryRequest {
+  VNExchange exchange = 1;
+}
+
+message MarketSummaryResponse {
+  VNExchange exchange          = 1;
+  int32      total_stocks      = 2;
+  int32      advancing         = 3;  // số mã tăng
+  int32      declining         = 4;  // số mã giảm
+  int32      unchanged         = 5;  // số mã đứng
+  int32      ceiling_hit       = 6;  // số mã tăng trần
+  int32      floor_hit         = 7;  // số mã giảm sàn
+  double     total_volume      = 8;
+  double     total_value       = 9;
+  double     market_breadth    = 10; // (advancing - declining) / total — thước đo tâm lý TT
+  SessionState session_state   = 11;
+  int64      timestamp_ms      = 12;
+}
+
+// ─── Streaming ────────────────────────────────────────────────────────────────
+
+message StreamRequest {
+  repeated string symbols  = 1;
+  VNExchange      exchange = 2;
+  int32           interval_ms = 3;  // poll interval (min 1000ms = 1 giây)
+}

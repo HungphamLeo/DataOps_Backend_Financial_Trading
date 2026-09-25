@@ -1,0 +1,163 @@
+syntax = "proto3";
+
+// LEARN: Protocol Buffers (protobuf) là binary serialization format của Google
+//        So với JSON: nhỏ hơn ~3-10x, serialize/deserialize nhanh hơn ~100x
+//        Dùng cho gRPC — Remote Procedure Call framework của Google
+//
+// Tại sao gRPC thay vì REST?
+//   - Strongly typed: schema bắt buộc, không thể gửi sai field
+//   - Bidirectional streaming: server push, client stream, full-duplex
+//   - HTTP/2: multiplexing (nhiều requests trên 1 TCP connection)
+//   - Code generation: protoc tạo Go/Python/Java/... code tự động
+//
+// References: "gRPC: Up and Running" (O'Reilly)
+
+package analytics.v1;
+
+option go_package = "okx-protobuf/analytics";
+
+// ─── Analytics Service ────────────────────────────────────────────────────────
+// Service định nghĩa các RPC methods — đây là contract giữa client và server
+
+service AnalyticsService {
+  // Unary RPC: 1 request → 1 response (giống HTTP REST)
+  rpc GetOHLCV(OHLCVRequest) returns (OHLCVResponse);
+  rpc GetVWAP(VWAPRequest) returns (VWAPResponse);
+  rpc GetFundingRate(FundingRateRequest) returns (FundingRateResponse);
+  rpc GetDailySummary(DailySummaryRequest) returns (DailySummaryResponse);
+
+  // Server-streaming RPC: 1 request → nhiều responses (stream)
+  // LEARN: Dùng khi muốn push real-time updates liên tục đến client
+  rpc StreamOKXTrades(StreamTradesRequest) returns (stream TradeEvent);
+  rpc StreamAlerts(StreamAlertsRequest) returns (stream Alert);
+}
+
+// ─── Common Types ─────────────────────────────────────────────────────────────
+
+message TimeRange {
+  int64 from_ms = 1;  // Unix milliseconds
+  int64 to_ms   = 2;
+}
+
+message Pagination {
+  int32 limit  = 1;
+  int32 offset = 2;
+}
+
+// ─── OHLCV ───────────────────────────────────────────────────────────────────
+
+message OHLCVRequest {
+  string    symbol    = 1;  // e.g. "BTC-USDT" hoặc "VNM"
+  string    timeframe = 2;  // "1m", "5m", "1h", "1d"
+  TimeRange range     = 3;
+  string    source    = 4;  // "OKX" | "VPS"
+  Pagination pagination = 5;
+}
+
+message OHLCVCandle {
+  int64  timestamp_ms = 1;
+  double open         = 2;
+  double high         = 3;
+  double low          = 4;
+  double close        = 5;
+  double volume       = 6;
+  double vwap         = 7;  // volume-weighted avg price for this candle
+}
+
+message OHLCVResponse {
+  string          symbol    = 1;
+  string          timeframe = 2;
+  repeated OHLCVCandle candles = 3;  // repeated = array trong protobuf
+  int64           total     = 4;     // total count (for pagination)
+}
+
+// ─── VWAP ─────────────────────────────────────────────────────────────────────
+
+message VWAPRequest {
+  string    inst_id   = 1;
+  string    timeframe = 2;
+  TimeRange range     = 3;
+}
+
+message VWAPPoint {
+  int64  window_start_ms = 1;
+  int64  window_end_ms   = 2;
+  double vwap            = 3;
+  double volume          = 4;
+  int64  trade_count     = 5;
+  double avg_lag_ms      = 6;  // producer lag monitoring
+}
+
+message VWAPResponse {
+  string            inst_id = 1;
+  repeated VWAPPoint points = 2;
+}
+
+// ─── Funding Rate ─────────────────────────────────────────────────────────────
+
+message FundingRateRequest {
+  string    inst_id = 1;
+  TimeRange range   = 2;
+}
+
+message FundingRatePoint {
+  int64  timestamp_ms      = 1;
+  double rate              = 2;  // e.g. 0.0001 = 0.01% per 8 hours
+  string next_funding_time = 3;
+  double zscore            = 4;  // rolling 30-day Z-score
+  string signal            = 5;  // "EXTREME_LONG" | "NEUTRAL" | "EXTREME_SHORT"
+}
+
+message FundingRateResponse {
+  string                    inst_id = 1;
+  repeated FundingRatePoint points  = 2;
+}
+
+// ─── Daily Summary ────────────────────────────────────────────────────────────
+
+message DailySummaryRequest {
+  string inst_id   = 1;
+  string date      = 2;  // "2024-01-15" format
+}
+
+message DailySummaryResponse {
+  string inst_id      = 1;
+  string date         = 2;
+  double price_open   = 3;
+  double price_high   = 4;
+  double price_low    = 5;
+  double price_close  = 6;
+  double total_volume = 7;
+  double buy_volume   = 8;
+  double sell_volume  = 9;
+  double vwap         = 10;
+  int64  trade_count  = 11;
+}
+
+// ─── Streaming Types ──────────────────────────────────────────────────────────
+
+message StreamTradesRequest {
+  repeated string inst_ids = 1;  // subscribe nhiều instruments cùng lúc
+}
+
+message TradeEvent {
+  string inst_id      = 1;
+  string trade_id     = 2;
+  double price        = 3;
+  double size         = 4;
+  string side         = 5;  // "buy" | "sell"
+  int64  timestamp_ms = 6;
+}
+
+message StreamAlertsRequest {
+  repeated string inst_ids  = 1;
+  double          lag_threshold_ms = 2;  // alert khi lag > này
+}
+
+message Alert {
+  string alert_type = 1;   // "PRICE_SPIKE" | "HIGH_LIQUIDATION" | "CONSUMER_LAG" | "EXTREME_FUNDING"
+  string inst_id    = 2;
+  string message    = 3;
+  double value      = 4;   // giá trị trigger alert (price, lag ms, funding rate...)
+  int64  timestamp_ms = 5;
+}
