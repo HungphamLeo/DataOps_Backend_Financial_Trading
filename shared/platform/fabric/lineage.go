@@ -1,3 +1,16 @@
+// Package fabric cung cấp Data Lineage tracking cho toàn bộ data pipeline.
+//
+// Data Lineage là khả năng trace "dữ liệu này đi từ đâu, qua những stage nào"
+// — cực kỳ quan trọng để debug khi dữ liệu bị sai hoặc mất.
+//
+// Pipeline stages theo thứ tự:
+//   INGESTION → KAFKA_BUFFER → STREAM_PROCESS → DELTA_BRONZE → DELTA_SILVER → SERVING_API
+//
+// Mỗi service khi hoàn thành xử lý 1 batch/event gọi LineageTracker.Track() để ghi lại:
+//   - Đã nhận bao nhiêu records (record_count)
+//   - Từ đâu (source) và đến đâu (target)
+//   - Thành công hay thất bại (status)
+//   - TraceID để correlate tất cả events của cùng 1 data unit
 package fabric
 
 import (
@@ -9,7 +22,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// DataStage định nghĩa các giai đoạn chuẩn trong Data Fabric Pipeline
+// DataStage định nghĩa các giai đoạn chuẩn trong Data Fabric Pipeline.
+// Thứ tự các stage phản ánh luồng data từ nguồn đến API serving.
 type DataStage string
 
 const (
