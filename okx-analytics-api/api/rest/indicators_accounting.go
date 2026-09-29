@@ -22,6 +22,7 @@ package rest
 
 import (
 	"net/http"
+	"okx-analytics-api/constants"
 	"okx-analytics-api/middlewares"
 	"okx-analytics-api/services/accounting"
 	"okx-analytics-api/services/indicator"
@@ -182,8 +183,8 @@ func ComputeSignal(svc indicator.Service) gin.HandlerFunc {
 		// LEARN: c.Query — lấy URL query string parameter
 		//        /api/v1/indicators/1/signal?symbol=BTC-USDT&timeframe=1h
 		symbol := c.Query("symbol")
-		exchange := c.DefaultQuery("exchange", "OKX")
-		timeframe := c.DefaultQuery("timeframe", "1h")
+		exchange := c.DefaultQuery("exchange", constants.DefaultCryptoExchange)
+		timeframe := c.DefaultQuery("timeframe", constants.TF_1H)
 
 		if symbol == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "symbol required"})
@@ -211,8 +212,8 @@ func GetBalance(svc accounting.Service) gin.HandlerFunc {
 			return
 		}
 
-		exchange := c.DefaultQuery("exchange", "OKX")
-		currency := c.DefaultQuery("currency", "USDT")
+		exchange := c.DefaultQuery("exchange", constants.DefaultCryptoExchange)
+		currency := c.DefaultQuery("currency", constants.DefaultCurrency)
 
 		balance, err := svc.GetBalance(user.ID, exchange, currency)
 		if err != nil {
@@ -283,10 +284,10 @@ func GetDailyPnL(svc accounting.Service) gin.HandlerFunc {
 			return
 		}
 
-		exchange := c.DefaultQuery("exchange", "OKX")
+		exchange := c.DefaultQuery("exchange", constants.DefaultCryptoExchange)
 		days, _ := strconv.Atoi(c.DefaultQuery("days", "30"))
-		if days < 1 || days > 365 {
-			days = 30
+		if days < 1 || days > constants.MaxPnLDays {
+			days = constants.DefaultPnLDays
 		}
 
 		pnl, err := svc.GetDailyPnL(user.ID, exchange, days)

@@ -18,6 +18,7 @@ package indicator
 
 import (
 	"fmt"
+	"okx-analytics-api/logging"
 	"okx-analytics-api/models"
 	"okx-analytics-api/repository"
 	"strings"
@@ -38,11 +39,12 @@ type Service interface {
 }
 
 type indicatorService struct {
-	repo repository.Repository
+	repo   repository.Repository
+	logger *logging.Logger
 }
 
-func NewService(repo repository.Repository) Service {
-	return &indicatorService{repo: repo}
+func NewService(repo repository.Repository, logger *logging.Logger) Service {
+	return &indicatorService{repo: repo, logger: logger}
 }
 
 // ─── Request DTOs ─────────────────────────────────────────────────────────────
@@ -84,12 +86,18 @@ type UpdateGroupRequest struct {
 // ─── Service Implementation ───────────────────────────────────────────────────
 
 func (s *indicatorService) ListGroups(userID uint) ([]*models.IndicatorGroup, error) {
-	return s.repo.GetListIndicatorGroups(userID)
+	groups, err := s.repo.GetListIndicatorGroups(userID)
+	if err != nil {
+		s.logger.Error("ListGroups", "failed to list indicator groups", map[string]interface{}{"userID": userID, "err": err.Error()})
+		return nil, err
+	}
+	return groups, nil
 }
 
 func (s *indicatorService) GetGroup(id, userID uint) (*models.IndicatorGroup, error) {
 	group, err := s.repo.GetIndicatorGroupDetail(id, userID)
 	if err != nil {
+		s.logger.Warn("GetGroup", "indicator group not found", map[string]interface{}{"groupID": id, "userID": userID, "err": err.Error()})
 		return nil, fmt.Errorf("indicator group %d not found", id)
 	}
 	return group, nil
@@ -138,8 +146,10 @@ func (s *indicatorService) CreateGroup(req CreateGroupRequest, userID uint) (*mo
 
 	if err := s.repo.CreateIndicatorGroup(group); err != nil {
 		if strings.Contains(err.Error(), "Duplicate entry") {
+			s.logger.Warn("CreateGroup", "duplicate short_name", map[string]interface{}{"shortName": req.ShortName, "userID": userID})
 			return nil, fmt.Errorf("indicator group short_name '%s' already exists", req.ShortName)
 		}
+		s.logger.Error("CreateGroup", "failed to create indicator group", map[string]interface{}{"shortName": req.ShortName, "userID": userID, "err": err.Error()})
 		return nil, fmt.Errorf("create indicator group: %w", err)
 	}
 
@@ -196,6 +206,7 @@ func (s *indicatorService) UpdateGroup(id uint, req UpdateGroupRequest, userID u
 	}
 
 	if err := s.repo.UpdateIndicatorGroup(group, validIndicatorIDs, validParamIDs); err != nil {
+		s.logger.Error("UpdateGroup", "failed to update indicator group", map[string]interface{}{"groupID": id, "userID": userID, "err": err.Error()})
 		return nil, fmt.Errorf("update indicator group: %w", err)
 	}
 
@@ -203,7 +214,12 @@ func (s *indicatorService) UpdateGroup(id uint, req UpdateGroupRequest, userID u
 }
 
 func (s *indicatorService) DeleteGroup(id, userID uint) error {
-	return s.repo.DeleteIndicatorGroup(id, userID)
+	if err := s.repo.DeleteIndicatorGroup(id, userID); err != nil {
+		s.logger.Error("DeleteGroup", "failed to delete indicator group", map[string]interface{}{"groupID": id, "userID": userID, "err": err.Error()})
+		return err
+	}
+	s.logger.Info("DeleteGroup", "indicator group deleted", map[string]interface{}{"groupID": id, "userID": userID})
+	return nil
 }
 
 // ComputeSignal tính indicator signal — placeholder, extend với real logic

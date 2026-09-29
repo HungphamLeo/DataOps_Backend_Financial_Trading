@@ -9,56 +9,77 @@ import (
 	"net/http"
 	"okx-analytics-api/api/rest"
 	"okx-analytics-api/configuration"
+	"okx-analytics-api/constants"
+	"okx-analytics-api/logging"
 	"okx-analytics-api/middlewares"
 	"okx-analytics-api/redis"
 	"okx-analytics-api/repository"
 	"okx-analytics-api/services"
-	"okx-analytics-api/utils"
 	"os/signal"
 	"syscall"
 	"time"
 )
 
-const port = 8080
-
+// NewServer khởi động HTTP server với đầy đủ dependencies:
+// config → database → redis → services → HTTP listener.
+// Hỗ trợ graceful shutdown khi nhận SIGINT / SIGTERM.
+//
+// Port được đọc từ constants.DefaultHTTPPort (không hardcode trong file này).
 func NewServer() error {
-	fmt.Printf("%s [okx-analytics-api] Starting v1.0.0\n", utils.GetTimeNow())
+	// 1. Logger — dùng logging.NewLogger (internal structured JSON logger).
+	//    Không import go.uber.org/zap trực tiếp vì chưa có trong go.mod;
+	//    khi cần upgrade sang zap, chỉ sửa logging/logger.go.
+	logger, closeLogger, err := logging.NewLogger(logging.Config{
+		Service: "okx-analytics-api",
+		Level:   logging.INFO,
+	})
+	if err != nil {
+		return fmt.Errorf("[Logger] %w", err)
+	}
+	defer closeLogger()
 
-	// 1. Config từ .env
+	// log.Logger chuẩn cho rest.NewAPI() — dùng prefix để phân biệt subsystem
+	apiLogger := log.New(log.Writer(), "[API] ", log.Ldate|log.Ltime|log.LUTC)
+
+	logger.Info("server.start", "Starting okx-analytics-api",
+		map[string]interface{}{"version": "v1.0.0", "port": constants.DefaultHTTPPort})
+
+	// 2. Config từ .env
 	cfg, err := configuration.FromEnv()
 	if err != nil {
 		return fmt.Errorf("[Config] %w", err)
 	}
 
-	// 2. Database (MySQL) — REUSE: market-maker-api/repository/repository.go
+	// 3. Database (MySQL) — REUSE: market-maker-api/repository/repository.go
 	repo, err := repository.InitializeDatabase(cfg)
 	if err != nil {
 		return fmt.Errorf("[Database] %w", err)
 	}
 
-	// 3. Redis — REUSE 100%: trading-bot-api/redis/redis.go
+	// 4. Redis — REUSE 100%: trading-bot-api/redis/redis.go
 	redisDB0 := redis.NewServer(cfg, cfg.Redis.DB_0)
 	if !redisDB0.Ping() {
 		return fmt.Errorf("[Redis] connection was down")
 	}
 
-	// 4. Middlewares JWT sử dụng Redis session — REUSE: market-maker-api/middlewares/auth.go
+	// 5. Middlewares JWT sử dụng Redis session — REUSE: market-maker-api/middlewares/auth.go
 	_ = middlewares.JwtAuthMiddleware // registered in rest.go
 
-	// 5. Services — DI pattern: REUSE market-maker-api/services/services.go
-	svc := services.NewServices(repo, cfg, redisDB0)
+	// 6. Services — DI pattern: REUSE market-maker-api/services/services.go
+	svc := services.NewServices(repo, cfg, redisDB0, logger)
 
-	// 6. HTTP Server — REUSE: trading-bot-api/app/server.go
+	// 7. HTTP Server — REUSE: trading-bot-api/app/server.go
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: rest.NewAPI(svc, cfg, redisDB0),
+		Addr:    fmt.Sprintf(":%d", constants.DefaultHTTPPort),
+		Handler: rest.NewAPI(svc, cfg, redisDB0, apiLogger),
 	}
 
 	go func() {
-		fmt.Printf("%s [okx-analytics-api] HTTP server running on port %d\n", utils.GetTimeNow(), port)
+		logger.Info("server.listen", "HTTP server running",
+			map[string]interface{}{"port": constants.DefaultHTTPPort})
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("[HTTP] listen error: %s", err)
 		}
@@ -67,13 +88,13 @@ func NewServer() error {
 	// Block cho đến khi SIGTERM / Ctrl+C
 	<-ctx.Done()
 
-	// Graceful shutdown với 5s timeout
+	// Graceful shutdown với timeout từ GatewayConfig
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("[HTTP] forced shutdown: %s", err)
 	}
 
-	fmt.Printf("%s [okx-analytics-api] Stopped\n", utils.GetTimeNow())
+	logger.Info("server.stop", "okx-analytics-api stopped", nil)
 	return nil
 }

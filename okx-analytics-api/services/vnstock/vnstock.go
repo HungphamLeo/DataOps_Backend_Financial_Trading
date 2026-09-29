@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"okx-analytics-api/configuration"
+	"okx-analytics-api/logging"
 	"okx-analytics-api/models"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
@@ -21,11 +22,12 @@ type Service interface {
 type vnStockService struct {
 	cfg    *configuration.Config
 	client influxdb2.Client
+	logger *logging.Logger
 }
 
-func NewService(cfg *configuration.Config) Service {
+func NewService(cfg *configuration.Config, logger *logging.Logger) Service {
 	client := influxdb2.NewClient(cfg.InfluxDB.URL, cfg.InfluxDB.Token)
-	return &vnStockService{cfg: cfg, client: client}
+	return &vnStockService{cfg: cfg, client: client, logger: logger}
 }
 
 // GetMarketSnapshot lấy snapshot mới nhất của 1 mã CK từ InfluxDB
@@ -44,6 +46,7 @@ func (s *vnStockService) GetMarketSnapshot(ctx context.Context, symbol string) (
 
 	result, err := queryAPI.Query(ctx, fluxQuery)
 	if err != nil {
+		s.logger.Error("GetMarketSnapshot", "InfluxDB query failed", map[string]interface{}{"symbol": symbol, "err": err.Error()})
 		return nil, fmt.Errorf("[VNStockSvc] GetMarketSnapshot: %w", err)
 	}
 	defer result.Close()
@@ -82,6 +85,7 @@ func (s *vnStockService) GetOHLCV(ctx context.Context, symbol, interval string, 
 
 	result, err := queryAPI.Query(ctx, fluxQuery)
 	if err != nil {
+		s.logger.Error("GetOHLCV", "InfluxDB query failed", map[string]interface{}{"symbol": symbol, "interval": interval, "err": err.Error()})
 		return nil, fmt.Errorf("[VNStockSvc] GetOHLCV: %w", err)
 	}
 	defer result.Close()
@@ -121,6 +125,7 @@ func (s *vnStockService) GetTopMovers(ctx context.Context, exchange string, limi
 
 	result, err := queryAPI.Query(ctx, fluxQuery)
 	if err != nil {
+		s.logger.Error("GetTopMovers", "InfluxDB query failed", map[string]interface{}{"exchange": exchange, "limit": limit, "err": err.Error()})
 		return nil, fmt.Errorf("[VNStockSvc] GetTopMovers: %w", err)
 	}
 	defer result.Close()
@@ -143,10 +148,11 @@ func (s *vnStockService) GetTopMovers(ctx context.Context, exchange string, limi
 	return movers, nil
 }
 
-// GetMarketSummary trả về VN30 Index, VNINDEX, HNXINDEX
+// GetMarketSummary trả về VNINDEX và VN30 (HOSE indices).
+// HNXINDEX không nằm trong scope hiện tại.
 func (s *vnStockService) GetMarketSummary(ctx context.Context) (map[string]interface{}, error) {
-	// Query 3 indices đồng thời
-	indices := []string{"VN30", "VNINDEX", "HNXINDEX"}
+	// Query 2 HOSE indices
+	indices := []string{"VN30", "VNINDEX"}
 	summary := map[string]interface{}{}
 
 	for _, idx := range indices {

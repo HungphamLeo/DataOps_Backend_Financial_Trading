@@ -15,10 +15,10 @@ package infrastructure
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"net/http/httputil"
 	"net/url"
+	"okx-analytics-api/logging"
 	"sync"
 	"time"
 )
@@ -26,15 +26,16 @@ import (
 // NetworkingService là interface để abstract health checking
 // REUSE: 100% từ trading-bot-load-balancer/networking/networking.go
 type NetworkingService interface {
-	Check(address string) bool   // kiểm tra 1 địa chỉ có healthy không
-	HealthCheck()                // chạy health check cho tất cả backends
+	Check(address string) bool // kiểm tra 1 địa chỉ có healthy không
+	HealthCheck()              // chạy health check cho tất cả backends
 	SetAlive(address string, alive bool)
 	CheckAlive(address string) bool
 }
 
 // Backend đại diện cho 1 service instance
 // LEARN: Struct với sync.RWMutex — thread-safe state management
-//        RWMutex: nhiều goroutines có thể đọc cùng lúc, nhưng chỉ 1 goroutine ghi
+//
+//	RWMutex: nhiều goroutines có thể đọc cùng lúc, nhưng chỉ 1 goroutine ghi
 type Backend struct {
 	Address      string
 	IsAlive      bool
@@ -60,18 +61,23 @@ func (b *Backend) CheckAlive() bool {
 // LoadBalancer quản lý pool của backends
 type LoadBalancer struct {
 	backends []*Backend
-	current  int  // round-robin index
+	current  int // round-robin index
 	mu       sync.Mutex
+	logger   *logging.Logger
 }
 
-// NewLoadBalancer tạo LB với danh sách backend addresses
-func NewLoadBalancer(addresses []string) *LoadBalancer {
+// NewLoadBalancer tạo LB với danh sách backend addresses.
+// Nhận logger từ ngoài để ghi structured log thay vì log.Printf.
+func NewLoadBalancer(addresses []string, logger *logging.Logger) *LoadBalancer {
 	backends := make([]*Backend, 0, len(addresses))
 
 	for _, addr := range addresses {
 		parsedURL, err := url.Parse(addr)
 		if err != nil {
-			log.Printf("[LoadBalancer] Invalid address %s: %v", addr, err)
+			logger.Error("lb.init", "invalid backend address", map[string]interface{}{
+				"address": addr,
+				"error":   err.Error(),
+			})
 			continue
 		}
 
@@ -87,12 +93,14 @@ func NewLoadBalancer(addresses []string) *LoadBalancer {
 		})
 	}
 
-	return &LoadBalancer{backends: backends}
+	return &LoadBalancer{backends: backends, logger: logger}
 }
 
-// NextHealthyBackend lấy backend healthy tiếp theo (round-robin)
+// NextHealthyBackend lấy backend healthy tiếp theo (round-robin).
+// Trả về nil nếu không có backend nào healthy.
+//
 // LEARN: Round-robin = phân phối đều request, simple và effective
-//        Alternatives: least-connections, weighted, random
+// Alternatives: least-connections, weighted, random
 func (lb *LoadBalancer) NextHealthyBackend() *Backend {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
@@ -108,8 +116,9 @@ func (lb *LoadBalancer) NextHealthyBackend() *Backend {
 	return nil // không có backend nào healthy
 }
 
-// Check kiểm tra 1 địa chỉ có healthy không qua TCP dial
+// Check kiểm tra 1 địa chỉ có healthy không qua TCP dial.
 // REUSE: 100% từ trading-bot-load-balancer/networking/networking.go Check()
+//
 // LEARN: net.DialTimeout — TCP dial với timeout, không block vô hạn
 func (lb *LoadBalancer) Check(address string) bool {
 	const (
@@ -123,16 +132,22 @@ func (lb *LoadBalancer) Check(address string) bool {
 			conn.Close()
 			return true
 		}
-		log.Printf("[LoadBalancer] Health check failed %s attempt %d: %v", address, i+1, err)
+		lb.logger.Warn("lb.healthcheck", "health check failed", map[string]interface{}{
+			"address": address,
+			"attempt": i + 1,
+			"error":   err.Error(),
+		})
 		time.Sleep(time.Second)
 	}
 	return false
 }
 
-// HealthCheck chạy TCP health check cho tất cả backends, spawn goroutine per backend
+// HealthCheck chạy TCP health check cho tất cả backends, spawn goroutine per backend.
 // REUSE: 100% từ trading-bot-load-balancer/networking/networking.go HealthCheck()
+//
 // LEARN: Goroutine fan-out pattern — launch nhiều goroutines độc lập
-//        Không cần sync (WaitGroup) vì health check là fire-and-forget
+//
+//	Không cần sync (WaitGroup) vì health check là fire-and-forget
 func (lb *LoadBalancer) HealthCheck() {
 	for _, b := range lb.backends {
 		b := b // capture loop variable — IMPORTANT: avoid goroutine closure bug
@@ -140,15 +155,19 @@ func (lb *LoadBalancer) HealthCheck() {
 			alive := lb.Check(b.Address)
 			b.SetAlive(alive)
 			if !alive {
-				log.Printf("[LoadBalancer] Backend UNHEALTHY: %s", b.Address)
+				lb.logger.Warn("lb.healthcheck", "backend UNHEALTHY", map[string]interface{}{
+					"address": b.Address,
+				})
 			} else {
-				log.Printf("[LoadBalancer] Backend healthy: %s", b.Address)
+				lb.logger.Info("lb.healthcheck", "backend healthy", map[string]interface{}{
+					"address": b.Address,
+				})
 			}
 		}()
 	}
 }
 
-// StartHealthCheckLoop bắt đầu background health check loop
+// StartHealthCheckLoop bắt đầu background health check loop.
 // LEARN: Context-aware loop — dừng khi context cancelled (graceful shutdown)
 func (lb *LoadBalancer) StartHealthCheckLoop(interval time.Duration) {
 	ticker := time.NewTicker(interval)
@@ -158,7 +177,9 @@ func (lb *LoadBalancer) StartHealthCheckLoop(interval time.Duration) {
 			lb.HealthCheck()
 		}
 	}()
-	log.Printf("[LoadBalancer] Health check loop started, interval=%s", interval)
+	lb.logger.Info("lb.loop", "health check loop started", map[string]interface{}{
+		"interval": interval.String(),
+	})
 }
 
 // Stats trả về thống kê về pool health

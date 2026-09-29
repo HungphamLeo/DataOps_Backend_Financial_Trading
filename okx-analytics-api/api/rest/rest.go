@@ -3,25 +3,28 @@
 package rest
 
 import (
-	"fmt"
+	"log"
 	"okx-analytics-api/configuration"
 	"okx-analytics-api/middlewares"
 	"okx-analytics-api/redis"
 	"okx-analytics-api/services"
-	"okx-analytics-api/utils"
 
 	"github.com/gin-gonic/gin"
 )
 
-// NewAPI khởi tạo Gin router với toàn bộ routes
+// NewAPI khởi tạo Gin router với toàn bộ routes.
+//
+// Nhận vào logger chuẩn (*log.Logger) để ghi structured log thay vì fmt.Printf.
+//
 // URL Structure:
-//   POST /api/v1/login              ← public
-//   GET  /api/v1/health             ← public
-//   GET  /api/v1/crypto/*           ← JWT required
-//   GET  /api/v1/vn-stocks/*        ← JWT required
-//   GET  /api/v1/admin/*            ← Admin only
-func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Service) *gin.Engine {
-	fmt.Printf("%s [API] Starting REST API\n", utils.GetTimeNow())
+//
+//	POST /api/v1/login              ← public
+//	GET  /api/v1/health             ← public
+//	GET  /api/v1/crypto/*           ← JWT required
+//	GET  /api/v1/vn-stocks/*        ← JWT required
+//	GET  /api/v1/admin/*            ← Admin only
+func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Service, logger *log.Logger) *gin.Engine {
+	logger.Println("[API] Starting REST API")
 
 	if cfg.App.Mode == "prod" {
 		gin.SetMode(gin.ReleaseMode)
@@ -64,6 +67,6 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 	adminHandler := &AdminHandler{Cfg: cfg}
 	adminHandler.Register(admin)
 
-	fmt.Printf("%s [API] Routes registered\n", utils.GetTimeNow())
+	logger.Println("[API] Routes registered")
 	return router
 }

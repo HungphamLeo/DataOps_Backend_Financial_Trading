@@ -16,6 +16,8 @@ package accounting
 
 import (
 	"fmt"
+	"okx-analytics-api/constants"
+	"okx-analytics-api/logging"
 	"okx-analytics-api/models"
 	"okx-analytics-api/repository"
 	"time"
@@ -24,7 +26,8 @@ import (
 // Service interface cho accounting operations
 type Service interface {
 	RecordTrade(userID uint, symbol, exchange string, amount, fee float64, refID string) error
-	RecordFundingFee(userID uint, symbol string, amount float64, refID string) error
+	// exchange được truyền tường minh — không hardcode "OKX"
+	RecordFundingFee(userID uint, symbol, exchange string, amount float64, refID string) error
 	GetBalance(userID uint, exchange, currency string) (*models.AccountBalance, error)
 	GetTransactionHistory(userID uint, page, pageSize int) ([]models.AccountTransaction, int64, error)
 	GetDailyPnL(userID uint, exchange string, days int) ([]models.DailyPnL, error)
@@ -32,11 +35,12 @@ type Service interface {
 }
 
 type accountingService struct {
-	repo repository.Repository
+	repo   repository.Repository
+	logger *logging.Logger
 }
 
-func NewService(repo repository.Repository) Service {
-	return &accountingService{repo: repo}
+func NewService(repo repository.Repository, logger *logging.Logger) Service {
+	return &accountingService{repo: repo, logger: logger}
 }
 
 // RecordTrade ghi lại 1 trade và cập nhật balance + daily P&L
@@ -46,7 +50,8 @@ func (s *accountingService) RecordTrade(
 	userID uint, symbol, exchange string, amount, fee float64, refID string,
 ) error {
 	// Bước 1: Lấy balance hiện tại
-	bal, _ := s.repo.GetBalance(userID, exchange, "USDT")
+	// currency dùng DefaultCurrency — toàn bộ accounting layer quy về USDT
+	bal, _ := s.repo.GetBalance(userID, exchange, constants.DefaultCurrency)
 	balanceBefore := 0.0
 	if bal != nil {
 		balanceBefore = bal.Total
@@ -69,11 +74,14 @@ func (s *accountingService) RecordTrade(
 		Amount:        amount,
 		BalanceBefore: balanceBefore,
 		BalanceAfter:  balanceAfter,
-		Currency:      "USDT",
+		Currency:      constants.DefaultCurrency,
 		RefID:         refID,
 		ExecutedAt:    time.Now(),
 	}
 	if err := s.repo.RecordTransaction(tx); err != nil {
+		s.logger.Error("RecordTrade", "failed to record trade transaction", map[string]interface{}{
+			"userID": userID, "symbol": symbol, "exchange": exchange, "refID": refID, "err": err.Error(),
+		})
 		return fmt.Errorf("record trade transaction: %w", err)
 	}
 
@@ -87,11 +95,14 @@ func (s *accountingService) RecordTrade(
 			Amount:        -fee, // fee là chi phí → negative
 			BalanceBefore: balanceAfter,
 			BalanceAfter:  balanceAfter - fee,
-			Currency:      "USDT",
+			Currency:      constants.DefaultCurrency,
 			RefID:         refID + "_fee",
 			ExecutedAt:    time.Now(),
 		}
 		if err := s.repo.RecordTransaction(feeTx); err != nil {
+			s.logger.Error("RecordTrade", "failed to record fee transaction", map[string]interface{}{
+				"userID": userID, "symbol": symbol, "exchange": exchange, "refID": refID, "err": err.Error(),
+			})
 			return fmt.Errorf("record fee transaction: %w", err)
 		}
 		balanceAfter -= fee
@@ -101,22 +112,30 @@ func (s *accountingService) RecordTrade(
 	newBal := &models.AccountBalance{
 		UserID:    userID,
 		Exchange:  exchange,
-		Currency:  "USDT",
+		Currency:  constants.DefaultCurrency,
 		Available: balanceAfter,
 		Total:     balanceAfter,
 		UpdatedAt: time.Now(),
 	}
 	if err := s.repo.UpsertBalance(newBal); err != nil {
+		s.logger.Error("RecordTrade", "failed to update balance", map[string]interface{}{
+			"userID": userID, "exchange": exchange, "err": err.Error(),
+		})
 		return fmt.Errorf("update balance: %w", err)
 	}
 
+	s.logger.Info("RecordTrade", "trade recorded", map[string]interface{}{
+		"userID": userID, "symbol": symbol, "exchange": exchange,
+		"amount": amount, "fee": fee, "balanceAfter": balanceAfter,
+	})
 	return nil
 }
 
-// RecordFundingFee ghi lại funding fee của perpetual futures
+// RecordFundingFee ghi lại funding fee của perpetual futures.
+// exchange được truyền vào thay vì hardcode "OKX" — hỗ trợ multi-exchange sau này.
 // LEARN: Funding fee khác trade fee: xảy ra mỗi 8 giờ, có thể dương hoặc âm
-func (s *accountingService) RecordFundingFee(userID uint, symbol string, amount float64, refID string) error {
-	bal, _ := s.repo.GetBalance(userID, "OKX", "USDT")
+func (s *accountingService) RecordFundingFee(userID uint, symbol, exchange string, amount float64, refID string) error {
+	bal, _ := s.repo.GetBalance(userID, exchange, constants.DefaultCurrency)
 	balanceBefore := 0.0
 	if bal != nil {
 		balanceBefore = bal.Total
@@ -126,17 +145,27 @@ func (s *accountingService) RecordFundingFee(userID uint, symbol string, amount 
 		UserID:        userID,
 		Type:          models.TxFundingFee,
 		Symbol:        symbol,
-		Exchange:      "OKX",
+		Exchange:      exchange,
 		Amount:        amount,
 		BalanceBefore: balanceBefore,
 		BalanceAfter:  balanceBefore + amount,
-		Currency:      "USDT",
+		Currency:      constants.DefaultCurrency,
 		RefID:         refID,
 		ExecutedAt:    time.Now(),
-		Note:          "OKX perpetual funding fee",
+		Note:          exchange + " perpetual funding fee",
 	}
 
-	return s.repo.RecordTransaction(tx)
+	if err := s.repo.RecordTransaction(tx); err != nil {
+		s.logger.Error("RecordFundingFee", "failed to record funding fee", map[string]interface{}{
+			"userID": userID, "symbol": symbol, "exchange": exchange, "refID": refID, "err": err.Error(),
+		})
+		return err
+	}
+
+	s.logger.Info("RecordFundingFee", "funding fee recorded", map[string]interface{}{
+		"userID": userID, "symbol": symbol, "exchange": exchange, "amount": amount,
+	})
+	return nil
 }
 
 func (s *accountingService) GetBalance(userID uint, exchange, currency string) (*models.AccountBalance, error) {
@@ -156,6 +185,9 @@ func (s *accountingService) GetDailyPnL(userID uint, exchange string, days int) 
 func (s *accountingService) UpdateDailyPnL(userID uint, exchange string, date time.Time) error {
 	txs, _, err := s.repo.GetTransactionsByUser(userID, 1, 10000) // simplified
 	if err != nil {
+		s.logger.Error("UpdateDailyPnL", "failed to fetch transactions", map[string]interface{}{
+			"userID": userID, "exchange": exchange, "date": date.Format("2006-01-02"), "err": err.Error(),
+		})
 		return err
 	}
 

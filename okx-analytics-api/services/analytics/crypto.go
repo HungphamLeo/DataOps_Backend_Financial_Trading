@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"okx-analytics-api/configuration"
+	"okx-analytics-api/logging"
 	"okx-analytics-api/models"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
@@ -23,11 +24,12 @@ type CryptoService interface {
 type cryptoService struct {
 	cfg    *configuration.Config
 	client influxdb2.Client
+	logger *logging.Logger
 }
 
-func NewCryptoService(cfg *configuration.Config) CryptoService {
+func NewCryptoService(cfg *configuration.Config, logger *logging.Logger) CryptoService {
 	client := influxdb2.NewClient(cfg.InfluxDB.URL, cfg.InfluxDB.Token)
-	return &cryptoService{cfg: cfg, client: client}
+	return &cryptoService{cfg: cfg, client: client, logger: logger}
 }
 
 // GetVWAP query VWAP từ InfluxDB
@@ -45,6 +47,7 @@ func (s *cryptoService) GetVWAP(ctx context.Context, symbol, interval string, fr
 
 	result, err := queryAPI.Query(ctx, fluxQuery)
 	if err != nil {
+		s.logger.Error("GetVWAP", "InfluxDB query failed", map[string]interface{}{"symbol": symbol, "interval": interval, "err": err.Error()})
 		return nil, fmt.Errorf("[CryptoService] GetVWAP: %w", err)
 	}
 	defer result.Close()
@@ -82,6 +85,7 @@ func (s *cryptoService) GetOHLCV(ctx context.Context, symbol, interval string, f
 
 	result, err := queryAPI.Query(ctx, fluxQuery)
 	if err != nil {
+		s.logger.Error("GetOHLCV", "InfluxDB query failed", map[string]interface{}{"symbol": symbol, "interval": interval, "err": err.Error()})
 		return nil, fmt.Errorf("[CryptoService] GetOHLCV: %w", err)
 	}
 	defer result.Close()
@@ -130,6 +134,7 @@ func (s *cryptoService) GetFundingRate(ctx context.Context, symbol string, from,
 
 	result, err := queryAPI.Query(ctx, fluxQuery)
 	if err != nil {
+		s.logger.Error("GetFundingRate", "InfluxDB query failed", map[string]interface{}{"symbol": symbol, "err": err.Error()})
 		return nil, fmt.Errorf("[CryptoService] GetFundingRate: %w", err)
 	}
 	defer result.Close()

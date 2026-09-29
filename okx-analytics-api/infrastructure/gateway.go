@@ -18,8 +18,8 @@ package infrastructure
 
 import (
 	"fmt"
-	"log"
 	"net/http"
+	"okx-analytics-api/logging"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -27,31 +27,33 @@ import (
 
 // GatewayConfig cấu hình cho API Gateway
 type GatewayConfig struct {
-	Port            int           // HTTP listen port
-	ReadTimeout     time.Duration
-	WriteTimeout    time.Duration
-	ShutdownTimeout time.Duration
-	TrustedProxies  []string      // Nginx, load balancer IPs
-	EnableCORS      bool
+	Port             int // HTTP listen port
+	ReadTimeout      time.Duration
+	WriteTimeout     time.Duration
+	ShutdownTimeout  time.Duration
+	TrustedProxies   []string // Nginx, load balancer IPs
+	EnableCORS       bool
 	EnableRequestLog bool
 }
 
 // DefaultGatewayConfig trả về config mặc định phù hợp production
 func DefaultGatewayConfig() GatewayConfig {
 	return GatewayConfig{
-		Port:            8080,
-		ReadTimeout:     30 * time.Second,
-		WriteTimeout:    30 * time.Second,
-		ShutdownTimeout: 10 * time.Second,
-		TrustedProxies:  []string{"127.0.0.1"},
-		EnableCORS:      true,
+		Port:             8080,
+		ReadTimeout:      30 * time.Second,
+		WriteTimeout:     30 * time.Second,
+		ShutdownTimeout:  10 * time.Second,
+		TrustedProxies:   []string{"127.0.0.1"},
+		EnableCORS:       true,
 		EnableRequestLog: true,
 	}
 }
 
-// RequestLogger middleware ghi lại mọi HTTP request (method, path, latency, status)
+// RequestLogger middleware ghi lại mọi HTTP request (method, path, latency, status).
+// Dùng logging.Logger (JSON structured) thay vì log.Printf để đồng nhất với toàn service.
+//
 // LEARN: Gin middleware với time tracking — đo performance của từng endpoint
-func RequestLogger() gin.HandlerFunc {
+func RequestLogger(logger *logging.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
@@ -63,19 +65,29 @@ func RequestLogger() gin.HandlerFunc {
 		latency := time.Since(start)
 		status := c.Writer.Status()
 
-		// LEARN: Format %-7s — left-align trong 7 chars (đẹp khi đọc log)
-		log.Printf("%-7s %-50s %d %v", c.Request.Method, path, status, latency)
+		logger.Info("http.request", "incoming request", map[string]interface{}{
+			"method":  c.Request.Method,
+			"path":    path,
+			"status":  status,
+			"latency": latency.String(),
+		})
 	}
 }
 
-// RecoveryMiddleware recover từ panic và trả về 500 thay vì crash
+// RecoveryMiddleware recover từ panic và trả về 500 thay vì crash.
+// Dùng logging.Logger để ghi panic context với structured fields.
+//
 // LEARN: recover() — built-in Go, chỉ hoạt động trong deferred function
-//        Không để panic propagate → service crash và down time
-func RecoveryMiddleware() gin.HandlerFunc {
+//
+//	Không để panic propagate → service crash và down time
+func RecoveryMiddleware(logger *logging.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		defer func() {
 			if err := recover(); err != nil {
-				log.Printf("[Gateway] Panic recovered: %v", err)
+				logger.Error("gateway.panic", "panic recovered", map[string]interface{}{
+					"error": err,
+					"path":  c.Request.URL.Path,
+				})
 				c.JSON(http.StatusInternalServerError, gin.H{
 					"error": "internal server error",
 				})
@@ -86,11 +98,12 @@ func RecoveryMiddleware() gin.HandlerFunc {
 	}
 }
 
-// HealthCheckHandler trả về service health status
+// HealthCheckHandler trả về service health status.
+//
 // LEARN: Health check endpoint là MUST HAVE cho:
-//        1. Kubernetes liveness/readiness probes
-//        2. Load balancer health check
-//        3. Monitoring dashboards
+//  1. Kubernetes liveness/readiness probes
+//  2. Load balancer health check
+//  3. Monitoring dashboards
 func HealthCheckHandler(version string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -101,11 +114,13 @@ func HealthCheckHandler(version string) gin.HandlerFunc {
 	}
 }
 
-// SetupHTTPServer tạo *http.Server với proper timeouts
+// SetupHTTPServer tạo *http.Server với proper timeouts.
+//
 // LEARN: Luôn set timeout cho HTTP server trong production:
-//        ReadTimeout: tối đa bao lâu để đọc toàn bộ request
-//        WriteTimeout: tối đa bao lâu để ghi response
-//        Không set → slowloris attack có thể làm exhausted goroutines
+//
+//	ReadTimeout: tối đa bao lâu để đọc toàn bộ request
+//	WriteTimeout: tối đa bao lâu để ghi response
+//	Không set → slowloris attack có thể làm exhausted goroutines
 func SetupHTTPServer(router *gin.Engine, cfg GatewayConfig) *http.Server {
 	return &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),

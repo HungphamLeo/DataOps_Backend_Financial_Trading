@@ -8,7 +8,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Secure áp dụng CORS headers cho production
+// Secure áp dụng CORS headers cho production.
+// Origin được giới hạn theo cfg.Web.URL — chỉ frontend đã cấu hình mới được phép.
+// Preflight OPTIONS request trả về 204 No Content ngay lập tức để giảm latency.
 func Secure(cfg *configuration.Config) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		ctx.Writer.Header().Set("Access-Control-Allow-Origin", cfg.Web.URL)
@@ -24,7 +26,9 @@ func Secure(cfg *configuration.Config) gin.HandlerFunc {
 	}
 }
 
-// SecureNoRestrict cho môi trường dev — allow all origins
+// SecureNoRestrict cho phép tất cả origins (Access-Control-Allow-Origin: *).
+// Chỉ dùng cho môi trường development/local — KHÔNG dùng trong production
+// vì sẽ mở API cho mọi domain, kể cả các trang độc hại.
 func SecureNoRestrict(_ *configuration.Config) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		ctx.Writer.Header().Set("Access-Control-Allow-Origin", "*")

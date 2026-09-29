@@ -1,4 +1,10 @@
-// LEARN: Structured Logging system — centralized log management
+// Package logging cung cấp structured JSON logger nội bộ cho okx-analytics-api.
+//
+// Vai trò:
+//   File này là logger INTERNAL của service — không phải duplicate của shared/platform/observability.
+//   shared/platform/observability dùng go.uber.org/zap (chưa trong go.mod của service này).
+//   Khi go.mod được cập nhật để include zap, các caller chỉ cần thay NewLogger() call —
+//   không cần sửa business logic ở bất kỳ chỗ nào khác.
 //
 // Tại sao cần structured logging?
 //   - Plain log.Printf("error: %s") → khó parse, không có context
@@ -45,13 +51,13 @@ func (l Level) String() string {
 // LogEntry là 1 log record với structured fields
 // LEARN: JSON struct tags → log entries có thể được parse bởi log aggregators
 type LogEntry struct {
-	Timestamp string            `json:"ts"`
-	Level     string            `json:"level"`
-	Service   string            `json:"service"`
-	Action    string            `json:"action,omitempty"`
-	Message   string            `json:"msg"`
+	Timestamp string                 `json:"ts"`
+	Level     string                 `json:"level"`
+	Service   string                 `json:"service"`
+	Action    string                 `json:"action,omitempty"`
+	Message   string                 `json:"msg"`
 	Fields    map[string]interface{} `json:"fields,omitempty"`
-	Caller    string            `json:"caller,omitempty"` // file:line
+	Caller    string                 `json:"caller,omitempty"` // file:line
 }
 
 // Logger là structured logger cho 1 service
@@ -64,10 +70,10 @@ type Logger struct {
 
 // Config cấu hình logger
 type Config struct {
-	Service   string // tên service: "okx-stream-producer", "okx-analytics-api"
-	Level     Level  // minimum level để log
-	LogFile   string // path đến log file, "" = stdout only
-	JSONMode  bool   // true = JSON format, false = human-readable
+	Service  string // tên service: "okx-stream-producer", "okx-analytics-api"
+	Level    Level  // minimum level để log
+	LogFile  string // path đến log file, "" = stdout only
+	JSONMode bool   // true = JSON format, false = human-readable
 }
 
 // NewLogger tạo logger mới theo config
