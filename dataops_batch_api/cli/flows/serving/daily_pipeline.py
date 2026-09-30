@@ -37,7 +37,7 @@ def run_daily_pipeline() -> dict:
     """
     start_time = time.time()
     started_at = datetime.now(timezone.utc).isoformat()
-    logger.info(f"=== daily_pipeline started at {started_at} ===")
+    logger.info("=== daily_pipeline started at %s ===", started_at)
 
     results: dict = {}
 
@@ -46,9 +46,9 @@ def run_daily_pipeline() -> dict:
     try:
         n = run_okx_bronze(inst_type="SPOT")
         results["okx_spot"] = n
-        logger.info(f"[daily_pipeline] Step 1 done: {n} SPOT records")
+        logger.info("[daily_pipeline] Step 1 done: %d SPOT records", n)
     except Exception as e:
-        logger.error(f"[daily_pipeline] Step 1 failed: {e}", exc_info=True)
+        logger.error("[daily_pipeline] Step 1 failed: %s", e, exc_info=True)
         results["okx_spot"] = 0
 
     # ── Step 2: Bronze OKX SWAP ───────────────────────────────────────────────
@@ -56,9 +56,9 @@ def run_daily_pipeline() -> dict:
     try:
         n = run_okx_bronze(inst_type="SWAP")
         results["okx_swap"] = n
-        logger.info(f"[daily_pipeline] Step 2 done: {n} SWAP records")
+        logger.info("[daily_pipeline] Step 2 done: %d SWAP records", n)
     except Exception as e:
-        logger.error(f"[daily_pipeline] Step 2 failed: {e}", exc_info=True)
+        logger.error("[daily_pipeline] Step 2 failed: %s", e, exc_info=True)
         results["okx_swap"] = 0
 
     # ── Step 3: Bronze VPS HOSE ───────────────────────────────────────────────
@@ -66,9 +66,9 @@ def run_daily_pipeline() -> dict:
     try:
         n = run_vps_bronze(exchange="HOSE")
         results["vps"] = n
-        logger.info(f"[daily_pipeline] Step 3 done: {n} VPS snapshots")
+        logger.info("[daily_pipeline] Step 3 done: %d VPS snapshots", n)
     except Exception as e:
-        logger.error(f"[daily_pipeline] Step 3 failed: {e}", exc_info=True)
+        logger.error("[daily_pipeline] Step 3 failed: %s", e, exc_info=True)
         results["vps"] = 0
 
     duration = round(time.time() - start_time, 2)
@@ -76,8 +76,8 @@ def run_daily_pipeline() -> dict:
 
     total = results.get("okx_spot", 0) + results.get("okx_swap", 0) + results.get("vps", 0)
     logger.info(
-        f"=== daily_pipeline complete: {total:,} total records, "
-        f"duration={duration}s ==="
+        "=== daily_pipeline complete: %d total records, duration=%.2fs ===",
+        total, duration,
     )
     return results
 

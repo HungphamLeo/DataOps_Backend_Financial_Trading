@@ -79,10 +79,10 @@ def daily_bronze_flow() -> dict:
 
     Không bao gồm VPS (VPS có flow riêng để schedule phù hợp giờ giao dịch).
     """
-    logger.info(f"[prefect] daily_bronze_flow started at {datetime.now(timezone.utc).isoformat()}")
+    logger.info("[prefect] daily_bronze_flow started at %s", datetime.now(timezone.utc).isoformat())
     spot_n = task_bronze_okx_spot()
     swap_n = task_bronze_okx_swap()
-    logger.info(f"[prefect] daily_bronze_flow done: spot={spot_n}, swap={swap_n}")
+    logger.info("[prefect] daily_bronze_flow done: spot=%d, swap=%d", spot_n, swap_n)
     return {"okx_spot": spot_n, "okx_swap": swap_n}
 
 

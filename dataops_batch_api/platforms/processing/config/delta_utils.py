@@ -25,7 +25,7 @@ from deltalake import DeltaTable, write_deltalake
 
 from cli.ingestion.schema.models import OKXCandleRecord, VPSCandleRecord
 
-logger = logging.getLogger("okx-batch-ingestion")
+logger = logging.getLogger("delta_utils")
 
 
 class DeltaBronzeWriter:
@@ -89,27 +89,40 @@ class DeltaBronzeWriter:
             inst_type: "SPOT" | "SWAP" | "FUTURES" (dùng làm suffix table name)
 
         Returns:
-            Số records đã ghi thành công.
+            Số records đã ghi thành công. 0 nếu records rỗng hoặc write thất bại.
+
+        Raises:
+            Exception được log ở ERROR level rồi re-raise để caller quyết định retry.
         """
         if not records:
             logger.warning("write_okx_candles called with empty records list")
             return 0
 
-        df = pd.DataFrame([r.model_dump() for r in records])
-        df = self._add_time_partitions(df, ts_col="ts_ms")
-
         delta_path = self._delta_path(f"okx_candles_{inst_type.lower()}")
-        table = pa.Table.from_pandas(df)
+        try:
+            df = pd.DataFrame([r.model_dump() for r in records])
+            df = self._add_time_partitions(df, ts_col="ts_ms")
+            table = pa.Table.from_pandas(df)
 
-        write_deltalake(
-            delta_path,
-            table,
-            mode="append",
-            partition_by=["year", "month", "inst_id"],
-            storage_options=self.storage_options,
-        )
-        logger.info(f"Wrote {len(records)} OKX candles ({inst_type}) to {delta_path}")
-        return len(records)
+            write_deltalake(
+                delta_path,
+                table,
+                mode="append",
+                partition_by=["year", "month", "inst_id"],
+                storage_options=self.storage_options,
+            )
+            logger.info(
+                "Wrote %d OKX candles (%s) to %s",
+                len(records), inst_type, delta_path,
+            )
+            return len(records)
+        except Exception as exc:
+            logger.error(
+                "Failed to write OKX candles (%s) to %s: %s",
+                inst_type, delta_path, exc,
+                exc_info=True,
+            )
+            raise
 
     def write_vps_snapshots(self, records: List[VPSCandleRecord]) -> int:
         """
@@ -119,27 +132,37 @@ class DeltaBronzeWriter:
             records: danh sách VPSCandleRecord đã qua Pydantic validation
 
         Returns:
-            Số records đã ghi thành công.
+            Số records đã ghi thành công. 0 nếu records rỗng hoặc write thất bại.
+
+        Raises:
+            Exception được log ở ERROR level rồi re-raise.
         """
         if not records:
             logger.warning("write_vps_snapshots called with empty records list")
             return 0
 
-        df = pd.DataFrame([r.model_dump() for r in records])
-        df = self._add_time_partitions(df, ts_col="ts_ms")
-
         delta_path = self._delta_path("vps_market")
-        table = pa.Table.from_pandas(df)
+        try:
+            df = pd.DataFrame([r.model_dump() for r in records])
+            df = self._add_time_partitions(df, ts_col="ts_ms")
+            table = pa.Table.from_pandas(df)
 
-        write_deltalake(
-            delta_path,
-            table,
-            mode="append",
-            partition_by=["year", "month", "exchange"],
-            storage_options=self.storage_options,
-        )
-        logger.info(f"Wrote {len(records)} VPS snapshots to {delta_path}")
-        return len(records)
+            write_deltalake(
+                delta_path,
+                table,
+                mode="append",
+                partition_by=["year", "month", "exchange"],
+                storage_options=self.storage_options,
+            )
+            logger.info("Wrote %d VPS snapshots to %s", len(records), delta_path)
+            return len(records)
+        except Exception as exc:
+            logger.error(
+                "Failed to write VPS snapshots to %s: %s",
+                delta_path, exc,
+                exc_info=True,
+            )
+            raise
 
     def compact_table(self, delta_path: str, target_size_mb: int = 128) -> None:
         """
@@ -150,9 +173,15 @@ class DeltaBronzeWriter:
         Nên chạy sau mỗi 24h hoặc sau backfill.
 
         Args:
-            delta_path: S3 path đến Delta table, e.g. "s3://okx-datalake/delta/bronze/okx_candles_spot"
-            target_size_mb: target file size sau compact (default 128 MB)
+            delta_path: S3 path đến Delta table, e.g.
+                "s3://okx-datalake/delta/bronze/okx_candles_spot"
+            target_size_mb: target file size sau compact (default 128 MB, đọc từ config)
         """
-        dt = DeltaTable(delta_path, storage_options=self.storage_options)
-        result = dt.optimize.compact(target_size=target_size_mb * 1024 * 1024)
-        logger.info(f"Compacted {delta_path}: {result}")
+        logger.info("Starting compact: %s (target=%d MB)", delta_path, target_size_mb)
+        try:
+            dt = DeltaTable(delta_path, storage_options=self.storage_options)
+            result = dt.optimize.compact(target_size=target_size_mb * 1024 * 1024)
+            logger.info("Compacted %s: %s", delta_path, result)
+        except Exception as exc:
+            logger.error("Compact failed for %s: %s", delta_path, exc, exc_info=True)
+            raise

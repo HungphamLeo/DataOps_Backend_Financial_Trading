@@ -10,10 +10,12 @@ Usage:
 """
 from __future__ import annotations
 
+import logging
 import os
-import sys
 
 from pyspark.sql import SparkSession
+
+logger = logging.getLogger(__name__)
 
 
 def create_spark_session(app_name: str = None) -> SparkSession:
@@ -35,11 +37,20 @@ def create_spark_session(app_name: str = None) -> SparkSession:
     Returns:
         SparkSession đã configure đầy đủ.
     """
-    # Import ở đây để tránh circular import nếu module dùng ở test
+    # Import ở đây để tránh circular import nếu module dùng ở test context
     try:
         from config import loader
         stack = loader.stack_config()
-    except Exception:
+    except FileNotFoundError as exc:
+        # stack.yaml không tồn tại → dùng env vars hoàn toàn (OK cho container deploy)
+        logger.warning(
+            "stack.yaml not found, falling back to env vars only: %s", exc,
+        )
+        stack = {}
+    except Exception as exc:
+        logger.error(
+            "Unexpected error loading stack.yaml: %s", exc, exc_info=True,
+        )
         stack = {}
 
     _app_name    = app_name or stack.get("spark", {}).get("app_name", "OKX-Financial-Stream-Processor")

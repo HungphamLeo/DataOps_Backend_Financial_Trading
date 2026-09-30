@@ -12,12 +12,15 @@ Medallion Architecture:
 Idempotency:
     - partitionBy(year, month, inst_id) → re-run an toàn, không tạo duplicate.
     - OKX rate limit: 20 req/2s — enforce qua OKXRestClient._throttle().
+
+12-Factor alignment:
+    - Factor III: mọi config đọc qua metadata.get_*_cfg(), không hardcode.
+    - Factor XI: dùng logger module-level, không print() hay ad-hoc logging.
 """
 from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
 from typing import List, Optional
 
 from cli.flows.serving.metadata import get_okx_cfg, get_vps_cfg, setup_logging
@@ -44,7 +47,7 @@ def run_okx_bronze(
     Backfill lịch sử dùng backfill_flow.py.
 
     Args:
-        inst_ids:  Danh sách instrument IDs. None → đọc từ okx_config.yaml.
+        inst_ids:  Danh sách instrument IDs. None → đọc từ exchange_config.yaml.
         inst_type: "SPOT" | "SWAP" | "FUTURES"
         bar:       Timeframe, mặc định "1m"
         limit:     Số candles tối đa mỗi instrument (max 300)
@@ -61,13 +64,16 @@ def run_okx_bronze(
     writer  = DeltaBronzeWriter.from_env()
     total   = 0
 
-    logger.info(f"[bronze_flow:okx] Starting {inst_type} ingestion — {len(inst_ids)} instruments, bar={bar}")
+    logger.info(
+        "[bronze_flow:okx] Starting %s ingestion — %d instruments, bar=%s",
+        inst_type, len(inst_ids), bar,
+    )
 
     for inst_id in inst_ids:
         try:
             raw = client.get_candles(inst_id=inst_id, bar=bar, limit=limit)
             if not raw:
-                logger.warning(f"[bronze_flow:okx] No data returned for {inst_id}")
+                logger.warning("[bronze_flow:okx] No data returned for %s", inst_id)
                 continue
 
             records: List[OKXCandleRecord] = []
@@ -87,50 +93,73 @@ def run_okx_bronze(
                         confirm=int(row[8]) if len(row) > 8 else 1,
                     ))
                 except Exception as e:
-                    logger.warning(f"[bronze_flow:okx] Validation failed {inst_id}: {e}")
+                    logger.warning("[bronze_flow:okx] Validation failed %s: %s", inst_id, e)
 
             if records:
                 n = writer.write_okx_candles(records, inst_type)
                 total += n
-                logger.info(f"[bronze_flow:okx] {inst_id}: wrote {n} records")
+                logger.info("[bronze_flow:okx] %s: wrote %d records", inst_id, n)
 
         except Exception as e:
-            logger.error(f"[bronze_flow:okx] Error fetching {inst_id}: {e}", exc_info=True)
+            logger.error("[bronze_flow:okx] Error fetching %s: %s", inst_id, e, exc_info=True)
 
-    logger.info(f"[bronze_flow:okx] Done — total {total} records written")
+    logger.info("[bronze_flow:okx] Done — total %d records written", total)
     return total
 
 
 # ─── VPS Bronze Ingestion ──────────────────────────────────────────────────────
 
-def run_vps_bronze(exchange: str = "HOSE") -> int:
+def run_vps_bronze(exchange: str = None) -> int:
     """
     Fetch VPS market snapshots và ghi vào Delta Bronze.
 
     VPS không có historical data API → chỉ lấy snapshot hiện tại.
     Để accumulate: chạy script này mỗi 1 phút trong giờ giao dịch (9:00–14:45).
 
+    Exchange đọc từ exchange_config.yaml (vps.exchange) → không hardcode tại đây.
+    Caller có thể override bằng param nếu cần.
+
     Args:
-        exchange: Sàn giao dịch — "HOSE" (scope hiện tại, HNX/UPCOM out of scope)
+        exchange: Override sàn giao dịch. None → đọc từ vps.exchange trong yaml.
 
     Returns:
-        Số snapshot records đã ghi thành công.
+        Số snapshot records đã ghi thành công. 0 nếu có lỗi nghiêm trọng.
     """
-    vps_cfg = get_vps_cfg()
-    exchange = vps_cfg.get("exchange", exchange)
+    vps_cfg  = get_vps_cfg()
+    exchange = exchange or vps_cfg.get("exchange", "HOSE")
 
     client = VPSRestClient.from_env()
     writer = DeltaBronzeWriter.from_env()
 
-    logger.info(f"[bronze_flow:vps] Fetching stock list for {exchange}...")
-    stocks   = client.get_stock_list(exchange)
-    symbols  = [s["stockCode"] for s in stocks if s.get("stockCode")]
-    logger.info(f"[bronze_flow:vps] Found {len(symbols)} symbols on {exchange}")
+    # ── Lấy danh sách cổ phiếu ────────────────────────────────────────────────
+    logger.info("[bronze_flow:vps] Fetching stock list for %s...", exchange)
+    try:
+        stocks = client.get_stock_list(exchange)
+    except Exception as exc:
+        logger.error(
+            "[bronze_flow:vps] Failed to get stock list for %s: %s",
+            exchange, exc, exc_info=True,
+        )
+        return 0
 
+    symbols = [s["stockCode"] for s in stocks if s.get("stockCode")]
+    logger.info("[bronze_flow:vps] Found %d symbols on %s", len(symbols), exchange)
+
+    if not symbols:
+        logger.warning("[bronze_flow:vps] Empty symbol list — aborting")
+        return 0
+
+    # ── Lấy market data ───────────────────────────────────────────────────────
     batch_size = vps_cfg.get("symbols_per_batch", 200)
-    raw_data   = client.get_market_data(symbols, batch_size=batch_size)
+    try:
+        raw_data = client.get_market_data(symbols, batch_size=batch_size)
+    except Exception as exc:
+        logger.error(
+            "[bronze_flow:vps] Failed to get market data: %s", exc, exc_info=True,
+        )
+        return 0
 
-    ts_now   = int(time.time() * 1000)
+    ts_now  = int(time.time() * 1000)
     records: List[VPSCandleRecord] = []
 
     for item in raw_data:
@@ -151,11 +180,14 @@ def run_vps_bronze(exchange: str = "HOSE") -> int:
                 session_state=item.get("currentSession", "UNKNOWN"),
                 ts_ms=ts_now,
             ))
-        except Exception as e:
-            logger.warning(f"[bronze_flow:vps] Validation failed for {item.get('stockCode')}: {e}")
+        except Exception as exc:
+            logger.warning(
+                "[bronze_flow:vps] Validation failed for %s: %s",
+                item.get("stockCode"), exc,
+            )
 
     n = writer.write_vps_snapshots(records)
-    logger.info(f"[bronze_flow:vps] Done — wrote {n} snapshot records")
+    logger.info("[bronze_flow:vps] Done — wrote %d snapshot records", n)
     return n
 
 
@@ -165,4 +197,4 @@ if __name__ == "__main__":
     setup_logging()
     run_okx_bronze(inst_type="SPOT")
     run_okx_bronze(inst_type="SWAP")
-    run_vps_bronze(exchange="HOSE")
+    run_vps_bronze()   # exchange đọc từ exchange_config.yaml

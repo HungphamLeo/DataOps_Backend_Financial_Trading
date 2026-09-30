@@ -1,19 +1,36 @@
-# logger_config.yaml — Logger Routing Configuration
-# Định nghĩa level, format và handler cho từng module.
-# Được đọc bởi log_setup trong metadata.py khi khởi động pipeline.
+# logger_config.yaml — Logger Routing Configuration cho dataops_batch_api
+#
+# Được load bởi log/logger_setup.py::setup_pipeline_logging() một lần duy nhất.
+# Sau đó mọi module chỉ cần: logger = logging.getLogger(__name__)
+#
+# Handler routing theo ETL pipeline stages:
+#   Stage 1 (Bronze)  : bronze_flow, okx_client, vps_client   → file_pipeline + file_errors
+#   Stage 2 (Ingest)  : delta_utils, models                   → file_pipeline + file_errors
+#   Stage 3 (Silver)  : silver_flow, spark_session            → file_pipeline + file_errors
+#   Backfill          : backfill_flow                         → file_pipeline (không ghi errors riêng)
+#   Orchestration     : daily_pipeline, prefect_main          → file_pipeline + file_errors
+#   Config/Setup      : config, metadata                      → file_pipeline
+#
+# Tất cả loggers đều có propagate: false để tránh double-logging lên root.
+# Root handler chỉ nhận WARNING+ từ các thư viện bên ngoài (pyspark, requests…).
 
 version: 1
 disable_existing_loggers: false
 
+# ─── Formatters ────────────────────────────────────────────────────────────────
 formatters:
   standard:
+    # Dùng cho console — dễ đọc khi dev
     format: "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
     datefmt: "%Y-%m-%dT%H:%M:%S"
+
   json:
-    # JSON format phù hợp với log aggregation (ELK, Loki)
+    # Dùng cho file — phù hợp với ELK / Loki / Grafana log aggregation
+    # Các field: ts, level, logger, msg — đồng bộ với structured log trong Go services
     format: '{"ts":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","msg":"%(message)s"}'
     datefmt: "%Y-%m-%dT%H:%M:%SZ"
 
+# ─── Handlers ──────────────────────────────────────────────────────────────────
 handlers:
   console:
     class: logging.StreamHandler
@@ -22,49 +39,133 @@ handlers:
     stream: ext://sys.stdout
 
   file_pipeline:
+    # Ghi tất cả DEBUG+ events — dùng để trace luồng ETL đầy đủ
     class: logging.handlers.RotatingFileHandler
     level: DEBUG
     formatter: json
-    filename: "log/log_storage/pipeline.log"
+    filename: "log/log_storage/pipeline.log"   # patched sang absolute path bởi logger_setup.py
     maxBytes: 10485760   # 10 MB
     backupCount: 5
     encoding: utf-8
 
   file_errors:
+    # Chỉ ghi ERROR+ — dùng để alert và postmortem analysis
     class: logging.handlers.RotatingFileHandler
     level: ERROR
     formatter: json
     filename: "log/log_storage/errors.log"
-    maxBytes: 10485760
+    maxBytes: 10485760   # 10 MB
     backupCount: 3
     encoding: utf-8
 
+# ─── ETL Pipeline Loggers ──────────────────────────────────────────────────────
 loggers:
-  okx-batch-ingestion:
+
+  # ── Stage 1: Bronze Ingestion Flow ──────────────────────────────────────────
+  bronze_flow:
+    # logger = logging.getLogger("bronze_flow") trong bronze_flow.py
+    level: INFO
+    handlers: [console, file_pipeline, file_errors]
+    propagate: false
+
+  # ── Stage 1: OKX REST Client ─────────────────────────────────────────────────
+  okx_client:
+    # logger = logging.getLogger("okx_client") — short named logger trong okx_client.py
     level: DEBUG
     handlers: [console, file_pipeline, file_errors]
     propagate: false
 
-  bronze_flow:
+  # ── Stage 1: VPS REST Client ─────────────────────────────────────────────────
+  vps_client:
+    # logger = logging.getLogger("vps_client") — short named logger trong vps_client.py
+    level: DEBUG
+    handlers: [console, file_pipeline, file_errors]
+    propagate: false
+
+  # ── Stage 2: Delta Lake Writer ───────────────────────────────────────────────
+  delta_utils:
+    # logger = logging.getLogger("delta_utils") — named logger trong delta_utils.py
     level: INFO
     handlers: [console, file_pipeline, file_errors]
     propagate: false
 
+  # ── Stage 2: Pydantic Schema Validation ──────────────────────────────────────
+  dataops_batch_api.cli.ingestion.schema.models:
+    # Pydantic validation errors — cần track nhưng không cần DEBUG granularity
+    level: WARNING
+    handlers: [console, file_pipeline, file_errors]
+    propagate: false
+
+  # ── Stage 3: Silver Transform Flow (PySpark Streaming) ───────────────────────
   silver_flow:
+    # logger = logging.getLogger("silver_flow") trong silver_flow.py
     level: INFO
     handlers: [console, file_pipeline, file_errors]
     propagate: false
 
+  # ── Stage 3: SparkSession Factory ────────────────────────────────────────────
+  dataops_batch_api.platforms.processing.spark_stack.spark_session:
+    level: INFO
+    handlers: [console, file_pipeline, file_errors]
+    propagate: false
+
+  # ── Backfill Flow ────────────────────────────────────────────────────────────
   backfill_flow:
+    # logger = logging.getLogger("backfill_flow") trong backfill_flow.py
+    # Không ghi file_errors riêng — backfill thất bại là expected và sẽ retry
     level: INFO
     handlers: [console, file_pipeline]
     propagate: false
 
+  # ── Orchestration: Daily Pipeline ────────────────────────────────────────────
   daily_pipeline:
+    # logger = logging.getLogger("daily_pipeline") trong daily_pipeline.py
     level: INFO
     handlers: [console, file_pipeline, file_errors]
     propagate: false
 
+  # ── Orchestration: Prefect ────────────────────────────────────────────────────
+  prefect_main:
+    # logger = logging.getLogger("prefect_main") trong prefect_main.py
+    level: INFO
+    handlers: [console, file_pipeline, file_errors]
+    propagate: false
+
+  # ── Config & Setup ────────────────────────────────────────────────────────────
+  dataops_batch_api.config:
+    # _log = logging.getLogger(__name__) trong config.py
+    level: INFO
+    handlers: [console, file_pipeline]
+    propagate: false
+
+  dataops_batch_api.cli.flows.serving.metadata:
+    # logger = logging.getLogger(__name__) trong metadata.py
+    level: INFO
+    handlers: [console, file_pipeline]
+    propagate: false
+
+  dataops_batch_api.log.logger_setup:
+    # _log = logging.getLogger(__name__) trong logger_setup.py (self-logging)
+    level: DEBUG
+    handlers: [console]
+    propagate: false
+
+  # ── Technical Indicators (pure math — WARNING only) ───────────────────────────
+  dataops_batch_api.cli.ingestion.indicators.processor:
+    # Processor có try/except + logger — cần ERROR level ít nhất
+    level: WARNING
+    handlers: [console, file_errors]
+    propagate: false
+
+  dataops_batch_api.cli.ingestion.indicators.calculator:
+    # Pure math functions — không có I/O, không cần log production
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+# ─── Root Logger ────────────────────────────────────────────────────────────────
+# Nhận WARNING+ từ mọi thư viện bên ngoài không được cấu hình ở trên:
+#   pyspark, requests, tenacity, deltalake, pyarrow, prefect…
 root:
   level: WARNING
   handlers: [console]

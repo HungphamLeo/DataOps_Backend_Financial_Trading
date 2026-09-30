@@ -67,7 +67,7 @@ class IndicatorConfig:
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "IndicatorConfig":
-        """Tạo IndicatorConfig từ dict (e.g. đọc từ okx_config.yaml)."""
+        """Tạo IndicatorConfig từ dict (e.g. đọc từ exchange_config.yaml)."""
         return cls(
             sma=SMAParams(**d.get("sma", {})),
             ema=EMAParams(**d.get("ema", {})),

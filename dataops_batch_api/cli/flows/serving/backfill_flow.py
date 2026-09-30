@@ -72,10 +72,14 @@ class OKXBackfillPipeline:
                         limit=candles_per_req,
                     )
                 except Exception as e:
-                    logger.error(f"[backfill] get_candles failed for {inst_id}: {e}")
+                    logger.error("[backfill] get_candles failed for %s: %s", inst_id, e)
                     break
 
                 if not raw:
+                    logger.info(
+                        "[backfill] %s: empty response at cursor=%d — stopping pagination",
+                        inst_id, cursor,
+                    )
                     break
 
                 valid: List[OKXCandleRecord] = []
@@ -97,12 +101,22 @@ class OKXBackfillPipeline:
                             confirm=int(row[8]) if len(row) > 8 else 1,
                         ))
                     except Exception as e:
-                        logger.warning(f"[backfill] Validation failed {inst_id} ts={int(row[0])}: {e}")
+                        logger.warning(
+                            "[backfill] Validation failed %s ts=%d: %s",
+                            inst_id, int(row[0]), e,
+                        )
 
                 if valid:
-                    self.writer.write_okx_candles(valid, inst_type)
-                    total += len(valid)
-                    pbar.update(len(valid))
+                    try:
+                        self.writer.write_okx_candles(valid, inst_type)
+                        total += len(valid)
+                        pbar.update(len(valid))
+                    except Exception as exc:
+                        logger.error(
+                            "[backfill] write failed for %s batch at cursor=%d: %s",
+                            inst_id, cursor, exc, exc_info=True,
+                        )
+                        # Tiếp tục pagination thay vì abort toàn bộ instrument
 
                 oldest_ts = int(raw[-1][0])
                 cursor    = oldest_ts - 1
@@ -143,8 +157,8 @@ class OKXBackfillPipeline:
         start_ms = int(start_dt.timestamp() * 1000)
 
         logger.info(
-            f"[backfill] Starting {inst_type} backfill: {len(inst_ids)} instruments, "
-            f"{days_back} days back, bar={bar}, workers={max_workers}"
+            "[backfill] Starting %s backfill: %d instruments, %d days back, bar=%s, workers=%d",
+            inst_type, len(inst_ids), days_back, bar, max_workers,
         )
 
         total_records = 0
@@ -162,13 +176,13 @@ class OKXBackfillPipeline:
                     try:
                         count = future.result()
                         total_records += count
-                        logger.info(f"[backfill] ✓ {inst_id}: {count:,} records")
+                        logger.info("[backfill] OK %s: %d records", inst_id, count)
                     except Exception as e:
-                        logger.error(f"[backfill] ✗ {inst_id}: {e}", exc_info=True)
+                        logger.error("[backfill] FAIL %s: %s", inst_id, e, exc_info=True)
                     finally:
                         pbar.update(1)
 
-        logger.info(f"[backfill] Complete — total {total_records:,} records written")
+        logger.info("[backfill] Complete — total %d records written", total_records)
         return total_records
 
 
@@ -184,7 +198,7 @@ def run_backfill(
     """
     Convenience function để gọi từ daily_pipeline.py hoặc CLI.
 
-    Đọc defaults từ okx_config.yaml; caller có thể override từng param.
+    Đọc defaults từ exchange_config.yaml; caller có thể override từng param.
     """
     bf_cfg   = get_backfill_cfg()
     okx_cfg  = get_okx_cfg()
@@ -225,7 +239,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--instruments",
         default=None,
-        help="Comma-separated instrument IDs (default: from okx_config.yaml)",
+        help="Comma-separated instrument IDs (default: from exchange_config.yaml)",
     )
     args = parser.parse_args()
 

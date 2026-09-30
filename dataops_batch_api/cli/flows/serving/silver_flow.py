@@ -9,7 +9,7 @@ Hai streaming jobs:
     2. Funding Rate Z-Score Anomaly (|z| ≥ 2.5) → Kafka alert topic
 
 Tất cả tham số (topic names, window params, thresholds, checkpoint paths)
-được đọc từ okx_config.yaml qua metadata.py — không hardcode.
+được đọc từ exchange_config.yaml qua metadata.py — không hardcode.
 """
 from __future__ import annotations
 
@@ -61,28 +61,39 @@ def run_vwap_stream(spark: SparkSession, kafka_brokers: str, cfg: dict):
     """
     Job 1 — VWAP Sliding Window.
 
-    Config (từ okx_config.yaml section spark_streaming.vwap):
+    Config (từ exchange_config.yaml section spark_streaming.vwap):
         window_duration: "5 minutes"
         slide_duration:  "1 minute"
         watermark:       "30 seconds"
         checkpoint:      "/tmp/spark_checkpoints/vwap"
 
-    Ghi kết quả vào Delta Lake Silver: delta.silver.vwap (path từ config).
+    Ghi kết quả vào Delta Lake Silver: delta path đọc từ delta.silver.vwap trong yaml
+    hoặc env var DELTA_SILVER_VWAP (env override yaml).
 
     Args:
         spark: SparkSession đã khởi tạo
         kafka_brokers: bootstrap servers string
-        cfg: dict từ spark_streaming.vwap section
+        cfg: dict toàn bộ spark_streaming section từ exchange_config.yaml
 
     Returns:
         StreamingQuery handle
+
+    Raises:
+        Exception: nếu không thể start streaming query — log ERROR và re-raise.
     """
+    from cli.flows.serving.metadata import get_delta_cfg
+    delta_cfg  = get_delta_cfg()
+
     topic      = cfg.get("kafka_topic_trade_ticks", "okx.trade.ticks")
     window_dur = cfg.get("vwap", {}).get("window_duration", "5 minutes")
     slide_dur  = cfg.get("vwap", {}).get("slide_duration", "1 minute")
     watermark  = cfg.get("vwap", {}).get("watermark", "30 seconds")
     checkpoint = cfg.get("vwap", {}).get("checkpoint", "/tmp/spark_checkpoints/vwap")
-    delta_path = os.getenv("DELTA_SILVER_VWAP", "s3a://okx-datalake/delta/silver/vwap")
+    # Env var override > yaml > hardcoded fallback
+    delta_path = os.getenv(
+        "DELTA_SILVER_VWAP",
+        delta_cfg.get("silver", {}).get("vwap", "s3a://okx-datalake/delta/silver/vwap"),
+    )
 
     raw_df = (
         spark.readStream
@@ -120,15 +131,24 @@ def run_vwap_stream(spark: SparkSession, kafka_brokers: str, cfg: dict):
         )
     )
 
-    query = (
-        vwap_df.writeStream
-        .format("delta")
-        .outputMode("append")
-        .option("checkpointLocation", checkpoint)
-        .start(delta_path)
-    )
-    logger.info(f"[silver_flow:vwap] Started — topic={topic}, window={window_dur}/{slide_dur}")
-    return query
+    try:
+        query = (
+            vwap_df.writeStream
+            .format("delta")
+            .outputMode("append")
+            .option("checkpointLocation", checkpoint)
+            .start(delta_path)
+        )
+        logger.info(
+            "[silver_flow:vwap] Started — topic=%s, window=%s/%s, sink=%s",
+            topic, window_dur, slide_dur, delta_path,
+        )
+        return query
+    except Exception as exc:
+        logger.error(
+            "[silver_flow:vwap] Failed to start streaming query: %s", exc, exc_info=True,
+        )
+        raise
 
 
 # ─── Job 2: Funding Rate Z-Score Anomaly ──────────────────────────────────────
@@ -140,7 +160,7 @@ def run_funding_anomaly_stream(spark: SparkSession, kafka_brokers: str, cfg: dic
     Khi |Z-score| ≥ threshold (mặc định 2.5) → publish cảnh báo vào:
         okx.alerts.funding-anomaly Kafka topic
 
-    Config (từ okx_config.yaml section spark_streaming.funding_anomaly):
+    Config (từ exchange_config.yaml section spark_streaming.funding_anomaly):
         window_duration:   "1 hour"
         slide_duration:    "10 minutes"
         watermark:         "1 minute"
@@ -210,16 +230,26 @@ def run_funding_anomaly_stream(spark: SparkSession, kafka_brokers: str, cfg: dic
         )
     )
 
-    query = (
-        anomaly_df.writeStream
-        .format("kafka")
-        .option("kafka.bootstrap.servers", kafka_brokers)
-        .option("topic", alert_topic)
-        .option("checkpointLocation", checkpoint)
-        .start()
-    )
-    logger.info(f"[silver_flow:funding_anomaly] Started — z_threshold={threshold}, alert_topic={alert_topic}")
-    return query
+    try:
+        query = (
+            anomaly_df.writeStream
+            .format("kafka")
+            .option("kafka.bootstrap.servers", kafka_brokers)
+            .option("topic", alert_topic)
+            .option("checkpointLocation", checkpoint)
+            .start()
+        )
+        logger.info(
+            "[silver_flow:funding_anomaly] Started — z_threshold=%.2f, alert_topic=%s",
+            threshold, alert_topic,
+        )
+        return query
+    except Exception as exc:
+        logger.error(
+            "[silver_flow:funding_anomaly] Failed to start streaming query: %s",
+            exc, exc_info=True,
+        )
+        raise
 
 
 # ─── Entrypoint ───────────────────────────────────────────────────────────────

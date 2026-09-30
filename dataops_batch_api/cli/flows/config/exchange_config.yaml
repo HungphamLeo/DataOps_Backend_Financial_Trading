@@ -1,4 +1,4 @@
-# okx_config.yaml — OKX Batch Pipeline Configuration
+# exchange_config.yaml — OKX + VPS Batch Pipeline Configuration
 # Single source of truth cho tất cả tham số runtime của pipeline.
 # Thay đổi tại đây để điều chỉnh hành vi pipeline mà không cần sửa code.
 

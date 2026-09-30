@@ -1,7 +1,7 @@
 """
 metadata.py — Config Loader Helpers cho Pipeline Flows.
 
-Cung cấp các helper function đọc và trả về config sections từ okx_config.yaml.
+Cung cấp các helper function đọc và trả về config sections từ exchange_config.yaml.
 Flows (bronze, silver, backfill) gọi vào đây — không đọc YAML trực tiếp.
 
 Usage:
@@ -12,7 +12,6 @@ Usage:
 from __future__ import annotations
 
 import logging
-import logging.config
 import os
 from pathlib import Path
 from typing import Any, Dict
@@ -20,21 +19,23 @@ from typing import Any, Dict
 # config.py phải được import từ root package
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
-from config import loader, Paths
+from config import loader
+
+logger = logging.getLogger(__name__)
 
 
 def get_okx_cfg() -> Dict[str, Any]:
-    """Trả về toàn bộ section 'okx' từ okx_config.yaml."""
+    """Trả về toàn bộ section 'okx' từ exchange_config.yaml."""
     return loader.pipeline_config().get("okx", {})
 
 
 def get_vps_cfg() -> Dict[str, Any]:
-    """Trả về section 'vps' từ okx_config.yaml."""
+    """Trả về section 'vps' từ exchange_config.yaml."""
     return loader.pipeline_config().get("vps", {})
 
 
 def get_delta_cfg() -> Dict[str, Any]:
-    """Trả về section 'delta' (paths + compact config) từ okx_config.yaml."""
+    """Trả về section 'delta' (paths + compact config) từ exchange_config.yaml."""
     return loader.pipeline_config().get("delta", {})
 
 
@@ -44,7 +45,7 @@ def get_spark_streaming_cfg() -> Dict[str, Any]:
 
 
 def get_backfill_cfg() -> Dict[str, Any]:
-    """Trả về section 'backfill' từ okx_config.yaml."""
+    """Trả về section 'backfill' từ exchange_config.yaml."""
     return loader.pipeline_config().get("backfill", {})
 
 
@@ -61,19 +62,13 @@ def get_kafka_brokers() -> str:
 
 def setup_logging() -> None:
     """
-    Cấu hình logging từ log/config/logger_config.yaml.
-    Gọi 1 lần tại entrypoint (main.py hoặc daily_pipeline.py) trước khi dùng logger.
+    Khởi tạo logging cho toàn bộ dataops_batch_api pipeline.
 
-    Tự động tạo log/log_storage/ nếu chưa tồn tại.
+    Delegate hoàn toàn sang log.logger_setup.setup_pipeline_logging() —
+    đây là single source of truth cho logging configuration.
+
+    Gọi 1 lần tại entrypoint (daily_pipeline.py, prefect_main.py,
+    hoặc backfill_flow.py khi chạy __main__) trước khi dùng logger.
     """
-    Paths.LOG_STORAGE.mkdir(parents=True, exist_ok=True)
-    try:
-        cfg = loader.logger_config()
-        logging.config.dictConfig(cfg)
-    except Exception as e:
-        # Fallback sang basicConfig nếu logger_config.yaml có lỗi
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-        )
-        logging.getLogger(__name__).warning(f"Logger config load failed, using basicConfig: {e}")
+    from log.logger_setup import setup_pipeline_logging
+    setup_pipeline_logging()

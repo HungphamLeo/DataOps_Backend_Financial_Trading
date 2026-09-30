@@ -13,6 +13,7 @@ Rate limits (OKX public API):
     - /api/v5/market/history-candles: 20 req / 2s per IP
     - Client này enforce 100ms min interval giữa các requests (đọc từ config)
     - Retry: 5 lần với exponential backoff (1s → 2s → 4s → max 30s)
+    - Tenacity retry hook log WARNING mỗi lần retry, ERROR khi hết attempt
 
 References:
     - OKX API docs: https://www.okx.com/docs-v5/en/
@@ -22,21 +23,48 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import (
+    RetryCallState,
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+)
+
+logger = logging.getLogger("okx_client")
+
+
+def _log_retry(retry_state: RetryCallState) -> None:
+    """
+    Tenacity retry callback — log WARNING mỗi lần retry để trace được lý do.
+    Được truyền vào decorator qua after= parameter.
+    """
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    logger.warning(
+        "OKXRestClient retry attempt %d — fn=%s, error=%s",
+        retry_state.attempt_number,
+        retry_state.fn.__name__ if retry_state.fn else "unknown",
+        exc,
+    )
 
 
 class OKXRestClient:
     """
-    OKX REST API client với rate limiting và retry tích hợp.
+    OKX REST API client với rate limiting, retry và structured logging.
 
-    Tham số rate_limit_interval và retry được inject từ okx_config.yaml
+    Tham số rate_limit_interval và retry được inject từ exchange_config.yaml
     thông qua caller (bronze_flow / backfill_flow), không hardcode tại đây.
+
+    Logging:
+        - DEBUG: mỗi request gửi đi (method, path, params)
+        - WARNING: mỗi lần retry (qua _log_retry callback)
+        - ERROR: khi request thất bại sau hết tất cả retry attempts
     """
 
     def __init__(
@@ -61,6 +89,10 @@ class OKXRestClient:
             "User-Agent": "okx-vps-platform/1.0",
             "Accept": "application/json",
         })
+        logger.debug(
+            "OKXRestClient initialized — base_url=%s, simulate=%s, rate_limit=%.3fs",
+            self.base_url, self.is_simulate, self._rate_limit_interval,
+        )
 
     # ── Auth ──────────────────────────────────────────────────────────────────
 
@@ -121,6 +153,7 @@ class OKXRestClient:
         stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=1, min=1, max=30),
         reraise=True,
+        after=_log_retry,
     )
     def get_candles(
         self,
@@ -142,6 +175,10 @@ class OKXRestClient:
 
         Returns:
             list of [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
+
+        Raises:
+            requests.HTTPError: HTTP 4xx/5xx — được retry tự động qua tenacity.
+            ValueError: OKX API trả về code != "0" — lỗi business logic, re-raise sau retry.
         """
         self._throttle()
         path = "/api/v5/market/history-candles"
@@ -151,39 +188,71 @@ class OKXRestClient:
         if before is not None:
             params["before"] = str(before)
 
-        resp = self.session.get(
-            f"{self.base_url}/market/history-candles",
-            params=params,
-            headers=self._build_headers("GET", path),
-            timeout=15,
-        )
-        resp.raise_for_status()
+        logger.debug("get_candles — inst_id=%s, bar=%s, limit=%d", inst_id, bar, limit)
+        try:
+            resp = self.session.get(
+                f"{self.base_url}/market/history-candles",
+                params=params,
+                headers=self._build_headers("GET", path),
+                timeout=15,
+            )
+            resp.raise_for_status()
 
-        data = resp.json()
-        if data.get("code") != "0":
-            raise ValueError(f"OKX API error: {data.get('msg')} (code={data.get('code')})")
-        return data.get("data", [])
+            data = resp.json()
+            if data.get("code") != "0":
+                raise ValueError(
+                    f"OKX API error: {data.get('msg')} (code={data.get('code')})"
+                )
+            candles = data.get("data", [])
+            logger.debug("get_candles — %s returned %d candles", inst_id, len(candles))
+            return candles
+        except Exception as exc:
+            logger.error(
+                "get_candles failed — inst_id=%s, bar=%s: %s",
+                inst_id, bar, exc,
+            )
+            raise
 
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10),
         reraise=True,
+        after=_log_retry,
     )
     def get_instruments(self, inst_type: str = "SPOT") -> List[Dict[str, Any]]:
-        """Lấy danh sách tất cả instruments theo loại (SPOT | SWAP | FUTURES)."""
+        """
+        Lấy danh sách tất cả instruments theo loại (SPOT | SWAP | FUTURES).
+
+        Args:
+            inst_type: loại instrument cần lấy
+
+        Returns:
+            list of instrument dict từ OKX API
+
+        Raises:
+            requests.HTTPError: HTTP error — retry tự động.
+            ValueError: OKX API code != "0".
+        """
         self._throttle()
         path = "/api/v5/public/instruments"
-        resp = self.session.get(
-            f"{self.base_url}/public/instruments",
-            params={"instType": inst_type},
-            headers=self._build_headers("GET", path),
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("code") != "0":
-            raise ValueError(f"OKX instruments error: {data.get('msg')}")
-        return data.get("data", [])
+        logger.debug("get_instruments — inst_type=%s", inst_type)
+        try:
+            resp = self.session.get(
+                f"{self.base_url}/public/instruments",
+                params={"instType": inst_type},
+                headers=self._build_headers("GET", path),
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("code") != "0":
+                raise ValueError(f"OKX instruments error: {data.get('msg')}")
+            instruments = data.get("data", [])
+            logger.debug("get_instruments — %s returned %d instruments", inst_type, len(instruments))
+            return instruments
+        except Exception as exc:
+            logger.error("get_instruments failed — inst_type=%s: %s", inst_type, exc)
+            raise
 
     @classmethod
     def from_env(cls) -> "OKXRestClient":
