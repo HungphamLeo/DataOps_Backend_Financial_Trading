@@ -1,0 +1,84 @@
+# okx_config.yaml — OKX Batch Pipeline Configuration
+# Single source of truth cho tất cả tham số runtime của pipeline.
+# Thay đổi tại đây để điều chỉnh hành vi pipeline mà không cần sửa code.
+
+# ─── OKX Instruments ──────────────────────────────────────────────────────────
+okx:
+  base_url: "https://www.okx.com/api/v5"
+  rate_limit_interval_sec: 0.1   # 100ms giữa các request (max 20 req/2s)
+  request_timeout_sec: 15
+  retry_attempts: 5
+  retry_max_wait_sec: 30
+
+  instruments:
+    spot:
+      - "BTC-USDT"
+      - "ETH-USDT"
+      - "SOL-USDT"
+      - "BNB-USDT"
+      - "XRP-USDT"
+    swap:
+      - "BTC-USDT-SWAP"
+      - "ETH-USDT-SWAP"
+      - "SOL-USDT-SWAP"
+
+  intervals:
+    default: "1m"
+    available:
+      - "1m"
+      - "5m"
+      - "1H"
+      - "4H"
+      - "1D"
+
+# ─── VPS Securities ───────────────────────────────────────────────────────────
+vps:
+  base_url: "https://bgapidatafeed.vps.com.vn"
+  request_timeout_sec: 10
+  retry_attempts: 3
+  retry_max_wait_sec: 10
+  symbols_per_batch: 200       # VPS API giới hạn ~200 symbols/request
+  exchange: "HOSE"             # HOSE only (HNX/UPCOM out of scope)
+
+# ─── Delta Lake Paths ─────────────────────────────────────────────────────────
+delta:
+  bucket: "okx-datalake"
+  bronze:
+    okx_spot:    "s3://okx-datalake/delta/bronze/okx_candles_spot"
+    okx_swap:    "s3://okx-datalake/delta/bronze/okx_candles_swap"
+    vps_market:  "s3://okx-datalake/delta/bronze/vps_market"
+  silver:
+    vwap:           "s3://okx-datalake/delta/silver/vwap"
+    funding_stats:  "s3://okx-datalake/delta/silver/funding_stats"
+  compact_target_size_mb: 128
+
+# ─── Spark Streaming ──────────────────────────────────────────────────────────
+spark_streaming:
+  kafka_topic_trade_ticks:   "okx.trade.ticks"
+  kafka_topic_funding_rates: "okx.funding.rates"
+  kafka_topic_alert_funding: "okx.alerts.funding-anomaly"
+
+  vwap:
+    window_duration:   "5 minutes"
+    slide_duration:    "1 minute"
+    watermark:         "30 seconds"
+    checkpoint:        "/tmp/spark_checkpoints/vwap"
+
+  funding_anomaly:
+    window_duration:   "1 hour"
+    slide_duration:    "10 minutes"
+    watermark:         "1 minute"
+    z_score_threshold: 2.5
+    checkpoint:        "/tmp/spark_checkpoints/funding_anomaly"
+
+# ─── Backfill ─────────────────────────────────────────────────────────────────
+backfill:
+  default_days_back: 30
+  max_days_back:     1095      # 3 năm
+  candles_per_request: 300
+  max_workers: 4
+
+# ─── Kafka ────────────────────────────────────────────────────────────────────
+kafka:
+  bootstrap_servers: "localhost:9092"   # override bằng env KAFKA_BROKERS
+  topic_ohlcv_batch: "okx.ohlcv.batch"

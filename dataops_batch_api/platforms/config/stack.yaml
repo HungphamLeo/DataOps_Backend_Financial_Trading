@@ -1,0 +1,33 @@
+# stack.yaml — Spark + MinIO Platform Configuration
+# Tập trung cấu hình hạ tầng xử lý. Không chứa business logic.
+# Được đọc bởi platforms/processing/spark_stack/spark_session.py
+
+spark:
+  app_name: "OKX-Financial-Stream-Processor"
+  master: "local[*]"      # override bằng env SPARK_MASTER hoặc spark://host:7077
+
+  # Delta Lake extension
+  sql_extensions: "io.delta.sql.DeltaSparkSessionExtension"
+  catalog: "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+
+  # Streaming behavior
+  force_delete_temp_checkpoint: true
+
+  # Tuning (adjust theo cluster size)
+  driver_memory: "2g"
+  executor_memory: "2g"
+  executor_cores: 2
+
+# MinIO S3A connector settings (dùng trong SparkSession config)
+minio:
+  endpoint:    "http://localhost:9000"   # override bằng env MINIO_ENDPOINT
+  access_key:  "minioadmin"              # override bằng env MINIO_ACCESS_KEY
+  secret_key:  "minioadmin"             # override bằng env MINIO_SECRET_KEY
+  path_style_access: true
+  impl: "org.apache.hadoop.fs.s3a.S3AFileSystem"
+
+# Maven packages cần thiết cho spark-submit
+packages:
+  - "io.delta:delta-spark_2.12:3.1.0"
+  - "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0"
+  - "org.apache.hadoop:hadoop-aws:3.3.4"

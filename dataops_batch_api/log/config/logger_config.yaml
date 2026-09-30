@@ -1,0 +1,70 @@
+# logger_config.yaml — Logger Routing Configuration
+# Định nghĩa level, format và handler cho từng module.
+# Được đọc bởi log_setup trong metadata.py khi khởi động pipeline.
+
+version: 1
+disable_existing_loggers: false
+
+formatters:
+  standard:
+    format: "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
+    datefmt: "%Y-%m-%dT%H:%M:%S"
+  json:
+    # JSON format phù hợp với log aggregation (ELK, Loki)
+    format: '{"ts":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","msg":"%(message)s"}'
+    datefmt: "%Y-%m-%dT%H:%M:%SZ"
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: standard
+    stream: ext://sys.stdout
+
+  file_pipeline:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: json
+    filename: "log/log_storage/pipeline.log"
+    maxBytes: 10485760   # 10 MB
+    backupCount: 5
+    encoding: utf-8
+
+  file_errors:
+    class: logging.handlers.RotatingFileHandler
+    level: ERROR
+    formatter: json
+    filename: "log/log_storage/errors.log"
+    maxBytes: 10485760
+    backupCount: 3
+    encoding: utf-8
+
+loggers:
+  okx-batch-ingestion:
+    level: DEBUG
+    handlers: [console, file_pipeline, file_errors]
+    propagate: false
+
+  bronze_flow:
+    level: INFO
+    handlers: [console, file_pipeline, file_errors]
+    propagate: false
+
+  silver_flow:
+    level: INFO
+    handlers: [console, file_pipeline, file_errors]
+    propagate: false
+
+  backfill_flow:
+    level: INFO
+    handlers: [console, file_pipeline]
+    propagate: false
+
+  daily_pipeline:
+    level: INFO
+    handlers: [console, file_pipeline, file_errors]
+    propagate: false
+
+root:
+  level: WARNING
+  handlers: [console]
