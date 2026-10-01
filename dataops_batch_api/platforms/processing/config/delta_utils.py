@@ -5,9 +5,18 @@ Ghi dữ liệu lên MinIO (S3-compatible) với partition theo symbol/date
 để đảm bảo re-run an toàn (idempotency).
 
 Design:
-    - DeltaBronzeWriter: ghi Binance candles và VPS snapshots vào Bronze layer.
+    - DeltaBronzeWriter: ghi Binance candles, VPS snapshots (legacy),
+      và TCBS market data (market snapshot, BSA, intraday ticks) vào Bronze layer.
     - Storage options được inject từ config.StorageOptions.minio(), không hardcode.
     - compact_table(): giải quyết small file problem — optimize read performance.
+
+TCBS Tables:
+    tcbs_market   — Full ticker snapshot (orderbook 3 cấp, OHLC, foreign room)
+                    partitionBy(["year", "month", "exchange"])
+    tcbs_bsa      — Buy/Sell Analysis per ticker per investor_type
+                    partitionBy(["year", "month", "ticker"])
+    tcbs_intraday — Tick-by-tick khớp lệnh intraday
+                    partitionBy(["year", "month", "ticker"])
 
 References:
     - Delta Lake: The Definitive Guide (O'Reilly)
@@ -23,7 +32,13 @@ import pandas as pd
 import pyarrow as pa
 from deltalake import DeltaTable, write_deltalake
 
-from cli.ingestion.schema.models import BinanceCandleRecord, VPSCandleRecord
+from cli.ingestion.schema.models import (
+    BinanceCandleRecord,
+    VPSCandleRecord,
+    TCBSMarketRecord,
+    TCBSBSARecord,
+    TCBSIntradayTickRecord,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +135,147 @@ class DeltaBronzeWriter:
             logger.error(
                 "Failed to write Binance candles (%s) to %s: %s",
                 inst_type, delta_path, exc,
+                exc_info=True,
+            )
+            raise
+
+    def write_tcbs_market(self, records: List[TCBSMarketRecord]) -> int:
+        """
+        Ghi TCBS full market ticker snapshots vào Bronze Delta table.
+
+        Table: tcbs_market
+        Partition: year, month, exchange
+        Source: /tartarus/v1/tickerCommons API
+
+        Args:
+            records: Danh sách TCBSMarketRecord đã qua Pydantic validation.
+
+        Returns:
+            Số records đã ghi thành công. 0 nếu records rỗng hoặc write thất bại.
+
+        Raises:
+            Exception được log ở ERROR level rồi re-raise.
+        """
+        if not records:
+            logger.warning("write_tcbs_market called with empty records list")
+            return 0
+
+        delta_path = self._delta_path("tcbs_market")
+        try:
+            df = pd.DataFrame([r.model_dump() for r in records])
+            df = self._add_time_partitions(df, ts_col="ts_ms")
+            table = pa.Table.from_pandas(df)
+
+            write_deltalake(
+                delta_path,
+                table,
+                mode="append",
+                partition_by=["year", "month", "exchange"],
+                storage_options=self.storage_options,
+            )
+            logger.info(
+                "Wrote %d TCBS market snapshots to %s",
+                len(records), delta_path,
+            )
+            return len(records)
+        except Exception as exc:
+            logger.error(
+                "Failed to write TCBS market snapshots to %s: %s",
+                delta_path, exc,
+                exc_info=True,
+            )
+            raise
+
+    def write_tcbs_bsa(self, records: List[TCBSBSARecord]) -> int:
+        """
+        Ghi TCBS Buy/Sell Analysis records vào Bronze Delta table.
+
+        Table: tcbs_bsa
+        Partition: year, month, ticker
+        Source: /nyx/v1/intraday/{ticker}/bsa API
+
+        Args:
+            records: Danh sách TCBSBSARecord đã qua Pydantic validation.
+
+        Returns:
+            Số records đã ghi thành công. 0 nếu records rỗng hoặc write thất bại.
+
+        Raises:
+            Exception được log ở ERROR level rồi re-raise.
+        """
+        if not records:
+            logger.warning("write_tcbs_bsa called with empty records list")
+            return 0
+
+        delta_path = self._delta_path("tcbs_bsa")
+        try:
+            df = pd.DataFrame([r.model_dump() for r in records])
+            df = self._add_time_partitions(df, ts_col="ts_ms")
+            table = pa.Table.from_pandas(df)
+
+            write_deltalake(
+                delta_path,
+                table,
+                mode="append",
+                partition_by=["year", "month", "ticker"],
+                storage_options=self.storage_options,
+            )
+            logger.info(
+                "Wrote %d TCBS BSA records to %s",
+                len(records), delta_path,
+            )
+            return len(records)
+        except Exception as exc:
+            logger.error(
+                "Failed to write TCBS BSA records to %s: %s",
+                delta_path, exc,
+                exc_info=True,
+            )
+            raise
+
+    def write_tcbs_intraday(self, records: List[TCBSIntradayTickRecord]) -> int:
+        """
+        Ghi TCBS intraday tick records vào Bronze Delta table.
+
+        Table: tcbs_intraday
+        Partition: year, month, ticker
+        Source: /nyx/v1/intraday/{ticker}/his/paging API
+
+        Args:
+            records: Danh sách TCBSIntradayTickRecord đã qua Pydantic validation.
+
+        Returns:
+            Số records đã ghi thành công. 0 nếu records rỗng hoặc write thất bại.
+
+        Raises:
+            Exception được log ở ERROR level rồi re-raise.
+        """
+        if not records:
+            logger.warning("write_tcbs_intraday called with empty records list")
+            return 0
+
+        delta_path = self._delta_path("tcbs_intraday")
+        try:
+            df = pd.DataFrame([r.model_dump() for r in records])
+            df = self._add_time_partitions(df, ts_col="ts_ms")
+            table = pa.Table.from_pandas(df)
+
+            write_deltalake(
+                delta_path,
+                table,
+                mode="append",
+                partition_by=["year", "month", "ticker"],
+                storage_options=self.storage_options,
+            )
+            logger.info(
+                "Wrote %d TCBS intraday ticks to %s",
+                len(records), delta_path,
+            )
+            return len(records)
+        except Exception as exc:
+            logger.error(
+                "Failed to write TCBS intraday ticks to %s: %s",
+                delta_path, exc,
                 exc_info=True,
             )
             raise

@@ -52,8 +52,19 @@ class Paths:
         return f"s3://{cls.MINIO_BUCKET}/delta/bronze/binance_candles_{inst_type.lower()}"
 
     @classmethod
-    def delta_bronze_vps(cls) -> str:
-        return f"s3://{cls.MINIO_BUCKET}/delta/bronze/vps_market"
+    def delta_bronze_tcbs_market(cls) -> str:
+        """s3://binance-datalake/delta/bronze/tcbs_market — full ticker snapshot"""
+        return f"s3://{cls.MINIO_BUCKET}/delta/bronze/tcbs_market"
+
+    @classmethod
+    def delta_bronze_tcbs_bsa(cls) -> str:
+        """s3://binance-datalake/delta/bronze/tcbs_bsa — Buy/Sell Analysis"""
+        return f"s3://{cls.MINIO_BUCKET}/delta/bronze/tcbs_bsa"
+
+    @classmethod
+    def delta_bronze_tcbs_intraday(cls) -> str:
+        """s3://binance-datalake/delta/bronze/tcbs_intraday — intraday tick history"""
+        return f"s3://{cls.MINIO_BUCKET}/delta/bronze/tcbs_intraday"
 
     @classmethod
     def delta_silver_vwap(cls) -> str:

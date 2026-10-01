@@ -22,6 +22,7 @@ import (
 //	GET  /api/v1/health             ← public
 //	GET  /api/v1/crypto/*           ← JWT required
 //	GET  /api/v1/vn-stocks/*        ← JWT required
+//	GET  /api/v1/tcbs/*             ← JWT required
 //	GET  /api/v1/admin/*            ← Admin only
 func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Service, logger *log.Logger) *gin.Engine {
 	logger.Println("[API] Starting REST API")
@@ -62,6 +63,10 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 	// VN Stocks Analytics (VPS data)
 	vnStockHandler := &VNStockHandler{VNStockSvc: svc.VNStockSvc}
 	vnStockHandler.Register(protected.Group("/vn-stocks"))
+
+	// TCBS iFlash Analytics (TCBS data: market snapshot, orderbook, BSA, intraday ticks)
+	tcbsHandler := &TCBSHandler{TCBSSvc: svc.TCBSSvc}
+	tcbsHandler.Register(protected.Group("/tcbs"))
 
 	// Admin
 	adminHandler := &AdminHandler{Cfg: cfg}

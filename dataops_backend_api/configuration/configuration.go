@@ -31,6 +31,13 @@ type Config struct {
 	App struct {
 		Mode string // "dev" | "prod"
 	}
+	// TCBS iFlash Open API — https://openapi.tcbs.com.vn
+	// Auth: POST /gaia/v1/oauth2/openapi/token với apiKey + Smart OTP → JWT Bearer
+	TCBS struct {
+		BaseURL  string // default: https://openapi.tcbs.com.vn
+		APIKey   string // TCBS_API_KEY env var
+		JWTToken string // TCBS_JWT_TOKEN — pre-populated hoặc refresh bởi TCBSPoller
+	}
 }
 
 func FromEnv() (*Config, error) {
@@ -56,6 +63,10 @@ func FromEnv() (*Config, error) {
 	cfg.Authentication.LifespanRefreshToken = utils.GetEnvInt("JWT_REFRESH_LIFESPAN_HOURS", 168) // 7 ngày
 
 	cfg.App.Mode = cfg.Web.Mode
+
+	cfg.TCBS.BaseURL  = utils.GetEnv("TCBS_BASE_URL", "https://openapi.tcbs.com.vn")
+	cfg.TCBS.APIKey   = utils.GetEnv("TCBS_API_KEY", "")
+	cfg.TCBS.JWTToken = utils.GetEnv("TCBS_JWT_TOKEN", "")
 
 	return cfg, nil
 }

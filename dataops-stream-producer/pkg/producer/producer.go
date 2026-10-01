@@ -38,7 +38,12 @@ type Producer interface {
 	PublishTrade(ctx context.Context, instID string, event TradeEvent) error
 	PublishOrderBook(ctx context.Context, instID string, event OrderBookEvent) error
 	PublishLiquidation(ctx context.Context, instID string, event LiquidationEvent) error
+	// VPS — deprecated, giữ lại cho backward compat với consumer cũ
 	PublishVPSSnapshot(ctx context.Context, symbol string, event VPSSnapshotEvent) error
+	// TCBS — thay thế VPS cho streaming ingestion mới
+	PublishTCBSMarket(ctx context.Context, symbol string, event TCBSMarketEvent) error
+	PublishTCBSBSA(ctx context.Context, ticker string, event TCBSBSAEvent) error
+	PublishTCBSIntradayTick(ctx context.Context, ticker string, event TCBSIntradayTickEvent) error
 	Close() error
 }
 
@@ -49,10 +54,13 @@ type kafkaProducer struct {
 	dlqProducer  sarama.SyncProducer // Dead Letter Queue producer
 
 	// Schema IDs: đăng ký 1 lần khi khởi động, cache lại để reuse
-	tradeSchemaID int
-	obSchemaID    int
-	liqSchemaID   int
-	vpsSchemaID   int
+	tradeSchemaID   int
+	obSchemaID      int
+	liqSchemaID     int
+	vpsSchemaID     int
+	tcbsMarketID    int
+	tcbsBSAID       int
+	tcbsIntradayID  int
 
 	mu sync.RWMutex // bảo vệ schema IDs khi nhiều goroutines đọc/ghi
 }
@@ -155,6 +163,21 @@ func (p *kafkaProducer) registerSchemas() error {
 			filePath: "pkg/schemas/vps_market_snapshot.avsc",
 			idPtr:    &p.vpsSchemaID,
 		},
+		{
+			subject:  constants.TopicTCBSMarket + "-value",
+			filePath: "pkg/schemas/tcbs_market_snapshot.avsc",
+			idPtr:    &p.tcbsMarketID,
+		},
+		{
+			subject:  constants.TopicTCBSBSA + "-value",
+			filePath: "pkg/schemas/tcbs_bsa_event.avsc",
+			idPtr:    &p.tcbsBSAID,
+		},
+		{
+			subject:  constants.TopicTCBSIntradayTicks + "-value",
+			filePath: "pkg/schemas/tcbs_intraday_tick_event.avsc",
+			idPtr:    &p.tcbsIntradayID,
+		},
 	}
 
 	for _, s := range schemas {
@@ -251,6 +274,75 @@ func (p *kafkaProducer) PublishVPSSnapshot(ctx context.Context, symbol string, e
 	_, _, err = p.producer.SendMessage(msg)
 	if err != nil {
 		return p.sendToDLQ(constants.TopicVPSMarketDLQ, symbol, event, err)
+	}
+	return nil
+}
+
+// PublishTCBSMarket publish TCBS full market snapshot lên Kafka.
+// Key = symbol để đảm bảo ordering per instrument.
+func (p *kafkaProducer) PublishTCBSMarket(ctx context.Context, symbol string, event TCBSMarketEvent) error {
+	payload, err := p.serializeAvro(p.tcbsMarketID, event)
+	if err != nil {
+		return p.sendToDLQ(constants.TopicTCBSMarketDLQ, symbol, event, err)
+	}
+
+	msg := &sarama.ProducerMessage{
+		Topic:     constants.TopicTCBSMarket,
+		Key:       sarama.StringEncoder(symbol),
+		Value:     sarama.ByteEncoder(payload),
+		Timestamp: time.UnixMilli(event.TsMs),
+	}
+
+	_, _, err = p.producer.SendMessage(msg)
+	if err != nil {
+		log.Printf("[Producer] SendMessage TCBSMarket %s error: %v — routing to DLQ", symbol, err)
+		return p.sendToDLQ(constants.TopicTCBSMarketDLQ, symbol, event, err)
+	}
+	return nil
+}
+
+// PublishTCBSBSA publish TCBS Buy/Sell Analysis event lên Kafka.
+// Key = ticker để đảm bảo ordering per ticker.
+func (p *kafkaProducer) PublishTCBSBSA(ctx context.Context, ticker string, event TCBSBSAEvent) error {
+	payload, err := p.serializeAvro(p.tcbsBSAID, event)
+	if err != nil {
+		return p.sendToDLQ(constants.TopicTCBSBSADLQ, ticker, event, err)
+	}
+
+	msg := &sarama.ProducerMessage{
+		Topic:     constants.TopicTCBSBSA,
+		Key:       sarama.StringEncoder(ticker),
+		Value:     sarama.ByteEncoder(payload),
+		Timestamp: time.UnixMilli(event.TsMs),
+	}
+
+	_, _, err = p.producer.SendMessage(msg)
+	if err != nil {
+		log.Printf("[Producer] SendMessage TCBSBSA %s error: %v — routing to DLQ", ticker, err)
+		return p.sendToDLQ(constants.TopicTCBSBSADLQ, ticker, event, err)
+	}
+	return nil
+}
+
+// PublishTCBSIntradayTick publish TCBS intraday tick event lên Kafka.
+// Key = ticker để đảm bảo ordering per ticker.
+func (p *kafkaProducer) PublishTCBSIntradayTick(ctx context.Context, ticker string, event TCBSIntradayTickEvent) error {
+	payload, err := p.serializeAvro(p.tcbsIntradayID, event)
+	if err != nil {
+		return p.sendToDLQ(constants.TopicTCBSIntradayDLQ, ticker, event, err)
+	}
+
+	msg := &sarama.ProducerMessage{
+		Topic:     constants.TopicTCBSIntradayTicks,
+		Key:       sarama.StringEncoder(ticker),
+		Value:     sarama.ByteEncoder(payload),
+		Timestamp: time.UnixMilli(event.TsMs),
+	}
+
+	_, _, err = p.producer.SendMessage(msg)
+	if err != nil {
+		log.Printf("[Producer] SendMessage TCBSIntraday %s error: %v — routing to DLQ", ticker, err)
+		return p.sendToDLQ(constants.TopicTCBSIntradayDLQ, ticker, event, err)
 	}
 	return nil
 }

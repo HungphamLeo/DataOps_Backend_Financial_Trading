@@ -1,4 +1,4 @@
-# exchange_config.yaml — Binance + VPS Batch Pipeline Configuration
+# exchange_config.yaml — Binance + TCBS Batch Pipeline Configuration
 # Single source of truth cho tất cả tham số runtime của pipeline.
 # Thay đổi tại đây để điều chỉnh hành vi pipeline mà không cần sửa code.
 
@@ -31,14 +31,46 @@ binance:
       - "4h"
       - "1d"
 
-# ─── VPS Securities ───────────────────────────────────────────────────────────
-vps:
-  base_url: "https://bgapidatafeed.vps.com.vn"
-  request_timeout_sec: 10
+# ─── TCBS iFlash Securities ───────────────────────────────────────────────────
+# Reference: openapi-v1.0.0.json — TCBS iFlash Open API v1.0.0
+# Auth: POST /gaia/v1/oauth2/openapi/token (apiKey + Smart OTP → JWT)
+# Enums: xem cli/ingestion/sources/tcbs_constants.yaml — không hardcode
+tcbs:
+  base_url: "https://openapi.tcbs.com.vn"
+  request_timeout_sec: 15
   retry_attempts: 3
-  retry_max_wait_sec: 10
-  symbols_per_batch: 200       # VPS API giới hạn ~200 symbols/request
-  exchange: "HOSE"             # HOSE only (HNX/UPCOM out of scope)
+  retry_max_wait_sec: 15
+  symbols_per_batch: 50        # Batch size an toàn cho tickerCommons (undocumented limit)
+
+  # Danh sách index baskets cần ingest market snapshot
+  # Giá trị phải khớp với index_codes trong tcbs_constants.yaml
+  default_indexes:
+    - "HOSE"
+    - "VN30"
+    - "HNX"
+
+  # Danh sách mã cụ thể cần ingest BSA (supply/demand analytics)
+  # Empty → skip BSA ingestion
+  bsa_tickers:
+    - "VCB"
+    - "VHM"
+    - "TCB"
+    - "VIC"
+    - "HPG"
+    - "MSN"
+    - "VNM"
+    - "MBB"
+    - "CTG"
+    - "BID"
+
+  # BSA investor type cần thu thập — xem bsa_investor_types trong tcbs_constants.yaml
+  bsa_investor_type: "all"
+
+  # Intraday tick history: số trang tối đa mỗi ticker (1 page = 100 ticks)
+  intraday_max_pages: 5
+
+  # Token management
+  token_refresh_threshold_sec: 3600   # Cảnh báo refresh khi token > 1h tuổi
 
 # ─── Delta Lake Paths ─────────────────────────────────────────────────────────
 delta:
@@ -46,7 +78,9 @@ delta:
   bronze:
     binance_spot:    "s3://binance-datalake/delta/bronze/binance_candles_spot"
     binance_futures: "s3://binance-datalake/delta/bronze/binance_candles_futures"
-    vps_market:      "s3://binance-datalake/delta/bronze/vps_market"
+    tcbs_market:     "s3://binance-datalake/delta/bronze/tcbs_market"
+    tcbs_bsa:        "s3://binance-datalake/delta/bronze/tcbs_bsa"
+    tcbs_intraday:   "s3://binance-datalake/delta/bronze/tcbs_intraday"
   silver:
     vwap:           "s3://binance-datalake/delta/silver/vwap"
     funding_stats:  "s3://binance-datalake/delta/silver/funding_stats"

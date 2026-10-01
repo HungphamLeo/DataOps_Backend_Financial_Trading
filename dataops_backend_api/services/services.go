@@ -10,6 +10,7 @@ import (
 	"dataops-backend-api/repository"
 	"dataops-backend-api/services/analytics"
 	"dataops-backend-api/services/authentication"
+	"dataops-backend-api/services/tcbs"
 	"dataops-backend-api/services/vnstock"
 )
 
@@ -18,6 +19,7 @@ type Services struct {
 	AuthSvc    authentication.Service
 	CryptoSvc  analytics.CryptoService
 	VNStockSvc vnstock.Service
+	TCBSSvc    tcbs.Service
 }
 
 // NewServices khởi tạo tất cả services với dependencies được inject.
@@ -33,10 +35,12 @@ func NewServices(
 	authSvc    := authentication.NewService(repo, cfg, redisSvc, logger)
 	cryptoSvc  := analytics.NewCryptoService(cfg, logger)
 	vnStockSvc := vnstock.NewService(cfg, logger)
+	tcbsSvc    := tcbs.NewService(cfg, logger)
 
 	return &Services{
 		AuthSvc:    authSvc,
 		CryptoSvc:  cryptoSvc,
 		VNStockSvc: vnStockSvc,
+		TCBSSvc:    tcbsSvc,
 	}
 }

@@ -55,6 +55,8 @@ const (
 	BINANCE_SPOT   EXCHANGE = "binance_spot"   // Binance Spot market
 	VPS_STOCK      EXCHANGE = "vps_stock"      // VPS chứng khoán cơ sở (HOSE)
 	VPS_FUTURE     EXCHANGE = "vps_future"     // VPS phái sinh (VN30F)
+	TCBS_STOCK     EXCHANGE = "tcbs_stock"     // TCBS cổ phiếu cơ sở (HOSE, HNX, UPCOM)
+	TCBS_FUTURE    EXCHANGE = "tcbs_future"    // TCBS phái sinh (VN30F derivatives)
 )
 
 // TF_* là các timeframe/interval chuẩn dùng trong OHLCV, VWAP, và analytics queries.

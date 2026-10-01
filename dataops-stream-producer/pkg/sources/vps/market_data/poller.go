@@ -1,7 +1,13 @@
-// VPS Market Data Poller
+//go:build ignore
+// +build ignore
+
+// VPS Market Data Poller — DEPRECATED, thay thế bởi TCBSPoller
 // VPS không có WebSocket public → dùng cron poll REST mỗi 1s trong giờ giao dịch
 // REUSE: trading-bot-finance-service/pkg/sources/vps/vps.go (Call, CallLogin)
 // REUSE: market-maker-background cron pattern
+//
+// NOTE: File này được giữ lại cho reference/history.
+// Production path: pkg/sources/tcbs/market_data/poller.go (TCBSPoller)
 package market_data
 
 import (

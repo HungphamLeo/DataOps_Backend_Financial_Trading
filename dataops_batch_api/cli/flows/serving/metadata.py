@@ -26,9 +26,9 @@ def get_binance_cfg() -> Dict[str, Any]:
     return loader.pipeline_config().get("binance", {})
 
 
-def get_vps_cfg() -> Dict[str, Any]:
-    """Trả về section 'vps' từ exchange_config.yaml."""
-    return loader.pipeline_config().get("vps", {})
+def get_tcbs_cfg() -> Dict[str, Any]:
+    """Trả về section 'tcbs' từ exchange_config.yaml."""
+    return loader.pipeline_config().get("tcbs", {})
 
 
 def get_delta_cfg() -> Dict[str, Any]:

@@ -7,7 +7,7 @@ import (
 	"dataops-stream-producer/pkg/configuration"
 	"dataops-stream-producer/pkg/producer"
 	binanceWS "dataops-stream-producer/pkg/sources/binance/websocket"
-	"dataops-stream-producer/pkg/sources/vps/market_data"
+	tcbsMarketData "dataops-stream-producer/pkg/sources/tcbs/market_data"
 	"dataops-stream-producer/redis"
 	"dataops-stream-producer/utils"
 	"fmt"
@@ -51,17 +51,23 @@ func NewServer() error {
 		}
 	}()
 
-	// 6. Khởi động VPS market data poller (cron trong giờ giao dịch)
-	vpsPoller := market_data.NewPoller(cfg, kafkaProd, redisDB0)
+	// 6. Khởi động TCBS market data poller (thay thế VPS)
+	// TCBS poll: market snapshot mỗi 1 phút trong giờ giao dịch + BSA/intraday EOD
+	tcbsPoller := tcbsMarketData.NewPoller(cfg, kafkaProd, redisDB0)
 	go func() {
-		if err := vpsPoller.Start(ctx); err != nil {
-			log.Printf("[VPSPoller] error: %s", err.Error())
+		if err := tcbsPoller.Start(ctx); err != nil {
+			log.Printf("[TCBSPoller] error: %s", err.Error())
 		}
 	}()
 
 	fmt.Printf("%s [data-stream-producer] Running — topics: %v\n",
 		utils.GetTimeNow(),
-		[]string{constants.TopicBinanceTradeTicks, constants.TopicVPSMarketSnapshot},
+		[]string{
+			constants.TopicBinanceTradeTicks,
+			constants.TopicTCBSMarketSnapshot,
+			constants.TopicTCBSBSA,
+			constants.TopicTCBSIntradayTicks,
+		},
 	)
 
 	// 7. Block cho đến khi Ctrl+C hoặc SIGTERM

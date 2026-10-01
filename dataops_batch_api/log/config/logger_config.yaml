@@ -3,11 +3,12 @@
 # Được load bởi log/logger_setup.py::LoggerManager.configure() một lần duy nhất.
 #
 # Pattern: logger name = __name__ của module → Python tự route theo hierarchy.
-#   cli.flows.serving.bronze_flow     → khớp prefix "cli"       → cli_file
-#   cli.ingestion.sources.binance_client → khớp prefix "cli"     → cli_file
-#   platforms.processing.delta_utils  → khớp prefix "platforms.processing" → processing_file
-#   platforms.processing.spark_stack  → khớp prefix "platforms.processing.spark_stack" → spark_file
-#   platforms.prefect_orchestra.*     → khớp prefix "platforms.prefect_orchestra" → orchestration_file
+#   cli.flows.serving.bronze_flow         → khớp prefix "cli"              → cli_file
+#   cli.ingestion.sources.binance_client  → khớp prefix "cli"              → cli_file
+#   cli.ingestion.sources.tcbs_client     → khớp prefix "cli.ingestion.sources.tcbs" → tcbs_file + cli_file
+#   platforms.processing.delta_utils      → khớp prefix "platforms.processing" → processing_file
+#   platforms.processing.spark_stack.*    → khớp prefix "platforms.processing.spark_stack" → spark_file
+#   platforms.prefect_orchestra.*         → khớp prefix "platforms.prefect_orchestra" → orchestration_file
 #
 # Thay đổi routing / level / handler → chỉ sửa file này, không đụng vào module nào.
 # Tất cả loggers có propagate: false để tránh double-logging lên root.
@@ -105,8 +106,27 @@ handlers:
     backupCount: 5
     encoding: utf-8
 
+  # tcbs.log — dedicated log cho TCBS client, constants, và TCBS bronze flows
+  # Tách riêng để dễ debug khi có vấn đề với TCBS API (auth, rate-limit, schema thay đổi)
+  tcbs_file:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: json
+    filename: log/log_storage/tcbs.log
+    maxBytes: 10485760
+    backupCount: 5
+    encoding: utf-8
+
 # ─── Loggers (route theo __name__ prefix hierarchy) ───────────────────────────
 loggers:
+
+  # ── TCBS sub-layer: tcbs_client + tcbs_constants ─────────────────────────────
+  # Khớp: cli.ingestion.sources.tcbs_client (và bất kỳ module TCBS tương lai)
+  # Override cli để ghi thêm vào tcbs_file — dễ isolate debug TCBS issues
+  cli.ingestion.sources.tcbs_client:
+    level: DEBUG
+    handlers: [console, tcbs_file, cli_file, error_file]
+    propagate: false
 
   # ── CLI layer: tất cả flows + ingestion sources + indicators ─────────────────
   # Khớp: cli.flows.serving.*, cli.ingestion.sources.*, cli.ingestion.indicators.*

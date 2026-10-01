@@ -14,22 +14,36 @@ const (
 	TopicBinanceOrderBook    = TopicBinanceOrderBookSnapshot
 	TopicBinanceLiquidations = TopicBinanceLiquidation
 
-	// VPS topics
+	// VPS topics — giữ lại cho backward compatibility với consumer cũ
+	// DEPRECATED: dùng TopicTCBS* cho ingestion mới
 	TopicVPSMarketSnapshot = "vps.market.snapshot"
 	TopicVPSMarket         = TopicVPSMarketSnapshot // alias cho producer.go
 	TopicVPSOrderMatched   = "vps.order.matched"
 
+	// TCBS topics — thay thế VPS cho streaming ingestion
+	TopicTCBSMarketSnapshot  = "tcbs.market.snapshot"  // tickerCommons full snapshot
+	TopicTCBSBSA             = "tcbs.bsa.events"        // Buy/Sell Analysis per ticker
+	TopicTCBSIntradayTicks   = "tcbs.intraday.ticks"    // tick-by-tick intraday history
+
+	// Aliases cho producer.go
+	TopicTCBSMarket   = TopicTCBSMarketSnapshot
+	TopicTCBSBSAAlias = TopicTCBSBSA
+
 	// Alert topics (output của Spark streaming)
-	TopicAlertFundingAnomaly = "binance.alerts.funding-anomaly"
-	TopicAlertLiquidation    = "binance.alerts.liquidation"
-	TopicAlertVPSUnusualVol  = "vps.alerts.unusual-volume"
+	TopicAlertFundingAnomaly  = "binance.alerts.funding-anomaly"
+	TopicAlertLiquidation     = "binance.alerts.liquidation"
+	TopicAlertVPSUnusualVol   = "vps.alerts.unusual-volume"
+	TopicAlertTCBSBSAAnomaly  = "tcbs.alerts.bsa-anomaly"  // BSA anomaly detection
 
 	// Dead Letter Queue topics
-	TopicDLQ                   = "platform.dlq"
-	TopicBinanceTradesDLQ      = "binance.trade.ticks.dlq"
-	TopicBinanceOrderBookDLQ   = "binance.orderbook.snapshot.dlq"
+	TopicDLQ                    = "platform.dlq"
+	TopicBinanceTradesDLQ       = "binance.trade.ticks.dlq"
+	TopicBinanceOrderBookDLQ    = "binance.orderbook.snapshot.dlq"
 	TopicBinanceLiquidationsDLQ = "binance.liquidation.events.dlq"
-	TopicVPSMarketDLQ          = "vps.market.snapshot.dlq"
+	TopicVPSMarketDLQ           = "vps.market.snapshot.dlq"
+	TopicTCBSMarketDLQ          = "tcbs.market.snapshot.dlq"
+	TopicTCBSBSADLQ             = "tcbs.bsa.events.dlq"
+	TopicTCBSIntradayDLQ        = "tcbs.intraday.ticks.dlq"
 
 	// Consumer group IDs
 	GroupSparkStreaming = "spark-streaming-group"

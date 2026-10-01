@@ -22,13 +22,20 @@ type Config struct {
 		Symbols []string // ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 	}
 
-	VPS struct {
-		URLLogin string // https://soapi-partner.vps.com.vn/Api/Proxy
-		URL      string // https://smartone.vps.com.vn/Api/Proxy
-		Username string
-		Password string
-		// Mã CK cần theo dõi
-		Symbols []string // ["VCB", "VHM", "TCB", "VIC", "HPG"]
+	// TCBS thay thế VPS cho market data streaming
+	// Reference: openapi-v1.0.0.json — TCBS iFlash Open API v1.0.0
+	TCBS struct {
+		BaseURL  string   // https://openapi.tcbs.com.vn
+		APIKey   string   // API Key từ TCInvest app (dùng để authenticate lấy JWT)
+		JWTToken string   // Pre-obtained JWT token — dùng khi không muốn gọi authenticate()
+		// Mã CK cần poll BSA + Intraday (danh sách quan trọng)
+		Symbols         []string // ["VCB","VHM","TCB","VIC","HPG"]
+		// Index baskets cần poll tickerCommons (market snapshot)
+		Indexes         []string // ["HOSE","VN30","HNX"]
+		// Loại nhà đầu tư cho BSA poll — xem tcbs_constants TCBSInvestorType
+		BSAInvestorType string   // "sheep"|"wolf"|"shark"|"all" (default: "all")
+		// Số trang tối đa khi lấy intraday tick history mỗi ticker
+		IntradayMaxPages int     // default: 5
 	}
 
 	SchemaRegistry struct {
@@ -53,11 +60,17 @@ func FromEnv() (*Config, error) {
 	// Symbols từ env: "BTCUSDT,ETHUSDT,SOLUSDT"
 	cfg.Binance.Symbols = splitCSV(utils.GetEnvAsString("BINANCE_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT"))
 
-	cfg.VPS.URLLogin = utils.GetEnvAsString("VPS_URL_LOGIN", "https://soapi-partner.vps.com.vn/Api/Proxy")
-	cfg.VPS.URL = utils.GetEnvAsString("VPS_URL", "https://smartone.vps.com.vn/Api/Proxy")
-	cfg.VPS.Username = utils.GetEnvAsString("VPS_USERNAME", "")
-	cfg.VPS.Password = utils.GetEnvAsString("VPS_PASSWORD", "")
-	cfg.VPS.Symbols = splitCSV(utils.GetEnvAsString("VPS_SYMBOLS", "VCB,VHM,TCB,VIC,HPG"))
+	// TCBS config
+	cfg.TCBS.BaseURL   = utils.GetEnvAsString("TCBS_BASE_URL", "https://openapi.tcbs.com.vn")
+	cfg.TCBS.APIKey    = utils.GetEnvAsString("TCBS_API_KEY", "")
+	cfg.TCBS.JWTToken  = utils.GetEnvAsString("TCBS_JWT_TOKEN", "")
+	// Symbols cho BSA + Intraday ticks — quan trọng nhất
+	cfg.TCBS.Symbols   = splitCSV(utils.GetEnvAsString("TCBS_SYMBOLS", "VCB,VHM,TCB,VIC,HPG,MSN,VNM,MBB,CTG,BID"))
+	// Index baskets cho market snapshot (tickerCommons)
+	cfg.TCBS.Indexes   = splitCSV(utils.GetEnvAsString("TCBS_INDEXES", "HOSE,VN30,HNX"))
+	cfg.TCBS.BSAInvestorType = utils.GetEnvAsString("TCBS_BSA_INVESTOR_TYPE", "all")
+	intradayMaxPages, _ := utils.GetEnvAsInt("TCBS_INTRADAY_MAX_PAGES", 5)
+	cfg.TCBS.IntradayMaxPages = intradayMaxPages
 
 	cfg.SchemaRegistry.URL = utils.GetEnvAsString("SCHEMA_REGISTRY_URL", "http://localhost:8081")
 
