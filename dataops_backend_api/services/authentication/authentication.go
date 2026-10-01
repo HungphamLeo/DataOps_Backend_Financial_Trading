@@ -4,11 +4,11 @@ package authentication
 
 import (
 	"fmt"
-	"okx-analytics-api/configuration"
-	"okx-analytics-api/logging"
-	"okx-analytics-api/models"
-	"okx-analytics-api/redis"
-	"okx-analytics-api/repository"
+	"dataops-backend-api/configuration"
+	"dataops-backend-api/logging"
+	"dataops-backend-api/models"
+	"dataops-backend-api/redis"
+	"dataops-backend-api/repository"
 	"time"
 
 	"github.com/golang-jwt/jwt"

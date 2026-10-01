@@ -18,7 +18,7 @@ import (
 	"net"
 	"net/http/httputil"
 	"net/url"
-	"okx-analytics-api/logging"
+	"dataops-backend-api/logging"
 	"sync"
 	"time"
 )

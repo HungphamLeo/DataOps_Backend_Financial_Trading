@@ -11,7 +11,7 @@ Business logic KHÔNG được hardcode path hay env-key — đọc qua module n
 Usage:
     from config import Paths, loader, StorageOptions
     cfg = loader.pipeline_config()
-    delta_uri = Paths.delta_bronze_okx("SPOT")
+    delta_uri = Paths.delta_bronze_binance("SPOT")
     opts = StorageOptions.minio()
 """
 from __future__ import annotations
@@ -39,8 +39,6 @@ class Paths:
     BINANCE_CONFIG_YAML = CONFIG_DIR / "exchange_config.yaml"
     STACK_CONFIG_YAML   = BASE_DIR / "platforms" / "config" / "stack.yaml"
     LOGGER_CONFIG_YAML  = BASE_DIR / "log" / "config" / "logger_config.yaml"
-    # Backward-compat alias — remove khi toàn bộ caller đã migrate
-    OKX_CONFIG_YAML     = CONFIG_DIR / "exchange_config.yaml"
 
     # ── Log storage ───────────────────────────────────────────────────────────
     LOG_STORAGE = LOG_DIR

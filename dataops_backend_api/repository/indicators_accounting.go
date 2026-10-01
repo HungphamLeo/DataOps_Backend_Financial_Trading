@@ -11,7 +11,7 @@ package repository
 
 import (
 	"fmt"
-	"okx-analytics-api/models"
+	"dataops-backend-api/models"
 )
 
 // ─── IndicatorGroup CRUD ──────────────────────────────────────────────────────

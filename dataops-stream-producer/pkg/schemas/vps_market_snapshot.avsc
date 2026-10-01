@@ -1,7 +1,7 @@
 {
   "type": "record",
   "name": "VPSMarketSnapshot",
-  "namespace": "com.okx.vps.events",
+  "namespace": "com.binance.vps.events",
   "doc": "Market data snapshot from VPS Securities (Vietnam). Polled every 1 minute during VN trading hours (9:00-11:30 and 13:00-14:45 ICT, Mon-Fri). Covers HOSE, HNX, UPCOM exchanges.",
   "fields": [
     {

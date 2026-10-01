@@ -18,7 +18,7 @@
     { "type": "panel", "id": "gauge",      "name": "Gauge",       "version": "" }
   ],
   "annotations": { "list": [] },
-  "description": "OKX + VPS Securities — Real-time Market Analytics Dashboard",
+  "description": "Binance + VPS Securities — Real-time Market Analytics Dashboard",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -29,7 +29,7 @@
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
       "id": 1,
-      "title": "OKX Crypto — Real-time",
+      "title": "Binance Crypto — Real-time",
       "type": "row"
     },
     {
@@ -101,7 +101,7 @@
           "refId": "A"
         }
       ],
-      "title": "Funding Rate (${inst_id}-SWAP)",
+      "title": "Funding Rate (${inst_id})",
       "type": "gauge"
     },
     {
@@ -177,29 +177,29 @@
           "refId": "A"
         }
       ],
-      "title": "OKX Producer Lag (avg)",
+      "title": "Binance Producer Lag (avg)",
       "type": "stat"
     }
   ],
   "refresh": "5s",
   "schemaVersion": 38,
-  "tags": ["okx", "vps", "crypto", "vietnam", "real-time"],
+  "tags": ["binance", "vps", "crypto", "vietnam", "real-time"],
   "templating": {
     "list": [
       {
-        "current": { "text": "BTC-USDT", "value": "BTC-USDT" },
+        "current": { "text": "BTCUSDT", "value": "BTCUSDT" },
         "hide": 0,
         "includeAll": false,
         "name": "inst_id",
         "options": [
-          { "text": "BTC-USDT", "value": "BTC-USDT" },
-          { "text": "ETH-USDT", "value": "ETH-USDT" },
-          { "text": "SOL-USDT", "value": "SOL-USDT" },
-          { "text": "BNB-USDT", "value": "BNB-USDT" }
+          { "text": "BTCUSDT", "value": "BTCUSDT" },
+          { "text": "ETHUSDT", "value": "ETHUSDT" },
+          { "text": "SOLUSDT", "value": "SOLUSDT" },
+          { "text": "BNBUSDT", "value": "BNBUSDT" }
         ],
-        "query": "BTC-USDT,ETH-USDT,SOL-USDT,BNB-USDT",
+        "query": "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT",
         "type": "custom",
-        "label": "OKX Instrument"
+        "label": "Binance Symbol"
       },
       {
         "current": { "text": "VNM", "value": "VNM" },
@@ -222,7 +222,7 @@
   "time": { "from": "now-1h", "to": "now" },
   "timepicker": {},
   "timezone": "Asia/Ho_Chi_Minh",
-  "title": "OKX + VPS Market Analytics",
-  "uid": "okx-vps-main",
+  "title": "Binance + VPS Market Analytics",
+  "uid": "binance-vps-main",
   "version": 1
 }

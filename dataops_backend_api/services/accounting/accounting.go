@@ -16,10 +16,10 @@ package accounting
 
 import (
 	"fmt"
-	"okx-analytics-api/constants"
-	"okx-analytics-api/logging"
-	"okx-analytics-api/models"
-	"okx-analytics-api/repository"
+	"dataops-backend-api/constants"
+	"dataops-backend-api/logging"
+	"dataops-backend-api/models"
+	"dataops-backend-api/repository"
 	"time"
 )
 

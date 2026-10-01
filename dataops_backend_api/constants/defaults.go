@@ -1,4 +1,4 @@
-// Package constants chứa tất cả giá trị cố định dùng chung trong okx-analytics-api.
+// Package constants chứa tất cả giá trị cố định dùng chung trong dataops-backend-api.
 //
 // File này tập trung các DEFAULT VALUES và TIME RANGE LIMITS để tránh hardcode
 // rải rác trong handlers. Khi cần thay đổi ngưỡng hoặc default, chỉ sửa tại đây.
@@ -120,7 +120,7 @@ const (
 
 const (
 	// DefaultCryptoExchange là sàn crypto mặc định khi không truyền tham số.
-	DefaultCryptoExchange = "OKX"
+	DefaultCryptoExchange = "BINANCE"
 
 	// DefaultVNExchange là sàn chứng khoán VN mặc định.
 	DefaultVNExchange = "HOSE"

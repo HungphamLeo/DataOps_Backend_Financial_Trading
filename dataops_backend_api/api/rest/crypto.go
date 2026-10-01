@@ -11,8 +11,8 @@ package rest
 
 import (
 	"net/http"
-	"okx-analytics-api/constants"
-	"okx-analytics-api/services/analytics"
+	"dataops-backend-api/constants"
+	"dataops-backend-api/services/analytics"
 	"strconv"
 	"time"
 

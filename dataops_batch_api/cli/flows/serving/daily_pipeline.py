@@ -33,7 +33,7 @@ def run_daily_pipeline() -> dict:
     Chạy toàn bộ daily pipeline theo thứ tự Bronze → (Silver riêng).
 
     Returns:
-        dict tổng kết kết quả: {"okx_spot": n, "okx_swap": n, "vps": n, "duration_sec": t}
+        dict tổng kết kết quả: {"binance_spot": n, "binance_futures": n, "vps": n, "duration_sec": t}
     """
     start_time = time.time()
     started_at = datetime.now(timezone.utc).isoformat()

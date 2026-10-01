@@ -3,7 +3,7 @@
 package middlewares
 
 import (
-	"okx-analytics-api/configuration"
+	"dataops-backend-api/configuration"
 
 	"github.com/gin-gonic/gin"
 )

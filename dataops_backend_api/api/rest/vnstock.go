@@ -17,8 +17,8 @@ package rest
 
 import (
 	"net/http"
-	"okx-analytics-api/constants"
-	"okx-analytics-api/services/vnstock"
+	"dataops-backend-api/constants"
+	"dataops-backend-api/services/vnstock"
 	"time"
 
 	"github.com/gin-gonic/gin"

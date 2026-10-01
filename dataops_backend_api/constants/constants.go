@@ -1,4 +1,4 @@
-// Package constants chứa tất cả hằng số dùng chung trong okx-analytics-api.
+// Package constants chứa tất cả hằng số dùng chung trong dataops-backend-api.
 //
 // Phân loại:
 //   - AUTH_ROLE      : role-based access control (RBAC)
@@ -42,7 +42,7 @@ const (
 type ASSET_TYPE uint8
 
 const (
-	CRYPTO   ASSET_TYPE = 1 // tài sản tiền điện tử (OKX)
+	CRYPTO   ASSET_TYPE = 1 // tài sản tiền điện tử (Binance)
 	VN_STOCK ASSET_TYPE = 2 // cổ phiếu thị trường chứng khoán Việt Nam (VPS/HOSE)
 )
 
@@ -51,10 +51,10 @@ const (
 type EXCHANGE string
 
 const (
-	OKX_FUTURE EXCHANGE = "okx_future" // OKX Perpetual Futures
-	OKX_SPOT   EXCHANGE = "okx_spot"   // OKX Spot market
-	VPS_STOCK  EXCHANGE = "vps_stock"  // VPS chứng khoán cơ sở (HOSE)
-	VPS_FUTURE EXCHANGE = "vps_future" // VPS phái sinh (VN30F)
+	BINANCE_FUTURE EXCHANGE = "binance_future" // Binance Perpetual Futures (USD-M)
+	BINANCE_SPOT   EXCHANGE = "binance_spot"   // Binance Spot market
+	VPS_STOCK      EXCHANGE = "vps_stock"      // VPS chứng khoán cơ sở (HOSE)
+	VPS_FUTURE     EXCHANGE = "vps_future"     // VPS phái sinh (VN30F)
 )
 
 // TF_* là các timeframe/interval chuẩn dùng trong OHLCV, VWAP, và analytics queries.

@@ -32,7 +32,7 @@ def create_spark_session(app_name: str = None) -> SparkSession:
         MINIO_SECRET_KEY   — mặc định "minioadmin"
 
     Args:
-        app_name: Tên Spark application. Mặc định "OKX-Financial-Stream-Processor".
+        app_name: Tên Spark application. Mặc định "Binance-Financial-Stream-Processor".
 
     Returns:
         SparkSession đã configure đầy đủ.

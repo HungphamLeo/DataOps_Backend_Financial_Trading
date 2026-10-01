@@ -4,9 +4,9 @@ package repository
 
 import (
 	"fmt"
-	"okx-analytics-api/configuration"
-	"okx-analytics-api/models"
-	"okx-analytics-api/utils"
+	"dataops-backend-api/configuration"
+	"dataops-backend-api/models"
+	"dataops-backend-api/utils"
 	"log"
 
 	"gorm.io/driver/mysql"

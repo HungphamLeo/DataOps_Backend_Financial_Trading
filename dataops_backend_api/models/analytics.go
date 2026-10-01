@@ -77,3 +77,53 @@ type Alert struct {
 	Timestamp int64   `json:"ts"`
 	Message   string  `json:"message"`
 }
+
+// ─── InfluxDB query result types ────────────────────────────────────────────
+
+// OrderBookSnapshot là orderbook snapshot query result từ InfluxDB
+type OrderBookSnapshot struct {
+	InstID    string `json:"instId"`
+	BidsJSON  string `json:"bids"` // JSON-encoded bid levels
+	AsksJSON  string `json:"asks"` // JSON-encoded ask levels
+	Timestamp int64  `json:"ts"`
+}
+
+// FundingRate là funding rate record từ InfluxDB
+type FundingRate struct {
+	InstID          string  `json:"instId"`
+	Rate            float64 `json:"rate"`
+	NextFundingTime string  `json:"nextFundingTime"`
+	Timestamp       int64   `json:"ts"`
+}
+
+// Liquidation là liquidation event từ InfluxDB
+type Liquidation struct {
+	InstID    string  `json:"instId"`
+	Size      float64 `json:"size"`
+	Price     float64 `json:"price"`
+	Side      string  `json:"side"`
+	Timestamp int64   `json:"ts"`
+}
+
+// TopMover là cổ phiếu/instrument thay đổi mạnh nhất trong phiên
+type TopMover struct {
+	Symbol    string  `json:"symbol"`
+	Exchange  string  `json:"exchange"`
+	Price     float64 `json:"price"`
+	ChangePct float64 `json:"changePct"`
+}
+
+// DailySummary là tóm tắt thống kê trong ngày (từ Delta Lake Silver)
+type DailySummary struct {
+	InstID     string  `json:"instId"`
+	TradeCount int64   `json:"tradeCount"`
+	PriceLow   float64 `json:"priceLow"`
+	PriceHigh  float64 `json:"priceHigh"`
+	PriceOpen  float64 `json:"priceOpen"`
+	PriceClose float64 `json:"priceClose"`
+	Volume     float64 `json:"volume"`
+	BuyVolume  float64 `json:"buyVolume"`
+	SellVolume float64 `json:"sellVolume"`
+	VWAP       float64 `json:"vwap"`
+	Date       int64   `json:"date"`
+}

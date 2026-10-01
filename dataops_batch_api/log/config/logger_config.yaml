@@ -4,7 +4,7 @@
 #
 # Pattern: logger name = __name__ của module → Python tự route theo hierarchy.
 #   cli.flows.serving.bronze_flow     → khớp prefix "cli"       → cli_file
-#   cli.ingestion.sources.okx_client  → khớp prefix "cli"       → cli_file
+#   cli.ingestion.sources.binance_client → khớp prefix "cli"     → cli_file
 #   platforms.processing.delta_utils  → khớp prefix "platforms.processing" → processing_file
 #   platforms.processing.spark_stack  → khớp prefix "platforms.processing.spark_stack" → spark_file
 #   platforms.prefect_orchestra.*     → khớp prefix "platforms.prefect_orchestra" → orchestration_file

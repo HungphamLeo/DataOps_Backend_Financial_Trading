@@ -4,10 +4,10 @@ package rest
 
 import (
 	"log"
-	"okx-analytics-api/configuration"
-	"okx-analytics-api/middlewares"
-	"okx-analytics-api/redis"
-	"okx-analytics-api/services"
+	"dataops-backend-api/configuration"
+	"dataops-backend-api/middlewares"
+	"dataops-backend-api/redis"
+	"dataops-backend-api/services"
 
 	"github.com/gin-gonic/gin"
 )
@@ -55,7 +55,7 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 	authHandler := &AuthHandler{AuthSvc: svc.AuthSvc}
 	authHandler.RegisterPublic(public)
 
-	// Crypto Analytics (OKX data)
+	// Crypto Analytics (Binance data)
 	cryptoHandler := &CryptoHandler{AnalyticsSvc: svc.CryptoSvc}
 	cryptoHandler.Register(protected.Group("/crypto"))
 

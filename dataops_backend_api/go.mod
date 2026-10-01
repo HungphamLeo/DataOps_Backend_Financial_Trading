@@ -1,4 +1,4 @@
-module okx-analytics-api
+module dataops-backend-api
 
 go 1.25
 

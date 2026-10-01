@@ -16,8 +16,8 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"okx-analytics-api/configuration"
-	"okx-analytics-api/models"
+	"dataops-backend-api/configuration"
+	"dataops-backend-api/models"
 	"time"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
@@ -27,10 +27,10 @@ import (
 // Repository định nghĩa tất cả các queries vào InfluxDB
 // LEARN: Interface pattern — services gọi Repository.Method(), không gọi InfluxDB trực tiếp
 type Repository interface {
-	// OKX Crypto queries
-	QueryOKXTrades(ctx context.Context, instID string, from, to time.Time) ([]models.OKXTradeTick, error)
-	QueryOKXOHLCV(ctx context.Context, instID string, timeframe string, from, to time.Time) ([]models.OHLCV, error)
-	QueryOKXOrderBook(ctx context.Context, instID string) (*models.OrderBookSnapshot, error)
+	// Binance Crypto queries
+	QueryBinanceTrades(ctx context.Context, instID string, from, to time.Time) ([]models.BinanceTradeTick, error)
+	QueryBinanceOHLCV(ctx context.Context, instID string, timeframe string, from, to time.Time) ([]models.OHLCV, error)
+	QueryBinanceOrderBook(ctx context.Context, instID string) (*models.OrderBookSnapshot, error)
 	QueryFundingRates(ctx context.Context, instID string, from, to time.Time) ([]models.FundingRate, error)
 	QueryLiquidations(ctx context.Context, instID string, from, to time.Time) ([]models.Liquidation, error)
 
@@ -67,16 +67,16 @@ func NewRepository(cfg *configuration.Config) Repository {
 	}
 }
 
-// QueryOKXTrades truy vấn trade ticks từ InfluxDB bằng Flux query language
+// QueryBinanceTrades truy vấn trade ticks từ InfluxDB bằng Flux query language
 // LEARN: Flux query — functional data pipeline:
 //   from(bucket:...) → range(start:...) → filter(fn:...) → pivot → yield
-func (r *influxRepo) QueryOKXTrades(ctx context.Context, instID string, from, to time.Time) ([]models.OKXTradeTick, error) {
+func (r *influxRepo) QueryBinanceTrades(ctx context.Context, instID string, from, to time.Time) ([]models.BinanceTradeTick, error) {
 	// LEARN: Heredoc-style string trong Go dùng backtick (`)
 	// %s là format verbs — fmt.Sprintf thay thế %s bằng giá trị thực
 	fluxQuery := fmt.Sprintf(`
 from(bucket: "%s")
   |> range(start: %s, stop: %s)
-  |> filter(fn: (r) => r._measurement == "okx_trades")
+  |> filter(fn: (r) => r._measurement == "binance_trades")
   |> filter(fn: (r) => r.instId == "%s")
   |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
   |> sort(columns: ["_time"], desc: false)`,
@@ -88,25 +88,25 @@ from(bucket: "%s")
 
 	result, err := r.queryAPI.Query(ctx, fluxQuery)
 	if err != nil {
-		return nil, fmt.Errorf("influxdb query okx_trades: %w", err)
+		return nil, fmt.Errorf("influxdb query binance_trades: %w", err)
 	}
 	defer result.Close()
 
-	var trades []models.OKXTradeTick
+	var trades []models.BinanceTradeTick
 	// LEARN: result.Next() là iterator pattern — duyệt kết quả từng dòng
 	for result.Next() {
 		record := result.Record()
-		trade := models.OKXTradeTick{
+		trade := models.BinanceTradeTick{
 			InstID:    instID,
-			Timestamp: record.Time(),
+			Timestamp: record.Time().UnixMilli(),
 		}
 
 		// LEARN: type assertion với ok-check (safe) vs tanpa ok (panic nếu sai type)
 		if v, ok := record.ValueByKey("price").(float64); ok {
 			trade.Price = v
 		}
-		if v, ok := record.ValueByKey("size").(float64); ok {
-			trade.Size = v
+		if v, ok := record.ValueByKey("quantity").(float64); ok {
+			trade.Quantity = v
 		}
 		if v, ok := record.ValueByKey("side").(string); ok {
 			trade.Side = v
@@ -115,22 +115,22 @@ from(bucket: "%s")
 	}
 
 	if result.Err() != nil {
-		return nil, fmt.Errorf("influxdb iterate okx_trades: %w", result.Err())
+		return nil, fmt.Errorf("influxdb iterate binance_trades: %w", result.Err())
 	}
 
 	return trades, nil
 }
 
-// QueryOKXOHLCV tính OHLCV (Open/High/Low/Close/Volume) bằng Flux aggregation
+// QueryBinanceOHLCV tính OHLCV (Open/High/Low/Close/Volume) bằng Flux aggregation
 // LEARN: Flux window + aggregateWindow = resample time-series vào nến (candles)
-func (r *influxRepo) QueryOKXOHLCV(ctx context.Context, instID string, timeframe string, from, to time.Time) ([]models.OHLCV, error) {
+func (r *influxRepo) QueryBinanceOHLCV(ctx context.Context, instID string, timeframe string, from, to time.Time) ([]models.OHLCV, error) {
 	// timeframe: "1m", "5m", "1h", "1d" → chuyển sang Flux duration
 	fluxDuration := timeframeToDuration(timeframe)
 
 	fluxQuery := fmt.Sprintf(`
 priceData = from(bucket: "%s")
   |> range(start: %s, stop: %s)
-  |> filter(fn: (r) => r._measurement == "okx_trades")
+  |> filter(fn: (r) => r._measurement == "binance_trades")
   |> filter(fn: (r) => r.instId == "%s")
   |> filter(fn: (r) => r._field == "price")
 
@@ -141,7 +141,7 @@ close = priceData |> aggregateWindow(every: %s, fn: last,  createEmpty: false) |
 
 volume = from(bucket: "%s")
   |> range(start: %s, stop: %s)
-  |> filter(fn: (r) => r._measurement == "okx_trades")
+  |> filter(fn: (r) => r._measurement == "binance_trades")
   |> filter(fn: (r) => r.instId == "%s")
   |> filter(fn: (r) => r._field == "size")
   |> aggregateWindow(every: %s, fn: sum, createEmpty: false)
@@ -165,8 +165,8 @@ join(tables: {open: open, high: high, low: low, close: close, volume: volume}, o
 		record := result.Record()
 		candle := models.OHLCV{
 			Symbol:    instID,
-			Timeframe: timeframe,
-			Timestamp: record.Time(),
+			Interval: timeframe,
+			Timestamp: record.Time().UnixMilli(),
 		}
 		if v, ok := record.ValueByKey("open").(float64); ok {
 			candle.Open = v
@@ -188,12 +188,12 @@ join(tables: {open: open, high: high, low: low, close: close, volume: volume}, o
 	return candles, result.Err()
 }
 
-// QueryOKXOrderBook lấy orderbook snapshot mới nhất (last = giá trị gần nhất)
-func (r *influxRepo) QueryOKXOrderBook(ctx context.Context, instID string) (*models.OrderBookSnapshot, error) {
+// QueryBinanceOrderBook lấy orderbook snapshot mới nhất (last = giá trị gần nhất)
+func (r *influxRepo) QueryBinanceOrderBook(ctx context.Context, instID string) (*models.OrderBookSnapshot, error) {
 	fluxQuery := fmt.Sprintf(`
 from(bucket: "%s")
   |> range(start: -5m)
-  |> filter(fn: (r) => r._measurement == "okx_orderbook")
+  |> filter(fn: (r) => r._measurement == "binance_orderbook")
   |> filter(fn: (r) => r.instId == "%s")
   |> last()
   |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")`,
@@ -210,7 +210,7 @@ from(bucket: "%s")
 		record := result.Record()
 		ob := &models.OrderBookSnapshot{
 			InstID:    instID,
-			Timestamp: record.Time(),
+			Timestamp: record.Time().UnixMilli(),
 		}
 		// Bid/Ask levels được store như JSON string trong InfluxDB
 		if v, ok := record.ValueByKey("bids").(string); ok {
@@ -230,7 +230,7 @@ func (r *influxRepo) QueryFundingRates(ctx context.Context, instID string, from,
 	fluxQuery := fmt.Sprintf(`
 from(bucket: "%s")
   |> range(start: %s, stop: %s)
-  |> filter(fn: (r) => r._measurement == "okx_funding_rate")
+  |> filter(fn: (r) => r._measurement == "binance_funding_rate")
   |> filter(fn: (r) => r.instId == "%s")
   |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
   |> sort(columns: ["_time"])`,
@@ -248,7 +248,7 @@ from(bucket: "%s")
 		record := result.Record()
 		fr := models.FundingRate{
 			InstID:    instID,
-			Timestamp: record.Time(),
+			Timestamp: record.Time().UnixMilli(),
 		}
 		if v, ok := record.ValueByKey("funding_rate").(float64); ok {
 			fr.Rate = v
@@ -267,7 +267,7 @@ func (r *influxRepo) QueryLiquidations(ctx context.Context, instID string, from,
 	fluxQuery := fmt.Sprintf(`
 from(bucket: "%s")
   |> range(start: %s, stop: %s)
-  |> filter(fn: (r) => r._measurement == "okx_liquidation")
+  |> filter(fn: (r) => r._measurement == "binance_liquidation")
   |> filter(fn: (r) => r.instId == "%s")
   |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
   |> sort(columns: ["_time"], desc: true)`,
@@ -285,7 +285,7 @@ from(bucket: "%s")
 		record := result.Record()
 		liq := models.Liquidation{
 			InstID:    instID,
-			Timestamp: record.Time(),
+			Timestamp: record.Time().UnixMilli(),
 		}
 		if v, ok := record.ValueByKey("size").(float64); ok {
 			liq.Size = v
@@ -324,19 +324,13 @@ from(bucket: "%s")
 		record := result.Record()
 		snap := models.VPSMarketSnapshot{
 			Symbol:    symbol,
-			Timestamp: record.Time(),
+			Timestamp: record.Time().UnixMilli(),
 		}
 		if v, ok := record.ValueByKey("price").(float64); ok {
 			snap.Price = v
 		}
 		if v, ok := record.ValueByKey("volume").(float64); ok {
 			snap.Volume = v
-		}
-		if v, ok := record.ValueByKey("bid").(float64); ok {
-			snap.Bid = v
-		}
-		if v, ok := record.ValueByKey("ask").(float64); ok {
-			snap.Ask = v
 		}
 		if v, ok := record.ValueByKey("change_pct").(float64); ok {
 			snap.ChangePct = v
@@ -371,8 +365,8 @@ from(bucket: "%s")
 		record := result.Record()
 		candle := models.OHLCV{
 			Symbol:    symbol,
-			Timeframe: timeframe,
-			Timestamp: record.Time(),
+			Interval: timeframe,
+			Timestamp: record.Time().UnixMilli(),
 		}
 		if v, ok := record.Value().(float64); ok {
 			candle.Close = v

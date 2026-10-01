@@ -1,3 +1,5 @@
+//go:build ignore
+
 // LEARN: Configuration Management — centralized config loading
 //
 // 12-Factor App Methodology (factor III: Config):

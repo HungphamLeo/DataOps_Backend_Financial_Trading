@@ -98,11 +98,11 @@ def vps_market_flow() -> int:
     return task_bronze_vps()
 
 
-@flow(name="okx-full-daily-pipeline")
+@flow(name="binance-full-daily-pipeline")
 def full_daily_flow() -> dict:
     """
     Flow orchestrator chạy toàn bộ daily pipeline.
-    Bao gồm cả OKX và VPS trong 1 run — dùng cho end-of-day reconciliation.
+    Bao gồm cả Binance và VPS trong 1 run — dùng cho end-of-day reconciliation.
     """
     return run_daily_pipeline()
 

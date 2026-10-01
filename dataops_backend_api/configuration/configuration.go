@@ -1,7 +1,7 @@
 // REUSE 70%: market-maker-api/configuration/configuration.go
 package configuration
 
-import "okx-analytics-api/utils"
+import "dataops-backend-api/utils"
 
 type Config struct {
 	MySQL struct {
@@ -36,24 +36,24 @@ type Config struct {
 func FromEnv() (*Config, error) {
 	cfg := &Config{}
 
-	cfg.MySQL.DNS = utils.GetEnvAsString("MYSQL_DNS", "root:123456@tcp(localhost:3306)/binance_analytics?parseTime=true")
+	cfg.MySQL.DNS = utils.GetEnv("MYSQL_DNS", "root:123456@tcp(localhost:3306)/binance_analytics?parseTime=true")
 
-	cfg.Redis.Address = utils.GetEnvAsString("REDIS_ADDRESS", "localhost:6379")
-	cfg.Redis.Password = utils.GetEnvAsString("REDIS_PASSWORD", "")
-	cfg.Redis.DB_0, _ = utils.GetEnvAsInt("REDIS_DB_0", 0)
+	cfg.Redis.Address = utils.GetEnv("REDIS_ADDRESS", "localhost:6379")
+	cfg.Redis.Password = utils.GetEnv("REDIS_PASSWORD", "")
+	cfg.Redis.DB_0 = utils.GetEnvInt("REDIS_DB_0", 0)
 
-	cfg.InfluxDB.URL = utils.GetEnvAsString("INFLUXDB_URL", "http://localhost:8086")
-	cfg.InfluxDB.Token = utils.GetEnvAsString("INFLUXDB_TOKEN", "")
-	cfg.InfluxDB.Org = utils.GetEnvAsString("INFLUXDB_ORG", "binance-vps-platform")
-	cfg.InfluxDB.Bucket = utils.GetEnvAsString("INFLUXDB_BUCKET", "market-data")
+	cfg.InfluxDB.URL = utils.GetEnv("INFLUXDB_URL", "http://localhost:8086")
+	cfg.InfluxDB.Token = utils.GetEnv("INFLUXDB_TOKEN", "")
+	cfg.InfluxDB.Org = utils.GetEnv("INFLUXDB_ORG", "binance-vps-platform")
+	cfg.InfluxDB.Bucket = utils.GetEnv("INFLUXDB_BUCKET", "market-data")
 
-	cfg.Web.URL = utils.GetEnvAsString("WEB_URL", "http://localhost:3000")
-	cfg.Web.Mode = utils.GetEnvAsString("MODE", "dev")
+	cfg.Web.URL = utils.GetEnv("WEB_URL", "http://localhost:3000")
+	cfg.Web.Mode = utils.GetEnv("MODE", "dev")
 
-	cfg.Authentication.Secret = utils.GetEnvAsString("JWT_SECRET", "")
-	cfg.Authentication.SecretRefreshToken = utils.GetEnvAsString("JWT_REFRESH_SECRET", "")
-	cfg.Authentication.Lifespan, _ = utils.GetEnvAsInt("JWT_LIFESPAN_HOURS", 24)
-	cfg.Authentication.LifespanRefreshToken, _ = utils.GetEnvAsInt("JWT_REFRESH_LIFESPAN_HOURS", 168) // 7 ngày
+	cfg.Authentication.Secret = utils.GetEnv("JWT_SECRET", "")
+	cfg.Authentication.SecretRefreshToken = utils.GetEnv("JWT_REFRESH_SECRET", "")
+	cfg.Authentication.Lifespan = utils.GetEnvInt("JWT_LIFESPAN_HOURS", 24)
+	cfg.Authentication.LifespanRefreshToken = utils.GetEnvInt("JWT_REFRESH_LIFESPAN_HOURS", 168) // 7 ngày
 
 	cfg.App.Mode = cfg.Web.Mode
 

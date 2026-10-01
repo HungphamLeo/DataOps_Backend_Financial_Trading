@@ -18,9 +18,9 @@ package indicator
 
 import (
 	"fmt"
-	"okx-analytics-api/logging"
-	"okx-analytics-api/models"
-	"okx-analytics-api/repository"
+	"dataops-backend-api/logging"
+	"dataops-backend-api/models"
+	"dataops-backend-api/repository"
 	"strings"
 )
 

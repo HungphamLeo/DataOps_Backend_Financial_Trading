@@ -7,14 +7,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"okx-analytics-api/api/rest"
-	"okx-analytics-api/configuration"
-	"okx-analytics-api/constants"
-	"okx-analytics-api/logging"
-	"okx-analytics-api/middlewares"
-	"okx-analytics-api/redis"
-	"okx-analytics-api/repository"
-	"okx-analytics-api/services"
+	"dataops-backend-api/api/rest"
+	"dataops-backend-api/configuration"
+	"dataops-backend-api/constants"
+	"dataops-backend-api/logging"
+	"dataops-backend-api/middlewares"
+	"dataops-backend-api/redis"
+	"dataops-backend-api/repository"
+	"dataops-backend-api/services"
 	"os/signal"
 	"syscall"
 	"time"
@@ -30,7 +30,7 @@ func NewServer() error {
 	//    Không import go.uber.org/zap trực tiếp vì chưa có trong go.mod;
 	//    khi cần upgrade sang zap, chỉ sửa logging/logger.go.
 	logger, closeLogger, err := logging.NewLogger(logging.Config{
-		Service: "okx-analytics-api",
+		Service: "dataops-backend-api",
 		Level:   logging.INFO,
 	})
 	if err != nil {
@@ -41,7 +41,7 @@ func NewServer() error {
 	// log.Logger chuẩn cho rest.NewAPI() — dùng prefix để phân biệt subsystem
 	apiLogger := log.New(log.Writer(), "[API] ", log.Ldate|log.Ltime|log.LUTC)
 
-	logger.Info("server.start", "Starting okx-analytics-api",
+	logger.Info("server.start", "Starting dataops-backend-api",
 		map[string]interface{}{"version": "v1.0.0", "port": constants.DefaultHTTPPort})
 
 	// 2. Config từ .env
@@ -95,6 +95,6 @@ func NewServer() error {
 		log.Printf("[HTTP] forced shutdown: %s", err)
 	}
 
-	logger.Info("server.stop", "okx-analytics-api stopped", nil)
+	logger.Info("server.stop", "dataops-backend-api stopped", nil)
 	return nil
 }

@@ -21,9 +21,9 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"okx-analytics-api/constants"
-	"okx-analytics-api/models"
-	redisService "okx-analytics-api/redis"
+	"dataops-backend-api/constants"
+	"dataops-backend-api/models"
+	redisService "dataops-backend-api/redis"
 	"strings"
 	"time"
 
@@ -232,7 +232,7 @@ func GenerateToken(jwtSecret string, userID string, roleID uint, email string, t
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Issuer:    "okx-analytics-api",
+			Issuer:    "dataops-backend-api",
 		},
 		UserID: userID,
 		RoleID: roleID,

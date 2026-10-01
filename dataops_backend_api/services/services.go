@@ -4,13 +4,13 @@
 package services
 
 import (
-	"okx-analytics-api/configuration"
-	"okx-analytics-api/logging"
-	"okx-analytics-api/redis"
-	"okx-analytics-api/repository"
-	"okx-analytics-api/services/analytics"
-	"okx-analytics-api/services/authentication"
-	"okx-analytics-api/services/vnstock"
+	"dataops-backend-api/configuration"
+	"dataops-backend-api/logging"
+	"dataops-backend-api/redis"
+	"dataops-backend-api/repository"
+	"dataops-backend-api/services/analytics"
+	"dataops-backend-api/services/authentication"
+	"dataops-backend-api/services/vnstock"
 )
 
 // Services là DI container — inject vào tất cả HTTP handlers

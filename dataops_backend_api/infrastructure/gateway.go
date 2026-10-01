@@ -11,7 +11,7 @@
 //   5. Health check exposure: /health endpoint
 //   6. Observability: log latency, status codes
 //
-// Trong project này, Gateway là Gin router trong okx-analytics-api
+// Trong project này, Gateway là Gin router trong dataops-backend-api
 // (không phải separate service vì scale đơn giản)
 
 package infrastructure
@@ -19,7 +19,7 @@ package infrastructure
 import (
 	"fmt"
 	"net/http"
-	"okx-analytics-api/logging"
+	"dataops-backend-api/logging"
 	"time"
 
 	"github.com/gin-gonic/gin"

@@ -15,8 +15,8 @@ type PlatformConfig struct {
 	Port        string        `json:"port"`
 	LogLevel    string        `json:"log_level"`
 	
-	// Exchange Credentials - OKX
-	OKX OKXConfig `json:"okx"`
+	// Exchange Credentials - Binance
+	Binance BinanceConfig `json:"binance"`
 
 	// Exchange Credentials - VPS Securities
 	VPS VPSConfig `json:"vps"`
@@ -32,15 +32,13 @@ type PlatformConfig struct {
 	JWT JWTConfig `json:"jwt"`
 }
 
-type OKXConfig struct {
-	APIKey     string `json:"api_key"`
-	SecretKey  string `json:"secret_key"`
-	Passphrase string `json:"passphrase"`
-	BaseURL    string `json:"base_url"`
-	WSBaseURL  string `json:"ws_base_url"`
-	WSURLPub   string `json:"ws_url_pub"`
-	WSURLPri   string `json:"ws_url_pri"`
-	IsSimulate bool   `json:"is_simulate"`
+type BinanceConfig struct {
+	APIKey    string `json:"api_key"`
+	SecretKey string `json:"secret_key"`
+	BaseURL   string `json:"base_url"`
+	WSBaseURL string `json:"ws_base_url"`
+	WSURLSpot string `json:"ws_url_spot"`
+	WSURLFutures string `json:"ws_url_futures"`
 }
 
 type VPSConfig struct {
@@ -114,15 +112,13 @@ func LoadFromEnv(serviceName string) (*PlatformConfig, error) {
 		Port:        getEnv("PORT", "8080"),
 		LogLevel:    getEnv("LOG_LEVEL", "info"),
 
-		OKX: OKXConfig{
-			APIKey:     getEnv("OKX_API_KEY", ""),
-			SecretKey:  getEnv("OKX_SECRET_KEY", ""),
-			Passphrase: getEnv("OKX_PASSPHRASE", ""),
-			BaseURL:    getEnv("OKX_BASE_URL", "https://www.okx.com"),
-			WSBaseURL:  getEnv("OKX_WS_URL", "wss://ws.okx.com:8443/ws/v5/public"),
-			WSURLPub:   getEnv("OKX_WS_URL_PUB", "wss://ws.okx.com:8443/ws/v5/public"),
-			WSURLPri:   getEnv("OKX_WS_URL_PRI", "wss://ws.okx.com:8443/ws/v5/private"),
-			IsSimulate: getEnvAsBool("OKX_IS_SIMULATE", false),
+		Binance: BinanceConfig{
+			APIKey:       getEnv("BINANCE_API_KEY", ""),
+			SecretKey:    getEnv("BINANCE_SECRET_KEY", ""),
+			BaseURL:      getEnv("BINANCE_BASE_URL", "https://api.binance.com"),
+			WSBaseURL:    getEnv("BINANCE_WS_URL", "wss://stream.binance.com:9443/ws"),
+			WSURLSpot:    getEnv("BINANCE_WS_URL_SPOT", "wss://stream.binance.com:9443/stream"),
+			WSURLFutures: getEnv("BINANCE_FUTURES_WS_URL", "wss://fstream.binance.com/stream"),
 		},
 
 		VPS: VPSConfig{
@@ -178,7 +174,7 @@ func LoadFromEnv(serviceName string) (*PlatformConfig, error) {
 			AccessKeyID:     getEnv("MINIO_ACCESS_KEY", "minioadmin"),
 			SecretAccessKey: getEnv("MINIO_SECRET_KEY", "minioadmin"),
 			UseSSL:          getEnvAsBool("MINIO_USE_SSL", false),
-			Bucket:          getEnv("MINIO_DELTA_BUCKET", "okx-delta"),
+			Bucket:          getEnv("MINIO_DELTA_BUCKET", "binance-datalake"),
 		},
 
 		JWT: JWTConfig{

@@ -18,8 +18,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"okx-analytics-api/configuration"
-	"okx-analytics-api/models"
+	"dataops-backend-api/configuration"
+	"dataops-backend-api/models"
 	"time"
 
 	// DuckDB driver cho database/sql standard interface
@@ -29,7 +29,7 @@ import (
 
 // Repository interface cho Delta Lake queries
 type Repository interface {
-	QueryHistoricalTrades(ctx context.Context, instID string, from, to time.Time, limit int) ([]models.OKXTradeTick, error)
+	QueryHistoricalTrades(ctx context.Context, instID string, from, to time.Time, limit int) ([]models.BinanceTradeTick, error)
 	QueryDailySummary(ctx context.Context, instID string, date time.Time) (*models.DailySummary, error)
 	QueryVPSDailyOHLCV(ctx context.Context, symbol string, from, to time.Time) ([]models.OHLCV, error)
 	Close() error
@@ -89,7 +89,7 @@ func (r *deltaRepo) deltaPath(layer, table string) string {
 
 // QueryHistoricalTrades đọc trade data từ Delta Lake Bronze layer
 // LEARN: Bronze layer = raw data, chưa transform, giữ nguyên format từ Kafka
-func (r *deltaRepo) QueryHistoricalTrades(ctx context.Context, instID string, from, to time.Time, limit int) ([]models.OKXTradeTick, error) {
+func (r *deltaRepo) QueryHistoricalTrades(ctx context.Context, instID string, from, to time.Time, limit int) ([]models.BinanceTradeTick, error) {
 	query := fmt.Sprintf(`
 SELECT
     ts AS timestamp,
@@ -103,7 +103,7 @@ WHERE inst_id = $1
   AND ts <= $3
 ORDER BY ts ASC
 LIMIT $4`,
-		r.deltaPath("bronze", "okx_trades"),
+		r.deltaPath("bronze", "binance_trades"),
 	)
 
 	// LEARN: QueryContext với $1, $2... = parameterized query, tránh SQL injection
@@ -113,11 +113,11 @@ LIMIT $4`,
 	}
 	defer rows.Close()
 
-	var trades []models.OKXTradeTick
+	var trades []models.BinanceTradeTick
 	for rows.Next() {
 		var (
 			tsMs  int64
-			trade models.OKXTradeTick
+			trade models.BinanceTradeTick
 		)
 		// LEARN: rows.Scan map columns vào Go variables theo thứ tự SELECT
 		if err := rows.Scan(&tsMs, &trade.InstID, &trade.Price, &trade.Size, &trade.Side); err != nil {
@@ -152,14 +152,14 @@ WHERE inst_id = $1
   AND ts >= $2
   AND ts < $3
 GROUP BY inst_id`,
-		r.deltaPath("bronze", "okx_trades"),
+		r.deltaPath("bronze", "binance_trades"),
 	)
 
 	row := r.db.QueryRowContext(ctx, query, instID, dayStart.UnixMilli(), dayEnd.UnixMilli())
 
 	summary := &models.DailySummary{
 		InstID: instID,
-		Date:   date,
+		Date:   date.UnixMilli(),
 	}
 	err := row.Scan(
 		&summary.InstID,
@@ -168,7 +168,7 @@ GROUP BY inst_id`,
 		&summary.PriceHigh,
 		&summary.PriceOpen,
 		&summary.PriceClose,
-		&summary.TotalVolume,
+		&summary.Volume,
 		&summary.BuyVolume,
 		&summary.SellVolume,
 		&summary.VWAP,
@@ -214,10 +214,10 @@ ORDER BY 1 ASC`,
 		if err := rows.Scan(&dateStr, &candle.Symbol, &candle.Open, &candle.High, &candle.Low, &candle.Close, &candle.Volume); err != nil {
 			return nil, fmt.Errorf("scan ohlcv row: %w", err)
 		}
-		candle.Timeframe = "1d"
-		// Parse date string về time.Time
+		candle.Interval = "1d"
+		// Parse date string về UnixMilli
 		t, _ := time.Parse("2006-01-02", dateStr[:10])
-		candle.Timestamp = t
+		candle.Timestamp = t.UnixMilli()
 		candles = append(candles, candle)
 	}
 	return candles, rows.Err()

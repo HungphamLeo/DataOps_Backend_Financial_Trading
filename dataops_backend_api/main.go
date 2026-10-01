@@ -1,4 +1,4 @@
-// Package main là entry point của okx-analytics-api.
+// Package main là entry point của dataops-backend-api.
 //
 // Khởi động HTTP server theo chuỗi:
 //   Config → MySQL → Redis → Services → Gin Router → ListenAndServe
@@ -9,7 +9,7 @@ package main
 
 import (
 	"log"
-	"okx-analytics-api/app"
+	"dataops-backend-api/app"
 )
 
 // main là entry point duy nhất của service.

@@ -137,17 +137,17 @@ func (p *kafkaProducer) registerSchemas() error {
 	}{
 		{
 			subject:  constants.TopicBinanceTrades + "-value",
-			filePath: "pkg/schemas/okx_trade_event.avsc",
+			filePath: "pkg/schemas/binance_trade_event.avsc",
 			idPtr:    &p.tradeSchemaID,
 		},
 		{
 			subject:  constants.TopicBinanceOrderBook + "-value",
-			filePath: "pkg/schemas/okx_orderbook_snapshot.avsc",
+			filePath: "pkg/schemas/binance_orderbook_snapshot.avsc",
 			idPtr:    &p.obSchemaID,
 		},
 		{
 			subject:  constants.TopicBinanceLiquidations + "-value",
-			filePath: "pkg/schemas/okx_liquidation_event.avsc",
+			filePath: "pkg/schemas/binance_liquidation_event.avsc",
 			idPtr:    &p.liqSchemaID,
 		},
 		{

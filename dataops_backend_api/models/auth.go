@@ -3,7 +3,7 @@
 package models
 
 import (
-	"okx-analytics-api/constants"
+	"dataops-backend-api/constants"
 
 	"gorm.io/gorm"
 )

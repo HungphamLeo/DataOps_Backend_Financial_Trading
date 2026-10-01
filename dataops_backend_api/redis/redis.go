@@ -12,7 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
-	"okx-analytics-api/configuration"
+	"dataops-backend-api/configuration"
 	"time"
 
 	"github.com/go-redis/redis/v8"

@@ -4,9 +4,9 @@ package vnstock
 import (
 	"context"
 	"fmt"
-	"okx-analytics-api/configuration"
-	"okx-analytics-api/logging"
-	"okx-analytics-api/models"
+	"dataops-backend-api/configuration"
+	"dataops-backend-api/logging"
+	"dataops-backend-api/models"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 )

@@ -1,4 +1,4 @@
-// Package middlewares cung cấp các Gin middleware dùng chung trong okx-analytics-api:
+// Package middlewares cung cấp các Gin middleware dùng chung trong dataops-backend-api:
 //   - jwt_auth.go   : JWT authentication + Redis blacklist (struct-based, dùng go-redis/v9)
 //   - auth_tiers.go : JWT + Redis session, role và status check (function-based)
 //   - rate_limiter.go: IP-based fixed-window rate limiting qua Redis
@@ -27,7 +27,7 @@ type AuthMiddleware struct {
 	redisClient *redis.Client // nil-safe: nếu nil, bỏ qua blacklist check
 }
 
-// UserClaims là JWT payload claims cho okx-analytics-api.
+// UserClaims là JWT payload claims cho dataops-backend-api.
 // Dùng jwt/v4 RegisteredClaims (exp, iat, iss...) + custom fields.
 type UserClaims struct {
 	UserID   string `json:"user_id"`

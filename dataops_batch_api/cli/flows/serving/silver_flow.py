@@ -84,7 +84,7 @@ def run_vwap_stream(spark: SparkSession, kafka_brokers: str, cfg: dict):
     from cli.flows.serving.metadata import get_delta_cfg
     delta_cfg  = get_delta_cfg()
 
-    topic      = cfg.get("kafka_topic_trade_ticks", "okx.trade.ticks")
+    topic      = cfg.get("kafka_topic_trade_ticks", "binance.trade.ticks")
     window_dur = cfg.get("vwap", {}).get("window_duration", "5 minutes")
     slide_dur  = cfg.get("vwap", {}).get("slide_duration", "1 minute")
     watermark  = cfg.get("vwap", {}).get("watermark", "30 seconds")
@@ -158,7 +158,7 @@ def run_funding_anomaly_stream(spark: SparkSession, kafka_brokers: str, cfg: dic
     Job 2 — Rolling Z-Score Funding Rate Anomaly Detection.
 
     Khi |Z-score| ≥ threshold (mặc định 2.5) → publish cảnh báo vào:
-        okx.alerts.funding-anomaly Kafka topic
+        binance.alerts.funding-anomaly Kafka topic
 
     Config (từ exchange_config.yaml section spark_streaming.funding_anomaly):
         window_duration:   "1 hour"
@@ -175,8 +175,8 @@ def run_funding_anomaly_stream(spark: SparkSession, kafka_brokers: str, cfg: dic
     Returns:
         StreamingQuery handle
     """
-    src_topic   = cfg.get("kafka_topic_funding_rates", "okx.funding.rates")
-    alert_topic = cfg.get("kafka_topic_alert_funding", "okx.alerts.funding-anomaly")
+    src_topic   = cfg.get("kafka_topic_funding_rates", "binance.funding.rates")
+    alert_topic = cfg.get("kafka_topic_alert_funding", "binance.alerts.funding-anomaly")
     fa_cfg      = cfg.get("funding_anomaly", {})
     window_dur  = fa_cfg.get("window_duration", "1 hour")
     slide_dur   = fa_cfg.get("slide_duration", "10 minutes")

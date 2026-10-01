@@ -1,4 +1,4 @@
-// Package logging cung cấp structured JSON logger nội bộ cho okx-analytics-api.
+// Package logging cung cấp structured JSON logger nội bộ cho dataops-backend-api.
 //
 // Vai trò:
 //   File này là logger INTERNAL của service — không phải duplicate của shared/platform/observability.
@@ -70,7 +70,7 @@ type Logger struct {
 
 // Config cấu hình logger
 type Config struct {
-	Service  string // tên service: "dataops-stream-producer", "okx-analytics-api"
+	Service  string // tên service: "dataops-stream-producer", "dataops-backend-api"
 	Level    Level  // minimum level để log
 	LogFile  string // path đến log file, "" = stdout only
 	JSONMode bool   // true = JSON format, false = human-readable

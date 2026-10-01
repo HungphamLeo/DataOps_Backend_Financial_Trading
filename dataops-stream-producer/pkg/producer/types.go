@@ -6,7 +6,7 @@
 
 package producer
 
-// TradeEvent maps với okx_trade_event.avsc
+// TradeEvent maps với binance_trade_event.avsc
 // LEARN: struct tags `json:"..."` — khi json.Marshal chuyển field name sang key trong JSON
 type TradeEvent struct {
 	InstID      string  `json:"instId"`
@@ -14,7 +14,7 @@ type TradeEvent struct {
 	Price       float64 `json:"price"`
 	Size        float64 `json:"size"`
 	Side        string  `json:"side"`        // "buy" | "sell"
-	TsMs        int64   `json:"tsMs"`        // Unix milliseconds từ OKX
+	TsMs        int64   `json:"tsMs"`        // Unix milliseconds từ Binance
 	ProducedMs  int64   `json:"producedAtMs"` // khi producer gửi lên Kafka
 	InstType    string  `json:"instType"`    // "SPOT" | "SWAP" | "FUTURES"
 }
@@ -26,7 +26,7 @@ type PriceLevel struct {
 	NumOrders int     `json:"numOrders"`
 }
 
-// OrderBookEvent maps với okx_orderbook_snapshot.avsc
+// OrderBookEvent maps với binance_orderbook_snapshot.avsc
 type OrderBookEvent struct {
 	InstID     string       `json:"instId"`
 	TsMs       int64        `json:"tsMs"`
@@ -36,7 +36,7 @@ type OrderBookEvent struct {
 	Checksum   *int32       `json:"checksum,omitempty"` // pointer = nullable
 }
 
-// LiquidationEvent maps với okx_liquidation_event.avsc
+// LiquidationEvent maps với binance_liquidation_event.avsc
 type LiquidationEvent struct {
 	InstID     string  `json:"instId"`
 	InstType   string  `json:"instType"`

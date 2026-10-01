@@ -22,10 +22,10 @@ package rest
 
 import (
 	"net/http"
-	"okx-analytics-api/constants"
-	"okx-analytics-api/middlewares"
-	"okx-analytics-api/services/accounting"
-	"okx-analytics-api/services/indicator"
+	"dataops-backend-api/constants"
+	"dataops-backend-api/middlewares"
+	"dataops-backend-api/services/accounting"
+	"dataops-backend-api/services/indicator"
 	"strconv"
 
 	"github.com/gin-gonic/gin"

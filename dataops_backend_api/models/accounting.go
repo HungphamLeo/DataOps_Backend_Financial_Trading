@@ -89,7 +89,7 @@ type AccountBalance struct {
 // LEARN: Audit log pattern — immutable record cho debugging và compliance
 type ExecutionLog struct {
 	gorm.Model
-	Service    string `gorm:"type:varchar(50)"  json:"service"` // "dataops-stream-producer","okx-analytics-api"
+	Service    string `gorm:"type:varchar(50)"  json:"service"` // "dataops-stream-producer","dataops-backend-api"
 	Level      string `gorm:"type:varchar(10)"  json:"level"`   // "INFO","WARN","ERROR"
 	Action     string `gorm:"type:varchar(100)" json:"action"`  // "OKX_CONNECT","VPS_SESSION_REFRESH"
 	Message    string `gorm:"type:text"         json:"message"`

@@ -88,7 +88,7 @@ type TransactionalProducer struct {
 // NewTransactionalProducer khởi tạo Sarama SyncProducer với EOS config.
 //
 // transactionalID nên unique per producer instance để tránh conflict.
-// Ví dụ: "okx-producer-btc-usdt-1", "okx-producer-vps-1".
+// Ví dụ: "binance-producer-btc-usdt-1", "binance-producer-vps-1".
 // Nếu transactionalID rỗng, chỉ dùng idempotent mode (không transactional).
 func NewTransactionalProducer(brokers []string, transactionalID string, logger *zap.Logger) (*TransactionalProducer, error) {
 	config := sarama.NewConfig()

@@ -1,4 +1,4 @@
-// Package rest chứa tất cả Gin HTTP handlers của okx-analytics-api.
+// Package rest chứa tất cả Gin HTTP handlers của dataops-backend-api.
 //
 // File này định nghĩa AuthHandler (public auth endpoints) và AdminHandler
 // (admin-only endpoints). Tất cả business logic được delegate xuống
@@ -10,7 +10,7 @@ package rest
 
 import (
 	"net/http"
-	"okx-analytics-api/services/authentication"
+	"dataops-backend-api/services/authentication"
 
 	"github.com/gin-gonic/gin"
 )
