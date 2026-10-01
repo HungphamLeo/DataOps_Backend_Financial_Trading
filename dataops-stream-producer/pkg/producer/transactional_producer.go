@@ -11,39 +11,43 @@ import (
 	"go.uber.org/zap"
 )
 
-// OKXPartitioner là custom Kafka partitioner dành riêng cho OKX instruments.
+// BinancePartitioner là custom Kafka partitioner dành riêng cho Binance & VPS instruments.
 //
 // Chiến lược phân vùng (partition routing):
-//   - Partition 0: tất cả BTC-* instruments (BTC-USDT, BTC-USDT-SWAP...)
-//   - Partition 1: tất cả ETH-* instruments
+//   - Partition 0: tất cả BTC* instruments (BTCUSDT...)
+//   - Partition 1: tất cả ETH* instruments (ETHUSDT...)
 //   - Partition 2..N-1: các instruments còn lại, hash đều bằng FNV32a
 //
 // Lý do cần dedicated partitions cho BTC/ETH:
 //   - BTC và ETH chiếm ~60-70% khối lượng giao dịch crypto
 //   - Dedicated partition → consumer có thể đọc riêng BTC mà không bị ảnh hưởng bởi altcoins
 //   - Ordering guarantee: tất cả BTC messages đến đúng thứ tự trong partition 0
-type OKXPartitioner struct{}
+type BinancePartitioner struct{}
 
-// NewOKXPartitioner là factory function theo chuẩn sarama.PartitionerConstructor.
+// NewBinancePartitioner là factory function theo chuẩn sarama.PartitionerConstructor.
 // Nhận topic name nhưng bỏ qua (routing logic không phụ thuộc vào topic).
-func NewOKXPartitioner(topic string) sarama.Partitioner {
-	return &OKXPartitioner{}
+func NewBinancePartitioner(topic string) sarama.Partitioner {
+	return &BinancePartitioner{}
 }
 
-// Partition xác định partition index cho 1 message dựa trên message key (instrument ID).
-// numPartitions là tổng số partitions của topic, phải >= 3 để hoạt động đúng.
-func (p *OKXPartitioner) Partition(msg *sarama.ProducerMessage, numPartitions int32) (int32, error) {
+// Partition xác định partition index cho 1 message dựa trên message key (symbol ID).
+// numPartitions là tổng số partitions của topic.
+func (p *BinancePartitioner) Partition(msg *sarama.ProducerMessage, numPartitions int32) (int32, error) {
 	if numPartitions <= 2 {
 		return 0, nil // fallback: tất cả vào partition 0 nếu topic quá nhỏ
+	}
+
+	if msg.Key == nil {
+		return 0, nil
 	}
 
 	keyBytes, err := msg.Key.Encode()
 	if err != nil {
 		return 0, err
 	}
-	symbol := string(keyBytes)
+	symbol := strings.ToUpper(string(keyBytes))
 
-	// Dedicated partitions cho high-volume instruments
+	// Dedicated partitions cho high-volume instruments (Binance & VN30 leader)
 	if strings.HasPrefix(symbol, "BTC") {
 		return 0, nil
 	}
@@ -51,7 +55,7 @@ func (p *OKXPartitioner) Partition(msg *sarama.ProducerMessage, numPartitions in
 		return 1, nil
 	}
 
-	// Các pairs còn lại: FNV32a hash → distribute vào partition 2..N-1
+	// Các pairs/mã CK còn lại: FNV32a hash → distribute vào partition 2..N-1
 	// FNV32a: non-cryptographic hash, nhanh và phân bố đều
 	hasher := fnv.New32a()
 	_, _ = hasher.Write(keyBytes)
@@ -61,7 +65,7 @@ func (p *OKXPartitioner) Partition(msg *sarama.ProducerMessage, numPartitions in
 
 // RequiresConsistency trả về true — cùng key luôn đến cùng partition.
 // Bắt buộc phải true để đảm bảo ordering guarantee cho từng instrument.
-func (p *OKXPartitioner) RequiresConsistency() bool {
+func (p *BinancePartitioner) RequiresConsistency() bool {
 	return true
 }
 
@@ -75,7 +79,7 @@ func (p *OKXPartitioner) RequiresConsistency() bool {
 //
 // Headers được tự động gắn vào mỗi message để traceability:
 //   - produced_at: thời điểm producer gửi (RFC3339Nano)
-//   - source: "okx-stream-producer" (giúp phân biệt khi có nhiều producers)
+//   - source: "dataops-stream-producer" (giúp phân biệt khi có nhiều producers)
 type TransactionalProducer struct {
 	producer sarama.SyncProducer
 	logger   *zap.Logger
@@ -91,9 +95,9 @@ func NewTransactionalProducer(brokers []string, transactionalID string, logger *
 	config.Producer.RequiredAcks = sarama.WaitForAll // acks=all: tất cả ISR phải ACK
 	config.Producer.Return.Successes = true
 	config.Producer.Return.Errors = true
-	config.Net.MaxOpenRequests = 1          // bắt buộc cho idempotent producer
+	config.Net.MaxOpenRequests = 1 // bắt buộc cho idempotent producer
 	config.Producer.Idempotent = true
-	config.Producer.Partitioner = NewOKXPartitioner
+	config.Producer.Partitioner = NewBinancePartitioner
 
 	if transactionalID != "" {
 		config.Producer.Transaction.ID = transactionalID
@@ -125,7 +129,7 @@ func (p *TransactionalProducer) SendMessage(ctx context.Context, topic, key stri
 		Value: sarama.ByteEncoder(value),
 		Headers: []sarama.RecordHeader{
 			{Key: []byte("produced_at"), Value: []byte(time.Now().UTC().Format(time.RFC3339Nano))},
-			{Key: []byte("source"), Value: []byte("okx-stream-producer")},
+			{Key: []byte("source"), Value: []byte("dataops-stream-producer")},
 		},
 	}
 

@@ -38,8 +38,8 @@ type producer struct {
 func NewProducer(brokers []string) (Producer, error) {
 	w := &kafka.Writer{
 		Addr:         kafka.TCP(brokers...),
-		Balancer:     &kafka.LeastBytes{},
-		RequiredAcks: kafka.RequireOne,
+		Balancer:     &kafka.Hash{},
+		RequiredAcks: kafka.RequireAll,
 		Async:        false,
 		BatchTimeout: 10 * time.Millisecond,
 	}

@@ -10,7 +10,7 @@
 //   3. Session expires sau ~30 phút → cần refresh tự động
 //
 // Điểm khác biệt vs finance-service: bỏ order execution, chỉ giữ market data fetch
-// vì okx-stream-producer chỉ cần READ market data, không cần WRITE orders
+// vì dataops-stream-producer chỉ cần READ market data, không cần WRITE orders
 
 package vpsclient
 
@@ -28,15 +28,16 @@ import (
 // LEARN: Struct với fields — encapsulation, ẩn implementation detail
 type Client struct {
 	httpClient *http.Client
-	sessionID  string         // VPS session ID, hết hạn sau ~30 phút
-	sessionAt  time.Time      // thời điểm session được tạo, để detect expiry
+	sessionID  string    // VPS session ID, hết hạn sau ~30 phút
+	sessionAt  time.Time // thời điểm session được tạo, để detect expiry
 	username   string
 	password   string
 }
 
 // NewClient tạo VPS client mới
 // LEARN: Constructor nhận credentials từ ngoài (Dependency Injection)
-//        Không hardcode credentials trong client — tốt cho security
+//
+//	Không hardcode credentials trong client — tốt cho security
 func NewClient(username, password string) *Client {
 	return &Client{
 		httpClient: &http.Client{
@@ -50,7 +51,8 @@ func NewClient(username, password string) *Client {
 // Login xác thực với VPS, lưu session ID
 // REUSE: 95% từ vps.go Start() — đổi tên cho rõ nghĩa hơn
 // LEARN: Retry loop — pattern phổ biến cho network calls:
-//        for i := 0; i < maxRetry; i++ → thử lại nếu fail, delay giữa retries
+//
+//	for i := 0; i < maxRetry; i++ → thử lại nếu fail, delay giữa retries
 func (c *Client) Login() error {
 	args := LoginRequest{
 		Group: "L",
@@ -101,7 +103,8 @@ func (c *Client) Login() error {
 
 // EnsureSession kiểm tra session còn hợp lệ không, tự động refresh nếu cần
 // LEARN: Session management pattern — kiểm tra trước khi dùng, không đợi đến khi lỗi
-//        25 phút = 30 phút (VPS timeout) - 5 phút (buffer)
+//
+//	25 phút = 30 phút (VPS timeout) - 5 phút (buffer)
 func (c *Client) EnsureSession() error {
 	if c.sessionID == "" || time.Since(c.sessionAt) > 25*time.Minute {
 		log.Printf("[VPSClient] Session expired or missing, re-logging in...")
@@ -112,7 +115,8 @@ func (c *Client) EnsureSession() error {
 
 // GetStockData lấy market data cho danh sách mã chứng khoán
 // LEARN: Variadic input ([]string) → batch request, giảm số lần gọi API
-//        VPS API nhận tối đa ~200 symbols mỗi request
+//
+//	VPS API nhận tối đa ~200 symbols mỗi request
 func (c *Client) GetStockData(symbols []string) ([]*StockDataResponse, error) {
 	if err := c.EnsureSession(); err != nil {
 		return nil, fmt.Errorf("ensure session: %w", err)
@@ -209,7 +213,8 @@ func (c *Client) call(reqBody []byte) ([]byte, error) {
 
 // callURL là HTTP POST helper — reuse cho cả login và data endpoints
 // LEARN: io.ReadAll đọc toàn bộ response body vào []byte
-//        resp.Body.Close() bắt buộc để tránh connection leak
+//
+//	resp.Body.Close() bắt buộc để tránh connection leak
 func (c *Client) callURL(url string, reqBody []byte) ([]byte, error) {
 	body := bytes.NewBuffer(reqBody)
 

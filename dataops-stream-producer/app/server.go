@@ -3,15 +3,15 @@ package app
 
 import (
 	"context"
+	"dataops-stream-producer/constants"
+	"dataops-stream-producer/pkg/configuration"
+	"dataops-stream-producer/pkg/producer"
+	binanceWS "dataops-stream-producer/pkg/sources/binance/websocket"
+	"dataops-stream-producer/pkg/sources/vps/market_data"
+	"dataops-stream-producer/redis"
+	"dataops-stream-producer/utils"
 	"fmt"
 	"log"
-	"okx-stream-producer/constants"
-	"okx-stream-producer/kafka"
-	"okx-stream-producer/pkg/configuration"
-	binanceWS "okx-stream-producer/pkg/sources/binance/websocket"
-	"okx-stream-producer/pkg/sources/vps/market_data"
-	"okx-stream-producer/redis"
-	"okx-stream-producer/utils"
 	"os/signal"
 	"syscall"
 )
@@ -31,16 +31,20 @@ func NewServer() error {
 		return fmt.Errorf("[Redis] connection was down")
 	}
 
-	// 3. Kafka writer
-	kafkaWriter := kafka.GetWriter(cfg.Kafka.URL)
-	defer kafkaWriter.Close()
+	// 3. Kafka Enterprise Producer (acks=all, idempotence=true, BinancePartitioner, DLQ, Schema Registry)
+	brokers := []string{cfg.Kafka.URL}
+	kafkaProd, err := producer.NewProducer(brokers, cfg.SchemaRegistry.URL)
+	if err != nil {
+		return fmt.Errorf("[Kafka Producer] %w", err)
+	}
+	defer kafkaProd.Close()
 
 	// 4. Context với graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	// 5. Khởi động Binance WebSocket producer (goroutine per trading pair)
-	binanceProducer := binanceWS.NewBinanceProducer(cfg, kafkaWriter, redisDB0)
+	binanceProducer := binanceWS.NewBinanceProducer(cfg, kafkaProd, redisDB0)
 	go func() {
 		if err := binanceProducer.Start(ctx); err != nil {
 			log.Printf("[BinanceProducer] error: %s", err.Error())
@@ -48,7 +52,7 @@ func NewServer() error {
 	}()
 
 	// 6. Khởi động VPS market data poller (cron trong giờ giao dịch)
-	vpsPoller := market_data.NewPoller(cfg, kafkaWriter, redisDB0)
+	vpsPoller := market_data.NewPoller(cfg, kafkaProd, redisDB0)
 	go func() {
 		if err := vpsPoller.Start(ctx); err != nil {
 			log.Printf("[VPSPoller] error: %s", err.Error())

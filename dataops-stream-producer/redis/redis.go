@@ -4,9 +4,9 @@ package redis
 
 import (
 	"context"
+	"dataops-stream-producer/pkg/configuration"
 	"encoding/json"
 	"log"
-	"okx-stream-producer/pkg/configuration"
 	"time"
 
 	"github.com/go-redis/redis/v8"

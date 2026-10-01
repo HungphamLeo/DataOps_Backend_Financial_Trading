@@ -21,11 +21,11 @@ package producer
 
 import (
 	"context"
+	"dataops-stream-producer/constants"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
-	"okx-stream-producer/constants"
 	"sync"
 	"time"
 
@@ -44,15 +44,15 @@ type Producer interface {
 
 // kafkaProducer concrete implementation dùng Sarama (IBM/sarama — official Go Kafka client)
 type kafkaProducer struct {
-	producer      sarama.SyncProducer   // synchronous producer — block cho đến khi broker ACK
-	schemaClient  *SchemaRegistryClient
-	dlqProducer   sarama.SyncProducer   // Dead Letter Queue producer
+	producer     sarama.SyncProducer // synchronous producer — block cho đến khi broker ACK
+	schemaClient *SchemaRegistryClient
+	dlqProducer  sarama.SyncProducer // Dead Letter Queue producer
 
 	// Schema IDs: đăng ký 1 lần khi khởi động, cache lại để reuse
-	tradeSchemaID    int
-	obSchemaID       int
-	liqSchemaID      int
-	vpsSchemaID      int
+	tradeSchemaID int
+	obSchemaID    int
+	liqSchemaID   int
+	vpsSchemaID   int
 
 	mu sync.RWMutex // bảo vệ schema IDs khi nhiều goroutines đọc/ghi
 }
@@ -82,23 +82,30 @@ func NewProducer(brokers []string, schemaRegistryURL string) (Producer, error) {
 	// LEARN: Idempotent = nếu retry, broker bỏ qua duplicate (dùng sequence number)
 	config.Producer.Idempotent = true
 	config.Net.MaxOpenRequests = 1 // required cho idempotent
+	config.Producer.Partitioner = NewBinancePartitioner
 
 	mainProducer, err := sarama.NewSyncProducer(brokers, config)
 	if err != nil {
 		return nil, fmt.Errorf("create sarama producer: %w", err)
 	}
 
-	// DLQ producer (config đơn giản hơn — best effort)
+	// DLQ producer (yêu cầu WaitForAll để không làm mất tin nhắn lỗi)
 	dlqConfig := sarama.NewConfig()
+	dlqConfig.Producer.RequiredAcks = sarama.WaitForAll
 	dlqConfig.Producer.Return.Successes = true
+	dlqConfig.Producer.Return.Errors = true
+	dlqConfig.Producer.Partitioner = NewBinancePartitioner
 	dlqProducer, err := sarama.NewSyncProducer(brokers, dlqConfig)
 	if err != nil {
 		mainProducer.Close()
 		return nil, fmt.Errorf("create dlq producer: %w", err)
 	}
 
-	// Schema Registry client
-	srClient := NewSchemaRegistryClient(schemaRegistryURL)
+	// Schema Registry client (nếu có cấu hình)
+	var srClient *SchemaRegistryClient
+	if schemaRegistryURL != "" {
+		srClient = NewSchemaRegistryClient(schemaRegistryURL)
+	}
 
 	p := &kafkaProducer{
 		producer:     mainProducer,
@@ -106,11 +113,9 @@ func NewProducer(brokers []string, schemaRegistryURL string) (Producer, error) {
 		dlqProducer:  dlqProducer,
 	}
 
-	// Đăng ký tất cả schemas lúc khởi động — fail fast nếu Schema Registry không healthy
+	// Đăng ký tất cả schemas lúc khởi động nếu schema registry client tồn tại
 	if err := p.registerSchemas(); err != nil {
-		mainProducer.Close()
-		dlqProducer.Close()
-		return nil, fmt.Errorf("register avro schemas: %w", err)
+		log.Printf("[Producer] Warning during schema registration: %v", err)
 	}
 
 	log.Printf("[Producer] Initialized with %d brokers, SchemaRegistry=%s", len(brokers), schemaRegistryURL)
@@ -120,6 +125,11 @@ func NewProducer(brokers []string, schemaRegistryURL string) (Producer, error) {
 // registerSchemas đăng ký tất cả Avro schemas với Confluent Schema Registry
 // LEARN: Schema compatibility = BACKWARD (new schema đọc được data cũ)
 func (p *kafkaProducer) registerSchemas() error {
+	// Kiểm tra xem Schema Registry URL có cấu hình không
+	if p.schemaClient == nil {
+		return nil
+	}
+
 	schemas := []struct {
 		subject  string
 		filePath string
@@ -150,7 +160,8 @@ func (p *kafkaProducer) registerSchemas() error {
 	for _, s := range schemas {
 		id, err := p.schemaClient.RegisterSchema(s.subject, s.filePath)
 		if err != nil {
-			return fmt.Errorf("register schema %s: %w", s.subject, err)
+			log.Printf("[Producer] Warning: register schema %s failed: %v (falling back to JSON/wire envelope)", s.subject, err)
+			continue
 		}
 		*s.idPtr = id
 		log.Printf("[Producer] Registered schema %s → id=%d", s.subject, id)
@@ -160,7 +171,8 @@ func (p *kafkaProducer) registerSchemas() error {
 
 // PublishTrade serialize TradeEvent thành Avro bytes và publish lên Kafka
 // LEARN: Message key = instID → đảm bảo semua messages cùng instrument vào 1 partition
-//        → ordering guarantee per instrument (quan trọng cho time-series)
+//
+//	→ ordering guarantee per instrument (quan trọng cho time-series)
 func (p *kafkaProducer) PublishTrade(ctx context.Context, instID string, event TradeEvent) error {
 	payload, err := p.serializeAvro(p.tradeSchemaID, event)
 	if err != nil {
@@ -169,7 +181,7 @@ func (p *kafkaProducer) PublishTrade(ctx context.Context, instID string, event T
 
 	msg := &sarama.ProducerMessage{
 		Topic: constants.TopicBinanceTrades,
-		Key:   sarama.StringEncoder(instID),  // key = instID → same partition per instrument
+		Key:   sarama.StringEncoder(instID), // key = instID → same partition per instrument
 		Value: sarama.ByteEncoder(payload),
 		// Timestamp cho phép Kafka brokers và consumers biết thời gian thực của message
 		Timestamp: time.UnixMilli(event.TsMs),
@@ -244,25 +256,28 @@ func (p *kafkaProducer) PublishVPSSnapshot(ctx context.Context, symbol string, e
 }
 
 // serializeAvro encode event thành Confluent Wire Format:
-//   Byte 0:   0x00 (magic byte)
-//   Bytes 1-4: schema_id (big-endian int32)
-//   Bytes 5+:  Avro binary encoded payload
+//
+//	Byte 0:   0x00 (magic byte)
+//	Bytes 1-4: schema_id (big-endian int32)
+//	Bytes 5+:  Avro binary encoded payload
 //
 // LEARN: Confluent Wire Format là chuẩn — mọi Kafka consumer với Avro đều hiểu format này
 func (p *kafkaProducer) serializeAvro(schemaID int, event interface{}) ([]byte, error) {
-	// Serialize event thành JSON trước (intermediate step)
-	// Production code nên dùng avro.Marshal() trực tiếp để tối ưu hơn
 	jsonBytes, err := json.Marshal(event)
 	if err != nil {
 		return nil, fmt.Errorf("json marshal: %w", err)
 	}
 
-	// Wire Format header: [0x00][4-byte big-endian schema ID]
+	if schemaID <= 0 {
+		// Schema Registry không khả dụng hoặc chưa đăng ký -> fallback gửi JSON chuẩn
+		return jsonBytes, nil
+	}
+
+	// Confluent Wire Format header: [0x00][4-byte big-endian schema ID]
 	header := make([]byte, 5)
 	header[0] = 0x00 // Confluent magic byte
 	binary.BigEndian.PutUint32(header[1:5], uint32(schemaID))
 
-	// LEARN: append(a, b...) = concat slices — ... là variadic unpacking
 	return append(header, jsonBytes...), nil
 }
 

@@ -7,33 +7,32 @@ package market_data
 import (
 	"bytes"
 	"context"
+	"dataops-stream-producer/pkg/configuration"
+	"dataops-stream-producer/pkg/producer"
+	"dataops-stream-producer/redis"
+	"dataops-stream-producer/utils"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"okx-stream-producer/constants"
-	"okx-stream-producer/pkg/configuration"
-	"okx-stream-producer/redis"
-	"okx-stream-producer/utils"
 	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
-	kafka "github.com/segmentio/kafka-go"
 )
 
 // VPSPoller quản lý session VPS và poll market data định kỳ
 type VPSPoller struct {
-	cfg         *configuration.Config
-	kafkaWriter *kafka.Writer
-	redis       redis.Service
-	session     string      // VPS session ID sau khi login
-	sessionMu   sync.RWMutex
+	cfg       *configuration.Config
+	producer  producer.Producer
+	redis     redis.Service
+	session   string // VPS session ID sau khi login
+	sessionMu sync.RWMutex
 }
 
-func NewPoller(cfg *configuration.Config, kafkaWriter *kafka.Writer, redis redis.Service) *VPSPoller {
-	return &VPSPoller{cfg: cfg, kafkaWriter: kafkaWriter, redis: redis}
+func NewPoller(cfg *configuration.Config, prod producer.Producer, redis redis.Service) *VPSPoller {
+	return &VPSPoller{cfg: cfg, producer: prod, redis: redis}
 }
 
 // Start khởi động poller với cron schedule
@@ -123,7 +122,7 @@ func (p *VPSPoller) pollAll() {
 	}
 }
 
-// pollSymbol lấy market snapshot cho 1 symbol và publish → Kafka
+// pollSymbol lấy market snapshot cho 1 symbol và publish → Kafka qua Producer có DLQ
 func (p *VPSPoller) pollSymbol(session, symbol string) error {
 	args := map[string]interface{}{
 		"group":   "L",
@@ -140,29 +139,50 @@ func (p *VPSPoller) pollSymbol(session, symbol string) error {
 		return err
 	}
 
-	// Enrich với timestamp trước khi publish
-	var snapshot map[string]interface{}
-	if err := json.Unmarshal(body, &snapshot); err != nil {
+	var rawMap map[string]interface{}
+	if err := json.Unmarshal(body, &rawMap); err != nil {
 		return err
 	}
-	snapshot["ts"] = time.Now().UnixMilli()
-	snapshot["symbol"] = symbol
 
-	enriched, _ := json.Marshal(snapshot)
-
-	// Publish → Kafka: vps.market.snapshot
-	msg := kafka.Message{
-		Topic: constants.TopicVPSMarketSnapshot,
-		Key:   []byte(symbol),
-		Value: enriched,
+	// Helper to extract float64
+	getFloat := func(m map[string]interface{}, key string) float64 {
+		if val, ok := m[key]; ok {
+			if f, ok := val.(float64); ok {
+				return f
+			}
+		}
+		return 0
 	}
-	if err := p.kafkaWriter.WriteMessages(context.Background(), msg); err != nil {
-		return fmt.Errorf("kafka write: %w", err)
+
+	nowMs := time.Now().UnixMilli()
+	vpsEvent := producer.VPSSnapshotEvent{
+		Symbol:         symbol,
+		Exchange:       "HOSE",
+		Price:          getFloat(rawMap, "price"),
+		Bid:            getFloat(rawMap, "bid"),
+		Ask:            getFloat(rawMap, "ask"),
+		Open:           getFloat(rawMap, "open"),
+		High:           getFloat(rawMap, "high"),
+		Low:            getFloat(rawMap, "low"),
+		ReferencePrice: getFloat(rawMap, "refPrice"),
+		CeilingPrice:   getFloat(rawMap, "ceilPrice"),
+		FloorPrice:     getFloat(rawMap, "floorPrice"),
+		Volume:         getFloat(rawMap, "volume"),
+		TotalValue:     getFloat(rawMap, "totalVal"),
+		ChangePct:      getFloat(rawMap, "changePct"),
+		SessionState:   "CONTINUOUS",
+		TsMs:           nowMs,
+		ProducedMs:     nowMs,
+	}
+
+	ctx := context.Background()
+	if err := p.producer.PublishVPSSnapshot(ctx, symbol, vpsEvent); err != nil {
+		return fmt.Errorf("publish vps snapshot: %w", err)
 	}
 
 	// Cache để monitor slow response — REUSE: market-maker-background CheckProviderSlowResponse
 	cacheKey := fmt.Sprintf("vps_%s_ticker", symbol)
-	p.redis.Set(cacheKey, map[string]interface{}{"ts": time.Now().UnixMilli()}, 120*time.Second)
+	p.redis.Set(cacheKey, map[string]interface{}{"ts": nowMs}, 120*time.Second)
 
 	return nil
 }

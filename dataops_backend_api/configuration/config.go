@@ -39,12 +39,12 @@ type Config struct {
 	MinIO      MinIOConfig
 	JWT        JWTConfig
 	VPS        VPSConfig
-	OKX        OKXConfig
+	BINANCE    BINANCEConfig
 	Monitoring MonitoringConfig
 }
 
 type AppConfig struct {
-	Name        string // "okx-analytics-api"
+	Name        string // "binance-analytics-api"
 	Version     string // "1.0.0"
 	Environment string // "development","staging","production"
 	Port        int    // HTTP port
@@ -83,7 +83,7 @@ type MinIOConfig struct {
 	Endpoint  string // "http://minio:9000"
 	AccessKey string // SENSITIVE
 	SecretKey string // SENSITIVE
-	Bucket    string // "okx-datalake"
+	Bucket    string // "binance-datalake"
 }
 
 type JWTConfig struct {
@@ -98,22 +98,23 @@ type VPSConfig struct {
 	BaseURL  string // VPS API base URL (override cho staging/prod)
 }
 
-type OKXConfig struct {
-	APIKey     string // SENSITIVE: OKX API key (chỉ cần cho private endpoints)
-	SecretKey  string // SENSITIVE
-	Passphrase string // SENSITIVE: OKX thêm 1 layer auth
-	WebSocketURL string // OKX public WebSocket URL
+type BINANCEConfig struct {
+	APIKey       string // SENSITIVE: BINANCE API key (chỉ cần cho private endpoints)
+	SecretKey    string // SENSITIVE
+	Passphrase   string // SENSITIVE: BINANCE thêm 1 layer auth
+	WebSocketURL string // BINANCE public WebSocket URL
 }
 
 type MonitoringConfig struct {
-	LagAlertThreshold  int64  // Kafka consumer lag alert threshold
-	SlowResponseThreshold int  // milliseconds (từ CheckProviderSlowResponse pattern)
-	MetricsPort        int    // Prometheus metrics port (nếu có)
+	LagAlertThreshold     int64 // Kafka consumer lag alert threshold
+	SlowResponseThreshold int   // milliseconds (từ CheckProviderSlowResponse pattern)
+	MetricsPort           int   // Prometheus metrics port (nếu có)
 }
 
 // Load đọc config từ environment variables + optional .env file
 // LEARN: godotenv.Load() — load .env file vào os.Environ()
-//        Không panic nếu .env không tồn tại (optional trong production)
+//
+//	Không panic nếu .env không tồn tại (optional trong production)
 func Load() (*Config, error) {
 	// Load .env nếu có (development)
 	// LEARN: Ignore error — production không cần .env (dùng actual env vars)
@@ -127,7 +128,7 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		App: AppConfig{
-			Name:        getEnv("APP_NAME", "okx-analytics-api"),
+			Name:        getEnv("APP_NAME", "binance-analytics-api"),
 			Version:     getEnv("APP_VERSION", "1.0.0"),
 			Environment: getEnv("APP_ENV", "development"),
 			Port:        appPort,
@@ -136,7 +137,7 @@ func Load() (*Config, error) {
 		Database: DatabaseConfig{
 			Host:     getEnv("DB_HOST", "localhost"),
 			Port:     dbPort,
-			Name:     getEnv("DB_NAME", "okx_analytics"),
+			Name:     getEnv("DB_NAME", "binance_analytics"),
 			User:     getEnv("DB_USER", "root"),
 			Password: mustGetEnv("DB_PASSWORD"), // bắt buộc
 		},
@@ -147,20 +148,20 @@ func Load() (*Config, error) {
 		},
 		Kafka: KafkaConfig{
 			Brokers:        strings.Split(getEnv("KAFKA_BROKERS", "localhost:9092"), ","),
-			ConsumerGroup:  getEnv("KAFKA_CONSUMER_GROUP", "okx-analytics-consumer"),
+			ConsumerGroup:  getEnv("KAFKA_CONSUMER_GROUP", "BINANCE-analytics-consumer"),
 			SchemaRegistry: getEnv("SCHEMA_REGISTRY_URL", "http://localhost:8081"),
 		},
 		InfluxDB: InfluxDBConfig{
 			URL:    getEnv("INFLUXDB_URL", "http://localhost:8086"),
 			Token:  mustGetEnv("INFLUXDB_TOKEN"),
-			Org:    getEnv("INFLUXDB_ORG", "okx-vps"),
-			Bucket: getEnv("INFLUXDB_BUCKET", "okx-realtime"),
+			Org:    getEnv("INFLUXDB_ORG", "binance-vps"),
+			Bucket: getEnv("INFLUXDB_BUCKET", "binance-realtime"),
 		},
 		MinIO: MinIOConfig{
 			Endpoint:  getEnv("MINIO_ENDPOINT", "http://localhost:9000"),
 			AccessKey: mustGetEnv("MINIO_ACCESS_KEY"),
 			SecretKey: mustGetEnv("MINIO_SECRET_KEY"),
-			Bucket:    getEnv("MINIO_BUCKET", "okx-datalake"),
+			Bucket:    getEnv("MINIO_BUCKET", "binance-datalake"),
 		},
 		JWT: JWTConfig{
 			Secret:     mustGetEnv("JWT_SECRET"),
@@ -172,11 +173,11 @@ func Load() (*Config, error) {
 			Password: getEnv("VPS_PASSWORD", ""),
 			BaseURL:  getEnv("VPS_BASE_URL", "https://bgapidatafeed.vps.com.vn"),
 		},
-		OKX: OKXConfig{
-			APIKey:       getEnv("OKX_API_KEY", ""),
-			SecretKey:    getEnv("OKX_SECRET_KEY", ""),
-			Passphrase:   getEnv("OKX_PASSPHRASE", ""),
-			WebSocketURL: getEnv("OKX_WS_URL", "wss://ws.okx.com:8443/ws/v5/public"),
+		BINANCE: BINANCEConfig{
+			APIKey:       getEnv("BINANCE_API_KEY", ""),
+			SecretKey:    getEnv("BINANCE_SECRET_KEY", ""),
+			Passphrase:   getEnv("BINANCE_PASSPHRASE", ""),
+			WebSocketURL: getEnv("BINANCE_WS_URL", "wss://ws.binance.com:8443/ws/v5/public"),
 		},
 		Monitoring: MonitoringConfig{
 			LagAlertThreshold:     int64(getEnvInt("KAFKA_LAG_ALERT_THRESHOLD", 10000)),

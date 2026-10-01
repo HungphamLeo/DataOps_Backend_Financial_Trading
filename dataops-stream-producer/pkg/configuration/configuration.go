@@ -2,7 +2,7 @@
 // Đọc config từ environment variables — 12-Factor App pattern
 package configuration
 
-import "okx-stream-producer/utils"
+import "dataops-stream-producer/utils"
 
 type Config struct {
 	Kafka struct {

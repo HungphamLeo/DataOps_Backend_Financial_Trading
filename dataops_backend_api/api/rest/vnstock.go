@@ -50,7 +50,7 @@ func (h *VNStockHandler) Register(r *gin.RouterGroup) {
 }
 
 // GetMarket trả về real-time market snapshot của 1 mã cổ phiếu VN.
-// Data được ghi vào InfluxDB bởi okx-stream-producer từ VPS REST poller.
+// Data được ghi vào InfluxDB bởi dataops-stream-producer từ VPS REST poller.
 //
 // Query params:
 //

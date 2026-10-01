@@ -1,5 +1,4 @@
-// REUSE 100%: trading-bot-finance-service/kafka/writer.go
-// Kafka writer với LeastBytes balancer — phân phối đều message vào partitions
+// Package kafka cung cấp low-level writer với key-hash balancer bảo toàn thứ tự partition.
 package kafka
 
 import (
@@ -8,12 +7,12 @@ import (
 	kafka "github.com/segmentio/kafka-go"
 )
 
-// GetWriter tạo Kafka writer với LeastBytes balancer
-// REUSE: trading-bot-finance-service/kafka/writer.go
+// GetWriter tạo Kafka writer với Hash balancer (bảo toàn ordering theo message key) và acks=all
 func GetWriter(kafkaURL string) *kafka.Writer {
 	return &kafka.Writer{
 		Addr:         kafka.TCP(kafkaURL),
-		Balancer:     &kafka.LeastBytes{},
+		Balancer:     &kafka.Hash{},
+		RequiredAcks: kafka.RequireAll,
 		BatchTimeout: 10 * time.Millisecond,
 	}
 }

@@ -4,35 +4,35 @@ package websocket
 
 import (
 	"context"
+	"dataops-stream-producer/pkg/configuration"
+	"dataops-stream-producer/pkg/producer"
+	"dataops-stream-producer/redis"
+	"dataops-stream-producer/utils"
 	"encoding/json"
 	"fmt"
 	"log"
-	"okx-stream-producer/constants"
-	"okx-stream-producer/pkg/configuration"
-	"okx-stream-producer/redis"
-	"okx-stream-producer/utils"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
-	kafka "github.com/segmentio/kafka-go"
 )
 
 // BinanceProducer quản lý tất cả WebSocket connections đến Binance
 // 1 goroutine per trading pair
 type BinanceProducer struct {
-	cfg         *configuration.Config
-	kafkaWriter *kafka.Writer
-	redis       redis.Service
-	wg          sync.WaitGroup
+	cfg      *configuration.Config
+	producer producer.Producer
+	redis    redis.Service
+	wg       sync.WaitGroup
 }
 
-func NewBinanceProducer(cfg *configuration.Config, kafkaWriter *kafka.Writer, redis redis.Service) *BinanceProducer {
+func NewBinanceProducer(cfg *configuration.Config, prod producer.Producer, redis redis.Service) *BinanceProducer {
 	return &BinanceProducer{
-		cfg:         cfg,
-		kafkaWriter: kafkaWriter,
-		redis:       redis,
+		cfg:      cfg,
+		producer: prod,
+		redis:    redis,
 	}
 }
 
@@ -104,20 +104,10 @@ func (p *BinanceProducer) connectAndStream(ctx context.Context, symbol string) e
 	}
 }
 
-// handleMessage parse message và route đến đúng Kafka topic
+// handleMessage parse message và route đến đúng Kafka topic thông qua Producer với DLQ + Retry
 func (p *BinanceProducer) handleMessage(symbol string, raw []byte) {
 	var envelope BinanceCombinedStreamMsg
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return
-	}
-
-	var topic string
-	switch {
-	case strings.HasSuffix(envelope.Stream, "@trade"):
-		topic = constants.TopicBinanceTradeTicks
-	case strings.Contains(envelope.Stream, "@depth"):
-		topic = constants.TopicBinanceOrderBookSnapshot
-	default:
 		return
 	}
 
@@ -127,14 +117,76 @@ func (p *BinanceProducer) handleMessage(symbol string, raw []byte) {
 		"ts": time.Now().UnixMilli(),
 	}, 60*time.Second)
 
-	// Publish → Kafka
-	kafkaMsg := kafka.Message{
-		Topic: topic,
-		Key:   []byte(symbol),
-		Value: raw,
-	}
-	if err := p.kafkaWriter.WriteMessages(context.Background(), kafkaMsg); err != nil {
-		log.Printf("[BinanceProducer] [%s] kafka write error: %s", symbol, err.Error())
+	ctx := context.Background()
+
+	switch {
+	case strings.HasSuffix(envelope.Stream, "@trade"):
+		var rawTrade BinanceRawTrade
+		if err := json.Unmarshal(envelope.Data, &rawTrade); err != nil {
+			log.Printf("[BinanceProducer] [%s] unmarshal trade error: %v", symbol, err)
+			return
+		}
+
+		price, _ := strconv.ParseFloat(rawTrade.Price, 64)
+		size, _ := strconv.ParseFloat(rawTrade.Quantity, 64)
+		side := "buy"
+		if rawTrade.IsBuyerMaker {
+			side = "sell" // Buyer is maker => Seller is taker (aggressive)
+		}
+
+		tradeEvent := producer.TradeEvent{
+			InstID:     symbol,
+			TradeID:    strconv.FormatInt(rawTrade.TradeID, 10),
+			Price:      price,
+			Size:       size,
+			Side:       side,
+			TsMs:       rawTrade.TradeTime,
+			ProducedMs: time.Now().UnixMilli(),
+			InstType:   "SPOT",
+		}
+
+		if err := p.producer.PublishTrade(ctx, symbol, tradeEvent); err != nil {
+			log.Printf("[BinanceProducer] [%s] publish trade error: %v", symbol, err)
+		}
+
+	case strings.Contains(envelope.Stream, "@depth"):
+		var rawDepth BinanceRawDepth
+		if err := json.Unmarshal(envelope.Data, &rawDepth); err != nil {
+			log.Printf("[BinanceProducer] [%s] unmarshal depth error: %v", symbol, err)
+			return
+		}
+
+		bids := make([]producer.PriceLevel, 0, len(rawDepth.Bids))
+		for _, b := range rawDepth.Bids {
+			if len(b) >= 2 {
+				px, _ := strconv.ParseFloat(b[0], 64)
+				qty, _ := strconv.ParseFloat(b[1], 64)
+				bids = append(bids, producer.PriceLevel{Price: px, Quantity: qty})
+			}
+		}
+
+		asks := make([]producer.PriceLevel, 0, len(rawDepth.Asks))
+		for _, a := range rawDepth.Asks {
+			if len(a) >= 2 {
+				px, _ := strconv.ParseFloat(a[0], 64)
+				qty, _ := strconv.ParseFloat(a[1], 64)
+				asks = append(asks, producer.PriceLevel{Price: px, Quantity: qty})
+			}
+		}
+
+		checksum := int32(rawDepth.LastUpdateID)
+		obEvent := producer.OrderBookEvent{
+			InstID:     symbol,
+			TsMs:       time.Now().UnixMilli(),
+			ProducedMs: time.Now().UnixMilli(),
+			Bids:       bids,
+			Asks:       asks,
+			Checksum:   &checksum,
+		}
+
+		if err := p.producer.PublishOrderBook(ctx, symbol, obEvent); err != nil {
+			log.Printf("[BinanceProducer] [%s] publish orderbook error: %v", symbol, err)
+		}
 	}
 }
 
@@ -142,4 +194,23 @@ func (p *BinanceProducer) handleMessage(symbol string, raw []byte) {
 type BinanceCombinedStreamMsg struct {
 	Stream string          `json:"stream"`
 	Data   json.RawMessage `json:"data"`
+}
+
+type BinanceRawTrade struct {
+	EventType    string `json:"e"`
+	EventTime    int64  `json:"E"`
+	Symbol       string `json:"s"`
+	TradeID      int64  `json:"t"`
+	Price        string `json:"p"`
+	Quantity     string `json:"q"`
+	BuyerOrderID int64  `json:"b"`
+	SellerOrderID int64 `json:"a"`
+	TradeTime    int64  `json:"T"`
+	IsBuyerMaker bool   `json:"m"`
+}
+
+type BinanceRawDepth struct {
+	LastUpdateID int64      `json:"lastUpdateId"`
+	Bids         [][]string `json:"bids"`
+	Asks         [][]string `json:"asks"`
 }

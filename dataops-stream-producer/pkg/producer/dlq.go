@@ -1,4 +1,4 @@
-// Package producer chứa các Kafka producer implementations cho okx-stream-producer.
+// Package producer chứa các Kafka producer implementations cho dataops-stream-producer.
 package producer
 
 import (
@@ -31,7 +31,7 @@ func NewDLQProducer(brokers []string, dlqTopic string, logger *zap.Logger) *DLQP
 	writer := &kafka.Writer{
 		Addr:         kafka.TCP(brokers...),
 		Topic:        dlqTopic,
-		Balancer:     &kafka.LeastBytes{},
+		Balancer:     &kafka.Hash{},
 		RequiredAcks: kafka.RequireAll, // đảm bảo DLQ không mất data
 		Async:        false,            // synchronous để caller biết kết quả
 	}

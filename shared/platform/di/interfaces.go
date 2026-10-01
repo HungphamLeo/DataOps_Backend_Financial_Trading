@@ -1,5 +1,5 @@
 // Package di định nghĩa các shared interfaces dùng cho Dependency Injection
-// trên toàn bộ platform (okx-analytics-api, okx-stream-producer).
+// trên toàn bộ platform (okx-analytics-api, dataops-stream-producer).
 //
 // Mục đích: tạo contract chung để các service có thể swap implementation
 // mà không cần sửa caller code (Dependency Inversion Principle — SOLID D).

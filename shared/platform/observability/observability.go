@@ -1,5 +1,5 @@
 // Package observability cung cấp các công cụ monitoring và logging chuẩn
-// cho toàn bộ platform (okx-analytics-api, okx-stream-producer).
+// cho toàn bộ platform (okx-analytics-api, dataops-stream-producer).
 //
 // Bao gồm:
 //   - Structured logging qua go.uber.org/zap (JSON format, configurable level)
@@ -7,16 +7,16 @@
 //   - HTTP metrics middleware: tự động record latency và status codes
 //
 // Usage:
-//   logger := observability.InitLogger("okx-analytics-api", "production", "info")
-//   metrics := observability.InitMetrics("dataops")
-//   router.Use(gin.WrapH(observability.HTTPMetricsMiddleware(...)))
+//
+//	logger := observability.InitLogger("okx-analytics-api", "production", "info")
+//	metrics := observability.InitMetrics("dataops")
+//	router.Use(gin.WrapH(observability.HTTPMetricsMiddleware(...)))
 //
 // InitLogger và InitMetrics dùng sync.Once — an toàn khi gọi nhiều lần,
 // chỉ khởi tạo 1 lần duy nhất trong vòng đời của process.
 package observability
 
 import (
-	"context"
 	"net/http"
 	"sync"
 	"time"

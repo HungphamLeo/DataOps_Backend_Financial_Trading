@@ -3,10 +3,10 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o okx-stream-producer .
+RUN CGO_ENABLED=0 GOOS=linux go build -o dataops-stream-producer .
 
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates tzdata
 WORKDIR /root/
-COPY --from=builder /app/okx-stream-producer .
-CMD ["./okx-stream-producer"]
+COPY --from=builder /app/dataops-stream-producer .
+CMD ["./dataops-stream-producer"]

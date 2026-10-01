@@ -1,0 +1,116 @@
+=============================================================================
+SESSION EXPORT — Kafka Knowledge Sync & dataops-stream-producer Enterprise Refactor
+Date: 2026-09-29
+Branch: 25092026_set_up_base_code
+Scope: github/skill/SKILL.md, .bob/skills, dataops-stream-producer
+=============================================================================
+
+1. TỔNG QUAN SESSION
+-----------------------------------------------------------------------------
+Trong session này, hệ thống đã thực hiện 3 nhóm công việc chính:
+1. Đọc và đồng bộ tri thức toàn diện từ `allskill` và `export_task` vào `SKILL.md` của dự án và Bob AI Skill (`dataops-financial-trading`).
+2. Rà soát, đối chiếu kiến trúc và mã nguồn của `dataops-stream-producer` với bộ tiêu chuẩn kỹ thuật Apache Kafka trong lĩnh vực Tài chính & Giao dịch thời gian thực (Zero Data Loss, Strict Ordering, Idempotence, DLQ, Schema Governance).
+3. Tiến hành refactor toàn bộ module `dataops-stream-producer` từ tầng Driver, Partitioner, Serialization cho đến Consumer/Poller và Server Wiring.
+
+
+=============================================================================
+2. CÁC CÔNG VIỆC ĐÃ HOÀN THÀNH CHI TIẾT
+=============================================================================
+
+2.1 Đồng bộ Tri thức Skill & Kafka Standard (SKILL.md)
+------------------------------------------------------
+- Cập nhật file `github/skill/SKILL.md` và đồng bộ sang `C:\Users\Admin\.bob\skills\dataops-financial-trading\SKILL.md`.
+- Bổ sung các chuẩn kiến trúc Kafka nâng cao trích xuất từ:
+  * `ai_workspace_management\.ai_workspace\allskill\DE_Study_Guide_Kafka_Spark.md`
+  * `skill-06-kafka-definitive-guide.md`
+- Nội dung cốt lõi:
+  * Zero Data Loss: `acks=all` (`-1`), `min.insync.replicas=2`, `replication.factor=3`.
+  * Strict Ordering: Định tuyến theo Key (Symbol) trên từng Partition.
+  * Producer Internals: Tách Application Thread (`RecordAccumulator`) và Sender Thread (I/O TCP).
+  * Cấm gửi Fire-and-Forget, khuyến nghị Asynchronous Send với Callback và DLQ.
+  * Quản lý Hotspot Partition bằng Custom Partitioner (dành cho BTC/ETH/VN30).
+  * Quản lý Consumer Lag & phòng tránh Rebalance Storms.
+
+2.2 Review & Đánh giá Codebase dataops-stream-producer
+-----------------------------------------------------
+- Phát hiện các điểm bất cập:
+  * Sử dụng `LeastBytes` balancer làm phá vỡ Strict Ordering theo symbol.
+  * Phân mảnh giữa `segmentio/kafka-go` và `IBM/sarama`.
+  * Server entrypoint (`app/server.go`) chỉ nối vào low-level writer, bỏ rơi các tính năng Idempotence, Avro, Schema Registry trong `pkg/producer/`.
+  * Thiếu Dead Letter Queue (DLQ) thực tế khi publish WebSocket / REST snapshot gặp lỗi.
+  * Custom partitioner cũ mang tên `OKXPartitioner` chưa tương thích hoàn toàn với Binance.
+
+2.3 Refactor Mã Nguồn dataops-stream-producer
+---------------------------------------------
+A. Tầng Partitioner (`pkg/producer/transactional_producer.go`):
+   - Đổi tên `OKXPartitioner` -> `BinancePartitioner`.
+   - Partition 0: Dedicated cho tất cả symbol tiền tố `BTC` (ví dụ `BTCUSDT`).
+   - Partition 1: Dedicated cho tất cả symbol tiền tố `ETH` (ví dụ `ETHUSDT`).
+   - Partition 2..N-1: Phân bổ đều các cặp altcoins / mã CK bằng thuật toán `FNV32a`.
+   - `RequiresConsistency() = true` để bảo đảm ordering tuyệt đối.
+
+B. Tầng Producer & Serialization (`pkg/producer/producer.go`):
+   - Thống nhất sử dụng `IBM/sarama` SyncProducer với cấu hình:
+     * `RequiredAcks = sarama.WaitForAll` (`acks=all`).
+     * `Idempotent = true` + `MaxOpenRequests = 1` (Exactly-Once Semantics trên partition).
+     * `Partitioner = NewBinancePartitioner`.
+     * `Compression = CompressionSnappy`.
+     * `Retry.Max = 5`, `Retry.Backoff = 100ms`.
+   - Schema Registry & Confluent Wire Format:
+     * Đóng gói payload: `[0x00][4-byte big-endian schema_id][bytes]`.
+     * Graceful fallback sang JSON chuẩn nếu Schema Registry không khả dụng.
+
+C. Tầng Dead Letter Queue (DLQ):
+   - Bổ sung topic `TopicVPSMarketDLQ = "vps.market.snapshot.dlq"` trong `constants/topics.go`.
+   - Tích hợp `sendToDLQ` tự động bọc metadata lỗi (`event`, `error`, `timestamp`) và route vào `binance.trade.ticks.dlq`, `binance.orderbook.snapshot.dlq`, `vps.market.snapshot.dlq`.
+   - Cập nhật `pkg/producer/dlq.go` sử dụng `Balancer: &kafka.Hash{}` thay vì `LeastBytes`.
+
+D. Tầng Ingestion Sources:
+   - Binance WebSocket (`pkg/sources/binance/websocket/producer.go`):
+     * Nhận và giải mã Binance Combined Stream (`@trade`, `@depth5`).
+     * Chuyển đổi sang `TradeEvent` & `OrderBookEvent` chuẩn.
+     * Publish thông qua `producer.Producer` có hỗ trợ Avro/JSON + DLQ.
+   - VPS Market Data Poller (`pkg/sources/vps/market_data/poller.go`):
+     * Parse REST response sang `VPSSnapshotEvent`.
+     * Publish thông qua `producer.Producer` với `TopicVPSMarket`.
+
+E. Server Wiring (`app/server.go`):
+   - Thay thế `kafka.GetWriter` sơ sài bằng `producer.NewProducer(brokers, cfg.SchemaRegistry.URL)`.
+   - Quản lý lifecycle và graceful shutdown đóng producer an toàn.
+
+
+=============================================================================
+3. DANH SÁCH FILE THAY ĐỔI VÀ TẠO MỚI
+=============================================================================
+
+File sửa đổi (Modified):
+------------------------
+1. github/skill/SKILL.md
+2. C:\Users\Admin\.bob\skills\dataops-financial-trading\SKILL.md
+3. dataops-stream-producer/constants/topics.go
+4. dataops-stream-producer/kafka/writer.go
+5. dataops-stream-producer/pkg/messaging/producer.go
+6. dataops-stream-producer/pkg/producer/dlq.go
+7. dataops-stream-producer/pkg/producer/producer.go
+8. dataops-stream-producer/pkg/producer/transactional_producer.go
+9. dataops-stream-producer/pkg/sources/binance/websocket/producer.go
+10. dataops-stream-producer/pkg/sources/vps/market_data/poller.go
+11. dataops-stream-producer/app/server.go
+12. dataops-stream-producer/go.mod
+
+File tạo mới (Created):
+-----------------------
+1. dataops-stream-producer/pkg/producer/partitioner_test.go
+2. export_task/SESSION_2026_09_29_KAFKA_STREAM_PRODUCER_REFACTOR.txt
+
+
+=============================================================================
+4. KẾT QUẢ TEST & VERIFICATION
+=============================================================================
+- `go build ./...` trong `dataops-stream-producer`: Thành công (Exit code 0, không lỗi compile).
+- `go test -v ./pkg/producer`:
+  * `TestBinancePartitioner/BTCUSDT_to_partition_0` -> PASS
+  * `TestBinancePartitioner/ETHUSDT_to_partition_1` -> PASS
+  * `TestBinancePartitioner/Small_partition_count_fallback` -> PASS
+  * Result: PASS (ok dataops-stream-producer/pkg/producer 1.039s)
+=============================================================================

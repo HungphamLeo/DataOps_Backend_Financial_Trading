@@ -70,7 +70,7 @@ type Logger struct {
 
 // Config cấu hình logger
 type Config struct {
-	Service  string // tên service: "okx-stream-producer", "okx-analytics-api"
+	Service  string // tên service: "dataops-stream-producer", "okx-analytics-api"
 	Level    Level  // minimum level để log
 	LogFile  string // path đến log file, "" = stdout only
 	JSONMode bool   // true = JSON format, false = human-readable

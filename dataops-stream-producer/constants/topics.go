@@ -29,6 +29,7 @@ const (
 	TopicBinanceTradesDLQ      = "binance.trade.ticks.dlq"
 	TopicBinanceOrderBookDLQ   = "binance.orderbook.snapshot.dlq"
 	TopicBinanceLiquidationsDLQ = "binance.liquidation.events.dlq"
+	TopicVPSMarketDLQ          = "vps.market.snapshot.dlq"
 
 	// Consumer group IDs
 	GroupSparkStreaming = "spark-streaming-group"

@@ -9,7 +9,7 @@ Scope: Toàn bộ 3 module: dataops_batch_api, data-stream-producer, dataops_bac
 
 Module cũ (SKILL.md)        Module thực tế trong repo
 --------------------------  ----------------------------------------------
-okx-stream-producer/        data-stream-producer/   — đổi tên, thư mục cũ bị xóa
+dataops-stream-producer/        data-stream-producer/   — đổi tên, thư mục cũ bị xóa
 okx-analytics-api/          dataops_backend_api/    — đổi tên
 okx-batch-ingestion/        dataops_batch_api/      — đổi tên
 okx-protobuf/               okx-protobuf/           — còn tồn tại, chưa thay đổi
@@ -212,7 +212,7 @@ B4. Avro schemas pkg/schemas/
 B5. app/server.go
     Import okx/websocket → binance/websocket (alias binanceWS)
     okxProducer → binanceProducer, NewOKXProducer → NewBinanceProducer
-    Log: [okx-stream-producer] → [data-stream-producer]
+    Log: [dataops-stream-producer] → [data-stream-producer]
     cfg.OKX → cfg.Binance
     TopicOKXTradeTicks → TopicBinanceTradeTicks
 
@@ -272,7 +272,7 @@ C5. configuration/configuration.go
 
 D1. docker-compose.yml
     Service names:
-      okx-stream-producer → data-stream-producer (context: ./data-stream-producer)
+      dataops-stream-producer → data-stream-producer (context: ./data-stream-producer)
       okx-analytics-api   → dataops-backend-api  (context: ./dataops_backend_api)
     Kafka UI: KAFKA_CLUSTERS_0_NAME: okx-vps-platform → binance-vps-platform
     MySQL: MYSQL_DATABASE: okx_analytics → binance_analytics
@@ -316,9 +316,9 @@ D2. kafka-connect-s3-sink.json
     => Dùng envelope.Stream để route → topic (không dùng JSON subscribe như OKX)
 
 7.4 Go module names chưa đổi — QUAN TRỌNG
-    data-stream-producer/go.mod:  module okx-stream-producer  (CHƯA ĐỔI)
+    data-stream-producer/go.mod:  module dataops-stream-producer  (CHƯA ĐỔI)
     dataops_backend_api/go.mod:   module okx-analytics-api    (CHƯA ĐỔI)
-    Tất cả import paths trong .go vẫn dùng "okx-stream-producer/..." và "okx-analytics-api/..."
+    Tất cả import paths trong .go vẫn dùng "dataops-stream-producer/..." và "okx-analytics-api/..."
     Đây là intentional — cần làm riêng với: go mod edit + find-replace import paths
 
 
