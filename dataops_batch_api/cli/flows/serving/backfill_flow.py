@@ -1,14 +1,14 @@
 """
-backfill_flow.py — OKX Historical Backfill Flow.
+backfill_flow.py — Binance Historical Backfill Flow.
 
-Fetch dữ liệu lịch sử OKX cho nhiều instruments song song bằng ThreadPoolExecutor.
-Dùng cursor-based pagination (OKX 'before' param) để đi ngược từ mới → cũ.
+Fetch dữ liệu lịch sử Binance cho nhiều instruments song song bằng ThreadPoolExecutor.
+Dùng cursor-based pagination (Binance 'endTime' param) để đi ngược từ mới → cũ.
 
-Design theo OKX_CRYPTO_PLATFORM_DESIGN.md Section 5 (T1):
+Design:
     - ThreadPoolExecutor(max_workers) cho I/O-bound parallel fetch
     - tqdm progress bar cho terminal visibility
     - Idempotent write: re-run an toàn nhờ partition by year/month/inst_id
-    - Retry built-in trong OKXRestClient (tenacity exponential backoff)
+    - Retry built-in trong BinanceRestClient (tenacity exponential backoff)
 """
 from __future__ import annotations
 
@@ -19,27 +19,27 @@ from typing import List, Optional
 
 from tqdm import tqdm
 
-from cli.flows.serving.metadata import get_backfill_cfg, get_okx_cfg, setup_logging
-from cli.ingestion.schema.models import OKXCandleRecord
-from cli.ingestion.sources.okx_client import OKXRestClient
+from cli.flows.serving.metadata import get_backfill_cfg, get_binance_cfg, setup_logging
+from cli.ingestion.schema.models import BinanceCandleRecord
+from cli.ingestion.sources.binance_client import BinanceRestClient
 from platforms.processing.config.delta_utils import DeltaBronzeWriter
 
-logger = logging.getLogger("backfill_flow")
+logger = logging.getLogger(__name__)
 
 
-class OKXBackfillPipeline:
+class BinanceBackfillPipeline:
     """
-    Backfill historical OKX OHLCV data cho danh sách instruments.
+    Backfill historical Binance OHLCV data cho danh sách instruments.
 
     Strategy:
-        1. Paginate OKX API bằng 'before' cursor (Unix ms) đi ngược từ end → start
-        2. Validate từng record qua OKXCandleRecord Pydantic model
+        1. Paginate Binance API bằng 'endTime' cursor (Unix ms) đi ngược từ end → start
+        2. Validate từng record qua BinanceCandleRecord Pydantic model
         3. Ghi batch vào Delta Bronze (append + partition → idempotent)
         4. ThreadPoolExecutor: parallel fetch cho nhiều instruments
         5. tqdm: dual progress bar (tổng instruments + candles per instrument)
     """
 
-    def __init__(self, client: OKXRestClient, writer: DeltaBronzeWriter):
+    def __init__(self, client: BinanceRestClient, writer: DeltaBronzeWriter):
         self.client = client
         self.writer = writer
 
@@ -82,13 +82,15 @@ class OKXBackfillPipeline:
                     )
                     break
 
-                valid: List[OKXCandleRecord] = []
+                valid: List[BinanceCandleRecord] = []
                 for row in raw:
                     ts_ms = int(row[0])
                     if ts_ms < start_ms:
                         continue
                     try:
-                        valid.append(OKXCandleRecord(
+                        # Binance klines: [openTime, open, high, low, close, volume,
+                        #   closeTime, quoteAssetVolume, ...]
+                        valid.append(BinanceCandleRecord(
                             inst_id=inst_id,
                             inst_type=inst_type,
                             ts_ms=ts_ms,
@@ -97,8 +99,8 @@ class OKXBackfillPipeline:
                             low=float(row[3]),
                             close=float(row[4]),
                             vol=float(row[5]),
-                            vol_ccy=float(row[6]) if len(row) > 6 else 0.0,
-                            confirm=int(row[8]) if len(row) > 8 else 1,
+                            vol_ccy=float(row[7]) if len(row) > 7 else 0.0,
+                            confirm=1,
                         ))
                     except Exception as e:
                         logger.warning(
@@ -108,7 +110,7 @@ class OKXBackfillPipeline:
 
                 if valid:
                     try:
-                        self.writer.write_okx_candles(valid, inst_type)
+                        self.writer.write_binance_candles(valid, inst_type)
                         total += len(valid)
                         pbar.update(len(valid))
                     except Exception as exc:
@@ -157,7 +159,7 @@ class OKXBackfillPipeline:
         start_ms = int(start_dt.timestamp() * 1000)
 
         logger.info(
-            "[backfill] Starting %s backfill: %d instruments, %d days back, bar=%s, workers=%d",
+            "[backfill] Starting Binance %s backfill: %d instruments, %d days back, bar=%s, workers=%d",
             inst_type, len(inst_ids), days_back, bar, max_workers,
         )
 
@@ -200,28 +202,30 @@ def run_backfill(
 
     Đọc defaults từ exchange_config.yaml; caller có thể override từng param.
     """
-    bf_cfg   = get_backfill_cfg()
-    okx_cfg  = get_okx_cfg()
+    bf_cfg      = get_backfill_cfg()
+    binance_cfg = get_binance_cfg()
 
+    resolved_ids: List[str]
     if inst_ids is None:
-        key      = "swap" if inst_type == "SWAP" else "spot"
-        inst_ids = okx_cfg.get("instruments", {}).get(key, ["BTC-USDT", "ETH-USDT"])
-    if days_back is None:
-        days_back = bf_cfg.get("default_days_back", 30)
-    if max_workers is None:
-        max_workers = bf_cfg.get("max_workers", 4)
+        key          = "futures" if inst_type == "FUTURES" else "spot"
+        resolved_ids = list(binance_cfg.get("instruments", {}).get(key, ["BTCUSDT", "ETHUSDT"]))
+    else:
+        resolved_ids = inst_ids
 
-    client   = OKXRestClient.from_env()
+    resolved_days: int    = days_back    if days_back    is not None else int(bf_cfg.get("default_days_back", 30))
+    resolved_workers: int = max_workers  if max_workers  is not None else int(bf_cfg.get("max_workers", 4))
+
+    client   = BinanceRestClient.from_env()
     writer   = DeltaBronzeWriter.from_env()
-    pipeline = OKXBackfillPipeline(client, writer)
+    pipeline = BinanceBackfillPipeline(client, writer)
 
     return pipeline.run(
-        inst_ids=inst_ids,
+        inst_ids=resolved_ids,
         inst_type=inst_type,
         bar=bar,
-        days_back=days_back,
-        max_workers=max_workers,
-        candles_per_req=bf_cfg.get("candles_per_request", 300),
+        days_back=resolved_days,
+        max_workers=resolved_workers,
+        candles_per_req=int(bf_cfg.get("candles_per_request", 300)),
     )
 
 

@@ -5,10 +5,10 @@ Gọi Bronze + Silver + Indicators theo thứ tự đúng cho daily pipeline run
 Đây là entrypoint cho scheduled execution (cron / Prefect / Airflow).
 
 Pipeline order:
-    1. Bronze OKX SPOT  — fetch candles mới nhất → Delta Bronze
-    2. Bronze OKX SWAP  — fetch funding/swap candles → Delta Bronze
-    3. Bronze VPS HOSE  — fetch market snapshot (trong giờ giao dịch) → Delta Bronze
-    4. Silver Streaming — PySpark jobs đã chạy riêng (silver_flow.py), không khởi tại đây
+    1. Bronze Binance SPOT    — fetch candles mới nhất → Delta Bronze
+    2. Bronze Binance FUTURES — fetch futures candles → Delta Bronze
+    3. Bronze VPS HOSE        — fetch market snapshot (trong giờ giao dịch) → Delta Bronze
+    4. Silver Streaming       — PySpark jobs đã chạy riêng (silver_flow.py), không khởi tại đây
 
 Separation of concerns:
     - daily_pipeline.py = orchestrator (gọi flows theo thứ tự, log kết quả)
@@ -22,10 +22,10 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from cli.flows.serving.bronze_flow import run_okx_bronze, run_vps_bronze
+from cli.flows.serving.bronze_flow import run_binance_bronze, run_vps_bronze
 from cli.flows.serving.metadata import setup_logging
 
-logger = logging.getLogger("daily_pipeline")
+logger = logging.getLogger(__name__)
 
 
 def run_daily_pipeline() -> dict:
@@ -41,25 +41,25 @@ def run_daily_pipeline() -> dict:
 
     results: dict = {}
 
-    # ── Step 1: Bronze OKX SPOT ───────────────────────────────────────────────
-    logger.info("[daily_pipeline] Step 1/3 — Bronze OKX SPOT")
+    # ── Step 1: Bronze Binance SPOT ───────────────────────────────────────────
+    logger.info("[daily_pipeline] Step 1/3 — Bronze Binance SPOT")
     try:
-        n = run_okx_bronze(inst_type="SPOT")
-        results["okx_spot"] = n
+        n = run_binance_bronze(inst_type="SPOT")
+        results["binance_spot"] = n
         logger.info("[daily_pipeline] Step 1 done: %d SPOT records", n)
     except Exception as e:
         logger.error("[daily_pipeline] Step 1 failed: %s", e, exc_info=True)
-        results["okx_spot"] = 0
+        results["binance_spot"] = 0
 
-    # ── Step 2: Bronze OKX SWAP ───────────────────────────────────────────────
-    logger.info("[daily_pipeline] Step 2/3 — Bronze OKX SWAP")
+    # ── Step 2: Bronze Binance FUTURES ────────────────────────────────────────
+    logger.info("[daily_pipeline] Step 2/3 — Bronze Binance FUTURES")
     try:
-        n = run_okx_bronze(inst_type="SWAP")
-        results["okx_swap"] = n
-        logger.info("[daily_pipeline] Step 2 done: %d SWAP records", n)
+        n = run_binance_bronze(inst_type="FUTURES")
+        results["binance_futures"] = n
+        logger.info("[daily_pipeline] Step 2 done: %d FUTURES records", n)
     except Exception as e:
         logger.error("[daily_pipeline] Step 2 failed: %s", e, exc_info=True)
-        results["okx_swap"] = 0
+        results["binance_futures"] = 0
 
     # ── Step 3: Bronze VPS HOSE ───────────────────────────────────────────────
     logger.info("[daily_pipeline] Step 3/3 — Bronze VPS HOSE")
@@ -74,7 +74,7 @@ def run_daily_pipeline() -> dict:
     duration = round(time.time() - start_time, 2)
     results["duration_sec"] = duration
 
-    total = results.get("okx_spot", 0) + results.get("okx_swap", 0) + results.get("vps", 0)
+    total = results.get("binance_spot", 0) + results.get("binance_futures", 0) + results.get("vps", 0)
     logger.info(
         "=== daily_pipeline complete: %d total records, duration=%.2fs ===",
         total, duration,

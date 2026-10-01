@@ -7,7 +7,7 @@ Dễ test, dễ backtest, dễ tái dùng.
 """
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Tuple, cast
 
 import numpy as np
 import pandas as pd
@@ -20,7 +20,7 @@ def compute_sma(close: pd.Series, params: SMAParams = SMAParams()) -> pd.Series:
     Simple Moving Average.
     min_periods=period để tránh partial windows tạo ra giá trị misleading.
     """
-    return close.rolling(window=params.period, min_periods=params.period).mean()
+    return cast(pd.Series, close.rolling(window=params.period, min_periods=params.period).mean())
 
 
 def compute_ema(close: pd.Series, params: EMAParams = EMAParams()) -> pd.Series:
@@ -28,7 +28,7 @@ def compute_ema(close: pd.Series, params: EMAParams = EMAParams()) -> pd.Series:
     Exponential Moving Average.
     adjust=False → dùng recursive formula (standard EMA, không phải expanding-window variant).
     """
-    return close.ewm(span=params.period, min_periods=params.period, adjust=False).mean()
+    return cast(pd.Series, close.ewm(span=params.period, min_periods=params.period, adjust=False).mean())
 
 
 def compute_rsi(close: pd.Series, params: RSIParams = RSIParams()) -> pd.Series:
@@ -37,12 +37,12 @@ def compute_rsi(close: pd.Series, params: RSIParams = RSIParams()) -> pd.Series:
     RSI = 100 - 100 / (1 + RS), RS = AvgGain / AvgLoss
     """
     delta    = close.diff()
-    gain     = delta.clip(lower=0)
-    loss     = -delta.clip(upper=0)
-    avg_gain = gain.rolling(window=params.period, min_periods=params.period).mean()
-    avg_loss = loss.rolling(window=params.period, min_periods=params.period).mean()
+    gain     = cast(pd.Series, delta.clip(lower=0))
+    loss     = cast(pd.Series, (-delta).clip(upper=0))
+    avg_gain = cast(pd.Series, gain.rolling(window=params.period, min_periods=params.period).mean())
+    avg_loss = cast(pd.Series, loss.rolling(window=params.period, min_periods=params.period).mean())
     rs       = avg_gain / avg_loss.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
+    return cast(pd.Series, 100 - (100 / (1 + rs)))
 
 
 def compute_atr(
@@ -55,12 +55,12 @@ def compute_atr(
     Average True Range (Wilder's method).
     True Range = max(High-Low, |High-PrevClose|, |Low-PrevClose|)
     """
-    prev_close = close.shift(1)
-    tr = pd.concat(
+    prev_close = cast(pd.Series, close.shift(1))
+    tr = cast(pd.Series, pd.concat(
         [high - low, (high - prev_close).abs(), (low - prev_close).abs()],
         axis=1,
-    ).max(axis=1)
-    return tr.rolling(window=params.period, min_periods=params.period).mean()
+    ).max(axis=1))
+    return cast(pd.Series, tr.rolling(window=params.period, min_periods=params.period).mean())
 
 
 def compute_bbands(
@@ -74,9 +74,9 @@ def compute_bbands(
         (middle, upper, lower) — tất cả là pd.Series với index giữ nguyên
     """
     middle = compute_sma(close, SMAParams(period=params.period))
-    std    = close.rolling(window=params.period, min_periods=params.period).std()
-    upper  = middle + params.num_std * std
-    lower  = middle - params.num_std * std
+    std    = cast(pd.Series, close.rolling(window=params.period, min_periods=params.period).std())
+    upper  = cast(pd.Series, middle + params.num_std * std)
+    lower  = cast(pd.Series, middle - params.num_std * std)
     return middle, upper, lower
 
 
@@ -93,9 +93,9 @@ def compute_macd(
         - signal     = EMA(macd_line, signal_period)
         - histogram  = macd_line - signal
     """
-    fast_ema   = compute_ema(close, EMAParams(period=params.fast_period))
-    slow_ema   = compute_ema(close, EMAParams(period=params.slow_period))
-    macd_line  = fast_ema - slow_ema
-    signal     = compute_ema(macd_line, EMAParams(period=params.signal_period))
-    histogram  = macd_line - signal
+    fast_ema  = compute_ema(close, EMAParams(period=params.fast_period))
+    slow_ema  = compute_ema(close, EMAParams(period=params.slow_period))
+    macd_line = cast(pd.Series, fast_ema - slow_ema)
+    signal    = compute_ema(macd_line, EMAParams(period=params.signal_period))
+    histogram = cast(pd.Series, macd_line - signal)
     return macd_line, signal, histogram

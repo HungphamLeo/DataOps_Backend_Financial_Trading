@@ -5,7 +5,7 @@ Ghi dữ liệu lên MinIO (S3-compatible) với partition theo symbol/date
 để đảm bảo re-run an toàn (idempotency).
 
 Design:
-    - DeltaBronzeWriter: ghi OKX candles và VPS snapshots vào Bronze layer.
+    - DeltaBronzeWriter: ghi Binance candles và VPS snapshots vào Bronze layer.
     - Storage options được inject từ config.StorageOptions.minio(), không hardcode.
     - compact_table(): giải quyết small file problem — optimize read performance.
 
@@ -23,9 +23,9 @@ import pandas as pd
 import pyarrow as pa
 from deltalake import DeltaTable, write_deltalake
 
-from cli.ingestion.schema.models import OKXCandleRecord, VPSCandleRecord
+from cli.ingestion.schema.models import BinanceCandleRecord, VPSCandleRecord
 
-logger = logging.getLogger("delta_utils")
+logger = logging.getLogger(__name__)
 
 
 class DeltaBronzeWriter:
@@ -33,18 +33,18 @@ class DeltaBronzeWriter:
     Ghi raw data vào Delta Lake Bronze layer trên MinIO.
 
     Partition strategy:
-        OKX candles: partitionBy(["year", "month", "inst_id"])
+        Binance candles: partitionBy(["year", "month", "inst_id"])
             → tối ưu query theo instrument và time range
-        VPS market:  partitionBy(["year", "month", "exchange"])
+        VPS market:      partitionBy(["year", "month", "exchange"])
             → tối ưu query theo sàn và tháng
 
     Usage:
         writer = DeltaBronzeWriter.from_env()
-        writer.write_okx_candles(records, inst_type="SPOT")
+        writer.write_binance_candles(records, inst_type="SPOT")
         writer.write_vps_snapshots(records)
     """
 
-    def __init__(self, bucket: str = "okx-datalake", storage_options: dict = None):
+    def __init__(self, bucket: str = "binance-datalake", storage_options: dict = None):
         self.bucket = bucket
         self.storage_options = storage_options or {
             "AWS_ENDPOINT_URL":           os.getenv("MINIO_ENDPOINT", "http://localhost:9000"),
@@ -59,7 +59,7 @@ class DeltaBronzeWriter:
     def from_env(cls) -> "DeltaBronzeWriter":
         """Factory method — bắt storage options từ env vars."""
         return cls(
-            bucket=os.getenv("MINIO_BUCKET", "okx-datalake"),
+            bucket=os.getenv("MINIO_BUCKET", "binance-datalake"),
         )
 
     # ── Internal helpers ──────────────────────────────────────────────────────
@@ -80,13 +80,13 @@ class DeltaBronzeWriter:
 
     # ── Write methods ─────────────────────────────────────────────────────────
 
-    def write_okx_candles(self, records: List[OKXCandleRecord], inst_type: str = "SPOT") -> int:
+    def write_binance_candles(self, records: List[BinanceCandleRecord], inst_type: str = "SPOT") -> int:
         """
-        Ghi OKX OHLCV records vào Bronze Delta table.
+        Ghi Binance OHLCV records vào Bronze Delta table.
 
         Args:
-            records: danh sách OKXCandleRecord đã qua Pydantic validation
-            inst_type: "SPOT" | "SWAP" | "FUTURES" (dùng làm suffix table name)
+            records: danh sách BinanceCandleRecord đã qua Pydantic validation
+            inst_type: "SPOT" | "FUTURES" | "PERP" (dùng làm suffix table name)
 
         Returns:
             Số records đã ghi thành công. 0 nếu records rỗng hoặc write thất bại.
@@ -95,10 +95,10 @@ class DeltaBronzeWriter:
             Exception được log ở ERROR level rồi re-raise để caller quyết định retry.
         """
         if not records:
-            logger.warning("write_okx_candles called with empty records list")
+            logger.warning("write_binance_candles called with empty records list")
             return 0
 
-        delta_path = self._delta_path(f"okx_candles_{inst_type.lower()}")
+        delta_path = self._delta_path(f"binance_candles_{inst_type.lower()}")
         try:
             df = pd.DataFrame([r.model_dump() for r in records])
             df = self._add_time_partitions(df, ts_col="ts_ms")
@@ -112,13 +112,13 @@ class DeltaBronzeWriter:
                 storage_options=self.storage_options,
             )
             logger.info(
-                "Wrote %d OKX candles (%s) to %s",
+                "Wrote %d Binance candles (%s) to %s",
                 len(records), inst_type, delta_path,
             )
             return len(records)
         except Exception as exc:
             logger.error(
-                "Failed to write OKX candles (%s) to %s: %s",
+                "Failed to write Binance candles (%s) to %s: %s",
                 inst_type, delta_path, exc,
                 exc_info=True,
             )
@@ -174,7 +174,7 @@ class DeltaBronzeWriter:
 
         Args:
             delta_path: S3 path đến Delta table, e.g.
-                "s3://okx-datalake/delta/bronze/okx_candles_spot"
+                "s3://binance-datalake/delta/bronze/binance_candles_spot"
             target_size_mb: target file size sau compact (default 128 MB, đọc từ config)
         """
         logger.info("Starting compact: %s (target=%d MB)", delta_path, target_size_mb)

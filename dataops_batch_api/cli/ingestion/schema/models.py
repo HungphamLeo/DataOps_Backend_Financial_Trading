@@ -14,13 +14,13 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 
 
-class OKXCandleRecord(BaseModel):
+class BinanceCandleRecord(BaseModel):
     """
-    Validated OHLCV record từ OKX REST API.
+    Validated OHLCV record từ Binance REST API.
 
     Fields:
-        inst_id:   Instrument ID, e.g. "BTC-USDT", "ETH-USDT-SWAP"
-        inst_type: Loại instrument — SPOT | SWAP | FUTURES
+        inst_id:   Instrument ID, e.g. "BTCUSDT", "ETHUSDT"
+        inst_type: Loại instrument — SPOT | FUTURES | PERP
         ts_ms:     Unix timestamp milliseconds (close time của candle)
         open/high/low/close: OHLC prices — phải > 0
         vol:       Volume tính theo base currency
@@ -90,7 +90,7 @@ class VPSCandleRecord(BaseModel):
 class OHLCVRecord(BaseModel):
     """
     Generic OHLCV record (normalized form) dùng cho DeltaBronzeWriter.
-    Phù hợp cho cả OKX và VPS khi đã qua normalize step.
+    Phù hợp cho cả Binance và VPS khi đã qua normalize step.
     """
     symbol:    str
     exchange:  str

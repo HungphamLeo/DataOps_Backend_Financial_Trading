@@ -6,7 +6,7 @@ silver_flow.py — Silver Transform Flow: PySpark Structured Streaming.
 
 Hai streaming jobs:
     1. VWAP Sliding Window (5m/1m slide, Watermark 30s) → Delta Silver
-    2. Funding Rate Z-Score Anomaly (|z| ≥ 2.5) → Kafka alert topic
+    2. Funding Rate Z-Score Anomaly (|z| ≥ 2.5) → Kafka alert topic (binance.alerts.funding-anomaly)
 
 Tất cả tham số (topic names, window params, thresholds, checkpoint paths)
 được đọc từ exchange_config.yaml qua metadata.py — không hardcode.
@@ -30,11 +30,11 @@ from pyspark.sql.functions import (
     window,
 )
 from pyspark.sql.types import DoubleType, LongType, StringType, StructField, StructType
-
 from cli.flows.serving.metadata import get_kafka_brokers, get_spark_streaming_cfg, setup_logging
 from platforms.processing.spark_stack.spark_session import create_spark_session
 
-logger = logging.getLogger("silver_flow")
+logger = logging.getLogger(__name__)
+
 
 # ── Avro/JSON schemas cho Kafka topics ────────────────────────────────────────
 
@@ -91,9 +91,9 @@ def run_vwap_stream(spark: SparkSession, kafka_brokers: str, cfg: dict):
     checkpoint = cfg.get("vwap", {}).get("checkpoint", "/tmp/spark_checkpoints/vwap")
     # Env var override > yaml > hardcoded fallback
     delta_path = os.getenv(
-        "DELTA_SILVER_VWAP",
-        delta_cfg.get("silver", {}).get("vwap", "s3a://okx-datalake/delta/silver/vwap"),
-    )
+            "DELTA_SILVER_VWAP",
+            delta_cfg.get("silver", {}).get("vwap", "s3a://binance-datalake/delta/silver/vwap"),
+        )
 
     raw_df = (
         spark.readStream
@@ -140,13 +140,13 @@ def run_vwap_stream(spark: SparkSession, kafka_brokers: str, cfg: dict):
             .start(delta_path)
         )
         logger.info(
-            "[silver_flow:vwap] Started — topic=%s, window=%s/%s, sink=%s",
+            "[silver_flow:binance_vwap] Started — topic=%s, window=%s/%s, sink=%s",
             topic, window_dur, slide_dur, delta_path,
         )
         return query
     except Exception as exc:
         logger.error(
-            "[silver_flow:vwap] Failed to start streaming query: %s", exc, exc_info=True,
+            "[silver_flow:binance_vwap] Failed to start streaming query: %s", exc, exc_info=True,
         )
         raise
 
@@ -240,13 +240,13 @@ def run_funding_anomaly_stream(spark: SparkSession, kafka_brokers: str, cfg: dic
             .start()
         )
         logger.info(
-            "[silver_flow:funding_anomaly] Started — z_threshold=%.2f, alert_topic=%s",
+            "[silver_flow:binance_funding_anomaly] Started — z_threshold=%.2f, alert_topic=%s",
             threshold, alert_topic,
         )
         return query
     except Exception as exc:
         logger.error(
-            "[silver_flow:funding_anomaly] Failed to start streaming query: %s",
+            "[silver_flow:binance_funding_anomaly] Failed to start streaming query: %s",
             exc, exc_info=True,
         )
         raise
@@ -260,7 +260,7 @@ if __name__ == "__main__":
     cfg           = get_spark_streaming_cfg()
     spark         = create_spark_session()
 
-    logger.info("=== OKX Silver Flow (PySpark Structured Streaming) Started ===")
+    logger.info("=== Binance Silver Flow (PySpark Structured Streaming) Started ===")
     q1 = run_vwap_stream(spark, kafka_brokers, cfg)
     q2 = run_funding_anomaly_stream(spark, kafka_brokers, cfg)
 

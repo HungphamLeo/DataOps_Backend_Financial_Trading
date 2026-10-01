@@ -3,7 +3,7 @@
 # Được đọc bởi platforms/processing/spark_stack/spark_session.py
 
 spark:
-  app_name: "OKX-Financial-Stream-Processor"
+  app_name: "Binance-Financial-Stream-Processor"
   master: "local[*]"      # override bằng env SPARK_MASTER hoặc spark://host:7077
 
   # Delta Lake extension

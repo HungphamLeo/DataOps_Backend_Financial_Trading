@@ -17,7 +17,7 @@ from typing import Dict, List
 import requests
 from tenacity import RetryCallState, retry, stop_after_attempt, wait_exponential
 
-logger = logging.getLogger("vps_client")
+logger = logging.getLogger(__name__)
 
 
 def _log_retry(retry_state: RetryCallState) -> None:

@@ -15,11 +15,11 @@ type Config struct {
 		DB_0     int
 	}
 
-	OKX struct {
+	Binance struct {
 		// WebSocket public URL — không cần API key cho market data
-		WSURL string // wss://ws.okx.com:8443/ws/v5/public
+		WSURL string // wss://stream.binance.com:9443/ws
 		// Trading pairs cần stream
-		Symbols []string // ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
+		Symbols []string // ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 	}
 
 	VPS struct {
@@ -49,9 +49,9 @@ func FromEnv() (*Config, error) {
 	cfg.Redis.Password = utils.GetEnvAsString("REDIS_PASSWORD", "")
 	cfg.Redis.DB_0, _ = utils.GetEnvAsInt("REDIS_DB_0", 0)
 
-	cfg.OKX.WSURL = utils.GetEnvAsString("OKX_WS_URL", "wss://ws.okx.com:8443/ws/v5/public")
-	// Symbols từ env: "BTC-USDT,ETH-USDT,SOL-USDT"
-	cfg.OKX.Symbols = splitCSV(utils.GetEnvAsString("OKX_SYMBOLS", "BTC-USDT,ETH-USDT,SOL-USDT"))
+	cfg.Binance.WSURL = utils.GetEnvAsString("BINANCE_WS_URL", "wss://stream.binance.com:9443/ws")
+	// Symbols từ env: "BTCUSDT,ETHUSDT,SOLUSDT"
+	cfg.Binance.Symbols = splitCSV(utils.GetEnvAsString("BINANCE_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT"))
 
 	cfg.VPS.URLLogin = utils.GetEnvAsString("VPS_URL_LOGIN", "https://soapi-partner.vps.com.vn/Api/Proxy")
 	cfg.VPS.URL = utils.GetEnvAsString("VPS_URL", "https://smartone.vps.com.vn/Api/Proxy")

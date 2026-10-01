@@ -1,8 +1,8 @@
-// symbols.go — Symbol registry và validation cho OKX và VPS Securities.
+// symbols.go — Symbol registry và validation cho Binance và VPS Securities.
 //
 // Vấn đề cần giải quyết:
 //
-//	OKX dùng format "BTC-USDT", "ETH-USDT-SWAP"
+//	Binance dùng format "BTCUSDT", "ETHUSDT" (không có dấu '-')
 //	VPS dùng format "HPG", "VCB", "VNM" (mã chứng khoán thuần, HOSE)
 //	Hai hệ thống có convention khác nhau → cần map tập trung để:
 //	  1. Validate symbol hợp lệ trước khi query InfluxDB
@@ -15,76 +15,76 @@
 //	Khi cần mở rộng sang HNX/UPCOM, thêm key mới vào hoseSymbols.
 //
 // Cách thêm symbol mới:
-//   - OKX Spot:    thêm vào okxSpotSymbols
-//   - OKX Swap:    thêm vào okxSwapSymbols
-//   - VPS/HOSE:    thêm vào hoseSymbols
+//   - Binance Spot:    thêm vào binanceSpotSymbols
+//   - Binance Futures: thêm vào binanceFuturesSymbols
+//   - VPS/HOSE:        thêm vào hoseSymbols
 //
 // Cách sử dụng:
 //
-//	if !IsValidOKXSymbol("BTC-USDT") { ... }
+//	if !IsValidBinanceSymbol("BTCUSDT") { ... }
 //	if !IsValidHOSESymbol("VCB") { ... }
-//	instruments := GetOKXSpotSymbols()
+//	instruments := GetBinanceSpotSymbols()
 package constants
 
-// ─── OKX Symbol Registry ──────────────────────────────────────────────────────
+// ─── Binance Symbol Registry ──────────────────────────────────────────────────
 
-// okxSpotSymbols là tập các OKX Spot instruments được hỗ trợ.
-// Key = instId theo chuẩn OKX (e.g. "BTC-USDT").
-var okxSpotSymbols = map[string]bool{
-	"BTC-USDT":  true,
-	"ETH-USDT":  true,
-	"SOL-USDT":  true,
-	"BNB-USDT":  true,
-	"XRP-USDT":  true,
-	"ADA-USDT":  true,
-	"DOGE-USDT": true,
-	"AVAX-USDT": true,
-	"DOT-USDT":  true,
-	"LINK-USDT": true,
+// binanceSpotSymbols là tập các Binance Spot instruments được hỗ trợ.
+// Key = symbol theo chuẩn Binance (e.g. "BTCUSDT").
+var binanceSpotSymbols = map[string]bool{
+	"BTCUSDT":  true,
+	"ETHUSDT":  true,
+	"SOLUSDT":  true,
+	"BNBUSDT":  true,
+	"XRPUSDT":  true,
+	"ADAUSDT":  true,
+	"DOGEUSDT": true,
+	"AVAXUSDT": true,
+	"DOTUSDT":  true,
+	"LINKUSDT": true,
 }
 
-// okxSwapSymbols là tập các OKX Perpetual Swap instruments.
+// binanceFuturesSymbols là tập các Binance Perpetual Futures instruments.
 // Dùng cho funding rate và liquidation queries.
-var okxSwapSymbols = map[string]bool{
-	"BTC-USDT-SWAP":  true,
-	"ETH-USDT-SWAP":  true,
-	"SOL-USDT-SWAP":  true,
-	"BNB-USDT-SWAP":  true,
-	"XRP-USDT-SWAP":  true,
-	"ADA-USDT-SWAP":  true,
-	"DOGE-USDT-SWAP": true,
+var binanceFuturesSymbols = map[string]bool{
+	"BTCUSDT":  true,
+	"ETHUSDT":  true,
+	"SOLUSDT":  true,
+	"BNBUSDT":  true,
+	"XRPUSDT":  true,
+	"ADAUSDT":  true,
+	"DOGEUSDT": true,
 }
 
-// IsValidOKXSymbol kiểm tra symbol có thuộc danh sách OKX (spot hoặc swap) không.
+// IsValidBinanceSymbol kiểm tra symbol có thuộc danh sách Binance (spot hoặc futures) không.
 // Trả về false nếu symbol không hợp lệ → handler trả 400 Bad Request.
-func IsValidOKXSymbol(symbol string) bool {
-	return okxSpotSymbols[symbol] || okxSwapSymbols[symbol]
+func IsValidBinanceSymbol(symbol string) bool {
+	return binanceSpotSymbols[symbol] || binanceFuturesSymbols[symbol]
 }
 
-// IsValidOKXSpotSymbol kiểm tra symbol có phải OKX Spot instrument không.
-func IsValidOKXSpotSymbol(symbol string) bool {
-	return okxSpotSymbols[symbol]
+// IsValidBinanceSpotSymbol kiểm tra symbol có phải Binance Spot instrument không.
+func IsValidBinanceSpotSymbol(symbol string) bool {
+	return binanceSpotSymbols[symbol]
 }
 
-// IsValidOKXSwapSymbol kiểm tra symbol có phải OKX Perpetual Swap không.
-func IsValidOKXSwapSymbol(symbol string) bool {
-	return okxSwapSymbols[symbol]
+// IsValidBinanceFuturesSymbol kiểm tra symbol có phải Binance Perpetual Futures không.
+func IsValidBinanceFuturesSymbol(symbol string) bool {
+	return binanceFuturesSymbols[symbol]
 }
 
-// GetOKXSpotSymbols trả về slice tất cả OKX Spot symbols đang được hỗ trợ.
+// GetBinanceSpotSymbols trả về slice tất cả Binance Spot symbols đang được hỗ trợ.
 // Dùng trong batch jobs, backfill pipeline, và Spark streaming subscriptions.
-func GetOKXSpotSymbols() []string {
-	symbols := make([]string, 0, len(okxSpotSymbols))
-	for s := range okxSpotSymbols {
+func GetBinanceSpotSymbols() []string {
+	symbols := make([]string, 0, len(binanceSpotSymbols))
+	for s := range binanceSpotSymbols {
 		symbols = append(symbols, s)
 	}
 	return symbols
 }
 
-// GetOKXSwapSymbols trả về slice tất cả OKX Swap symbols.
-func GetOKXSwapSymbols() []string {
-	symbols := make([]string, 0, len(okxSwapSymbols))
-	for s := range okxSwapSymbols {
+// GetBinanceFuturesSymbols trả về slice tất cả Binance Futures symbols.
+func GetBinanceFuturesSymbols() []string {
+	symbols := make([]string, 0, len(binanceFuturesSymbols))
+	for s := range binanceFuturesSymbols {
 		symbols = append(symbols, s)
 	}
 	return symbols

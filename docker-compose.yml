@@ -1,6 +1,6 @@
 version: "3.8"
 
-# OKX + VPS Platform — Full Infrastructure
+# Binance + VPS Platform — Full Infrastructure
 # Chạy: docker-compose up -d
 # Dừng: docker-compose down
 
@@ -96,7 +96,7 @@ services:
     ports:
       - "8082:8080"
     environment:
-      KAFKA_CLUSTERS_0_NAME: okx-vps-platform
+      KAFKA_CLUSTERS_0_NAME: binance-vps-platform
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka1:29092,kafka2:29092,kafka3:29092
       KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
 
@@ -122,7 +122,7 @@ services:
       - "3306:3306"
     environment:
       MYSQL_ROOT_PASSWORD: root123
-      MYSQL_DATABASE: okx_analytics
+      MYSQL_DATABASE: binance_analytics
     volumes:
       - mysql-data:/var/lib/mysql
 
@@ -146,7 +146,7 @@ services:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: admin
       DOCKER_INFLUXDB_INIT_PASSWORD: admin123456
-      DOCKER_INFLUXDB_INIT_ORG: okx-vps-platform
+      DOCKER_INFLUXDB_INIT_ORG: binance-vps-platform
       DOCKER_INFLUXDB_INIT_BUCKET: market-data
       DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: my-super-secret-auth-token
     volumes:
@@ -166,26 +166,26 @@ services:
       - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
       - ./grafana/datasources:/etc/grafana/provisioning/datasources
 
-  # ─── OKX STREAM PRODUCER (Go) ──────────────────────────────────────────────
-  okx-stream-producer:
+  # ─── BINANCE STREAM PRODUCER (Go) ──────────────────────────────────────────
+  data-stream-producer:
     build:
-      context: ./okx-stream-producer
+      context: ./data-stream-producer
       dockerfile: Dockerfile
-    container_name: okx-stream-producer
+    container_name: data-stream-producer
     depends_on: [kafka1, kafka2, kafka3, redis, schema-registry]
-    env_file: ./okx-stream-producer/.env
+    env_file: ./data-stream-producer/.env
     restart: unless-stopped
 
-  # ─── OKX ANALYTICS API (Go) ────────────────────────────────────────────────
-  okx-analytics-api:
+  # ─── BINANCE ANALYTICS API (Go) ────────────────────────────────────────────
+  dataops-backend-api:
     build:
-      context: ./okx-analytics-api
+      context: ./dataops_backend_api
       dockerfile: Dockerfile
-    container_name: okx-analytics-api
+    container_name: dataops-backend-api
     depends_on: [mysql, redis, influxdb, kafka1]
     ports:
       - "8080:8080"
-    env_file: ./okx-analytics-api/.env
+    env_file: ./dataops_backend_api/.env
     restart: unless-stopped
 
   # ─── SPARK MASTER (PySpark Streaming) ─────────────────────────────────────

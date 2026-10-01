@@ -1,22 +1,22 @@
 """
-okx_client.py — OKX REST API Client
+binance_client.py — Binance REST API Client
 
 Hỗ trợ cả Public (không cần auth) và Private (HMAC-SHA256 signed) endpoints.
 
 Authentication flow cho private endpoints:
-    1. Lấy UTC timestamp theo ISO 8601 (e.g. "2024-01-15T09:30:00.123Z")
-    2. Concatenate: timestamp + METHOD + request_path + body
-    3. HMAC-SHA256 sign với secret_key → Base64 encode
-    4. Gắn vào headers: OK-ACCESS-KEY, OK-ACCESS-SIGN, OK-ACCESS-TIMESTAMP, OK-ACCESS-PASSPHRASE
+    1. Tạo query string với timestamp (Unix ms)
+    2. HMAC-SHA256 sign toàn bộ query string với secret_key
+    3. Gắn signature vào query params: &signature=...
+    4. Gắn API key vào header: X-MBX-APIKEY
 
-Rate limits (OKX public API):
-    - /api/v5/market/history-candles: 20 req / 2s per IP
+Rate limits (Binance public API):
+    - /api/v3/klines: 1200 requests / 1 phút per IP
     - Client này enforce 100ms min interval giữa các requests (đọc từ config)
     - Retry: 5 lần với exponential backoff (1s → 2s → 4s → max 30s)
     - Tenacity retry hook log WARNING mỗi lần retry, ERROR khi hết attempt
 
 References:
-    - OKX API docs: https://www.okx.com/docs-v5/en/
+    - Binance API docs: https://binance-docs.github.io/apidocs/spot/en/
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ from tenacity import (
     wait_exponential,
 )
 
-logger = logging.getLogger("okx_client")
+logger = logging.getLogger(__name__)
 
 
 def _log_retry(retry_state: RetryCallState) -> None:
@@ -47,16 +47,16 @@ def _log_retry(retry_state: RetryCallState) -> None:
     """
     exc = retry_state.outcome.exception() if retry_state.outcome else None
     logger.warning(
-        "OKXRestClient retry attempt %d — fn=%s, error=%s",
+        "BinanceRestClient retry attempt %d — fn=%s, error=%s",
         retry_state.attempt_number,
         retry_state.fn.__name__ if retry_state.fn else "unknown",
         exc,
     )
 
 
-class OKXRestClient:
+class BinanceRestClient:
     """
-    OKX REST API client với rate limiting, retry và structured logging.
+    Binance REST API client với rate limiting, retry và structured logging.
 
     Tham số rate_limit_interval và retry được inject từ exchange_config.yaml
     thông qua caller (bronze_flow / backfill_flow), không hardcode tại đây.
@@ -69,74 +69,60 @@ class OKXRestClient:
 
     def __init__(
         self,
-        base_url: str = "https://www.okx.com/api/v5",
+        base_url: str = "https://api.binance.com/api/v3",
         api_key: str = "",
         secret_key: str = "",
-        passphrase: str = "",
-        is_simulate: bool = False,
+        is_testnet: bool = False,
         rate_limit_interval: float = 0.1,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.secret_key = secret_key
-        self.passphrase = passphrase
-        self.is_simulate = is_simulate
+        self.is_testnet = is_testnet
         self._rate_limit_interval = rate_limit_interval
         self._last_request_time: float = 0.0
 
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "okx-vps-platform/1.0",
+            "User-Agent": "binance-vps-platform/1.0",
             "Accept": "application/json",
         })
+        if self.api_key:
+            self.session.headers.update({"X-MBX-APIKEY": self.api_key})
         logger.debug(
-            "OKXRestClient initialized — base_url=%s, simulate=%s, rate_limit=%.3fs",
-            self.base_url, self.is_simulate, self._rate_limit_interval,
+            "BinanceRestClient initialized — base_url=%s, testnet=%s, rate_limit=%.3fs",
+            self.base_url, self.is_testnet, self._rate_limit_interval,
         )
 
     # ── Auth ──────────────────────────────────────────────────────────────────
 
-    def _sign(self, timestamp: str, method: str, request_path: str, body: str = "") -> str:
+    def _sign(self, query_string: str) -> str:
         """
-        Tạo chữ ký HMAC-SHA256 theo chuẩn OKX.
+        Tạo chữ ký HMAC-SHA256 theo chuẩn Binance.
 
         Args:
-            timestamp: ISO 8601 UTC, e.g. "2024-01-15T09:30:00.123Z"
-            method: HTTP method viết hoa, e.g. "GET"
-            request_path: path + query string, e.g. "/api/v5/market/history-candles?instId=BTC-USDT"
-            body: JSON body string cho POST, "" cho GET
+            query_string: toàn bộ query string (không có leading '?')
 
         Returns:
-            Base64-encoded HMAC-SHA256 signature.
+            Hex-encoded HMAC-SHA256 signature.
         """
-        message = timestamp + method.upper() + request_path + body
         mac = hmac.new(
             self.secret_key.encode("utf-8"),
-            message.encode("utf-8"),
+            query_string.encode("utf-8"),
             digestmod=hashlib.sha256,
         )
-        return base64.b64encode(mac.digest()).decode("utf-8")
+        return mac.hexdigest()
 
-    def _build_headers(self, method: str, request_path: str, body: str = "") -> Dict[str, str]:
+    def _build_signed_params(self, params: Dict[str, str]) -> Dict[str, str]:
         """
-        Build HTTP headers cho OKX request.
-        - Public (api_key rỗng): chỉ Content-Type và Accept.
-        - Private: thêm 4 OKX auth headers.
-        - Simulated trading: thêm x-simulated-trading: 1.
+        Thêm timestamp và signature vào params cho private endpoints.
+        - Public endpoints: không cần gọi hàm này.
+        - Private endpoints: phải có timestamp + signature.
         """
-        ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-        headers: Dict[str, str] = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-        if self.is_simulate:
-            headers["x-simulated-trading"] = "1"
-        if self.api_key and self.secret_key:
-            headers["OK-ACCESS-KEY"] = self.api_key
-            headers["OK-ACCESS-SIGN"] = self._sign(ts, method, request_path, body)
-            headers["OK-ACCESS-TIMESTAMP"] = ts
-            headers["OK-ACCESS-PASSPHRASE"] = self.passphrase
-        return headers
+        params["timestamp"] = str(int(time.time() * 1000))
+        query_string = "&".join(f"{k}={v}" for k, v in params.items())
+        params["signature"] = self._sign(query_string)
+        return params
 
     # ── Rate limiting ──────────────────────────────────────────────────────────
 
@@ -164,46 +150,49 @@ class OKXRestClient:
         limit: int = 300,
     ) -> List[List[Any]]:
         """
-        Lấy OHLCV candles từ /api/v5/market/history-candles.
+        Lấy OHLCV candles từ /api/v3/klines.
 
         Args:
-            inst_id: e.g. "BTC-USDT", "ETH-USDT-SWAP"
-            bar: timeframe "1m","5m","1H","1D"
-            after: Unix ms — lấy candles SAU timestamp này (cursor-based pagination)
-            before: Unix ms — lấy candles TRƯỚC timestamp này
-            limit: max 300 candles/request
+            inst_id: e.g. "BTCUSDT", "ETHUSDT"
+            bar: timeframe "1m","5m","1h","1d"
+            after:  Unix ms — startTime (lấy candles từ timestamp này trở đi)
+            before: Unix ms — endTime (lấy candles đến timestamp này)
+            limit: max 1000 candles/request (mặc định 300)
 
         Returns:
-            list of [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
+            list of [openTime, open, high, low, close, volume, closeTime,
+                     quoteAssetVolume, numTrades, takerBuyBaseVolume,
+                     takerBuyQuoteVolume, ignore]
 
         Raises:
             requests.HTTPError: HTTP 4xx/5xx — được retry tự động qua tenacity.
-            ValueError: OKX API trả về code != "0" — lỗi business logic, re-raise sau retry.
+            ValueError: Binance API trả về lỗi — re-raise sau retry.
         """
         self._throttle()
-        path = "/api/v5/market/history-candles"
-        params: Dict[str, str] = {"instId": inst_id, "bar": bar, "limit": str(limit)}
+        params: Dict[str, str] = {
+            "symbol": inst_id,
+            "interval": bar,
+            "limit": str(limit),
+        }
         if after is not None:
-            params["after"] = str(after)
+            params["startTime"] = str(after)
         if before is not None:
-            params["before"] = str(before)
+            params["endTime"] = str(before)
 
         logger.debug("get_candles — inst_id=%s, bar=%s, limit=%d", inst_id, bar, limit)
         try:
             resp = self.session.get(
-                f"{self.base_url}/market/history-candles",
+                f"{self.base_url}/klines",
                 params=params,
-                headers=self._build_headers("GET", path),
                 timeout=15,
             )
             resp.raise_for_status()
 
-            data = resp.json()
-            if data.get("code") != "0":
+            candles = resp.json()
+            if isinstance(candles, dict) and candles.get("code"):
                 raise ValueError(
-                    f"OKX API error: {data.get('msg')} (code={data.get('code')})"
+                    f"Binance API error: {candles.get('msg')} (code={candles.get('code')})"
                 )
-            candles = data.get("data", [])
             logger.debug("get_candles — %s returned %d candles", inst_id, len(candles))
             return candles
         except Exception as exc:
@@ -221,44 +210,38 @@ class OKXRestClient:
     )
     def get_instruments(self, inst_type: str = "SPOT") -> List[Dict[str, Any]]:
         """
-        Lấy danh sách tất cả instruments theo loại (SPOT | SWAP | FUTURES).
+        Lấy danh sách tất cả instruments từ /api/v3/exchangeInfo.
 
         Args:
-            inst_type: loại instrument cần lấy
+            inst_type: "SPOT" | "FUTURES" | "PERP" (dùng để filter symbols)
 
         Returns:
-            list of instrument dict từ OKX API
+            list of symbol dict từ Binance exchangeInfo
 
         Raises:
             requests.HTTPError: HTTP error — retry tự động.
-            ValueError: OKX API code != "0".
+            ValueError: Binance API error.
         """
         self._throttle()
-        path = "/api/v5/public/instruments"
         logger.debug("get_instruments — inst_type=%s", inst_type)
         try:
             resp = self.session.get(
-                f"{self.base_url}/public/instruments",
-                params={"instType": inst_type},
-                headers=self._build_headers("GET", path),
+                f"{self.base_url}/exchangeInfo",
                 timeout=15,
             )
             resp.raise_for_status()
             data = resp.json()
-            if data.get("code") != "0":
-                raise ValueError(f"OKX instruments error: {data.get('msg')}")
-            instruments = data.get("data", [])
-            logger.debug("get_instruments — %s returned %d instruments", inst_type, len(instruments))
+            instruments = data.get("symbols", [])
+            logger.debug("get_instruments — returned %d instruments", len(instruments))
             return instruments
         except Exception as exc:
             logger.error("get_instruments failed — inst_type=%s: %s", inst_type, exc)
             raise
 
     @classmethod
-    def from_env(cls) -> "OKXRestClient":
+    def from_env(cls) -> "BinanceRestClient":
         """Factory method tạo client từ biến môi trường."""
         return cls(
-            api_key=os.getenv("OKX_API_KEY", ""),
-            secret_key=os.getenv("OKX_SECRET_KEY", ""),
-            passphrase=os.getenv("OKX_PASSPHRASE", ""),
+            api_key=os.getenv("BINANCE_API_KEY", ""),
+            secret_key=os.getenv("BINANCE_SECRET_KEY", ""),
         )

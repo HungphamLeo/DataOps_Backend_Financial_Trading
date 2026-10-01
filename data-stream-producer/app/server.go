@@ -1,4 +1,3 @@
-// REUSE PATTERN: market-maker-background/app/background-tradebot/server/server.go
 // Khởi động toàn bộ hệ thống: config → redis → kafka → workers → graceful shutdown
 package app
 
@@ -9,7 +8,7 @@ import (
 	"okx-stream-producer/constants"
 	"okx-stream-producer/kafka"
 	"okx-stream-producer/pkg/configuration"
-	"okx-stream-producer/pkg/sources/okx/websocket"
+	binanceWS "okx-stream-producer/pkg/sources/binance/websocket"
 	"okx-stream-producer/pkg/sources/vps/market_data"
 	"okx-stream-producer/redis"
 	"okx-stream-producer/utils"
@@ -18,33 +17,33 @@ import (
 )
 
 func NewServer() error {
-	fmt.Printf("%s [okx-stream-producer] Starting\n", utils.GetTimeNow())
+	fmt.Printf("%s [data-stream-producer] Starting\n", utils.GetTimeNow())
 
-	// 1. Load config từ .env — REUSE: market-maker-api/configuration/configuration.go
+	// 1. Load config từ .env
 	cfg, err := configuration.FromEnv()
 	if err != nil {
 		return fmt.Errorf("[Config] %w", err)
 	}
 
-	// 2. Redis — REUSE 100%: trading-bot-api/redis/redis.go
+	// 2. Redis
 	redisDB0 := redis.NewServer(cfg, cfg.Redis.DB_0)
 	if !redisDB0.Ping() {
 		return fmt.Errorf("[Redis] connection was down")
 	}
 
-	// 3. Kafka writer — REUSE 100%: trading-bot-finance-service/kafka/writer.go
+	// 3. Kafka writer
 	kafkaWriter := kafka.GetWriter(cfg.Kafka.URL)
 	defer kafkaWriter.Close()
 
-	// 4. Context với graceful shutdown — REUSE: trading-bot-api/app/signal.go
+	// 4. Context với graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// 5. Khởi động OKX WebSocket producer (goroutine per trading pair)
-	okxProducer := websocket.NewOKXProducer(cfg, kafkaWriter, redisDB0)
+	// 5. Khởi động Binance WebSocket producer (goroutine per trading pair)
+	binanceProducer := binanceWS.NewBinanceProducer(cfg, kafkaWriter, redisDB0)
 	go func() {
-		if err := okxProducer.Start(ctx); err != nil {
-			log.Printf("[OKXProducer] error: %s", err.Error())
+		if err := binanceProducer.Start(ctx); err != nil {
+			log.Printf("[BinanceProducer] error: %s", err.Error())
 		}
 	}()
 
@@ -56,14 +55,14 @@ func NewServer() error {
 		}
 	}()
 
-	fmt.Printf("%s [okx-stream-producer] Running — topics: %v\n",
+	fmt.Printf("%s [data-stream-producer] Running — topics: %v\n",
 		utils.GetTimeNow(),
-		[]string{constants.TopicOKXTradeTicks, constants.TopicVPSMarketSnapshot},
+		[]string{constants.TopicBinanceTradeTicks, constants.TopicVPSMarketSnapshot},
 	)
 
 	// 7. Block cho đến khi Ctrl+C hoặc SIGTERM
 	<-ctx.Done()
 
-	fmt.Printf("%s [okx-stream-producer] Shutting down gracefully...\n", utils.GetTimeNow())
+	fmt.Printf("%s [data-stream-producer] Shutting down gracefully...\n", utils.GetTimeNow())
 	return nil
 }

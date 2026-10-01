@@ -1,14 +1,14 @@
 """
 prefect_main.py — Prefect ETL Pipeline Orchestration.
 
-Định nghĩa Prefect flows và schedules cho OKX batch pipeline.
+Định nghĩa Prefect flows và schedules cho Binance batch pipeline.
 Tương đương với Airflow DAGs nhưng dùng Prefect 2.x API.
 
 Flows được định nghĩa:
-    1. okx_daily_bronze_flow   — Hàng giờ, Bronze ingestion OKX SPOT + SWAP
-    2. vps_market_flow         — Mỗi 1 phút trong giờ giao dịch (9:00–14:45)
-    3. okx_silver_streaming    — Long-running PySpark jobs (chạy 1 lần, không stop)
-    4. okx_backfill_flow       — Manual trigger, không schedule tự động
+    1. binance_daily_bronze_flow — Hàng giờ, Bronze ingestion Binance SPOT + FUTURES
+    2. vps_market_flow           — Mỗi 1 phút trong giờ giao dịch (9:00–14:45)
+    3. binance_silver_streaming  — Long-running PySpark jobs (chạy 1 lần, không stop)
+    4. binance_backfill_flow     — Manual trigger, không schedule tự động
 
 Cách chạy:
     # Development
@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from cli.flows.serving.bronze_flow import run_okx_bronze, run_vps_bronze
+from cli.flows.serving.bronze_flow import run_binance_bronze, run_vps_bronze
 from cli.flows.serving.daily_pipeline import run_daily_pipeline
 from cli.flows.serving.metadata import setup_logging
 
@@ -51,16 +51,16 @@ except ImportError:
 
 # ─── Prefect Tasks ────────────────────────────────────────────────────────────
 
-@task(name="bronze-okx-spot", retries=2, retry_delay_seconds=60)
-def task_bronze_okx_spot() -> int:
-    """Task: Bronze ingestion OKX SPOT candles."""
-    return run_okx_bronze(inst_type="SPOT")
+@task(name="bronze-binance-spot", retries=2, retry_delay_seconds=60)
+def task_bronze_binance_spot() -> int:
+    """Task: Bronze ingestion Binance SPOT candles."""
+    return run_binance_bronze(inst_type="SPOT")
 
 
-@task(name="bronze-okx-swap", retries=2, retry_delay_seconds=60)
-def task_bronze_okx_swap() -> int:
-    """Task: Bronze ingestion OKX SWAP candles."""
-    return run_okx_bronze(inst_type="SWAP")
+@task(name="bronze-binance-futures", retries=2, retry_delay_seconds=60)
+def task_bronze_binance_futures() -> int:
+    """Task: Bronze ingestion Binance FUTURES candles."""
+    return run_binance_bronze(inst_type="FUTURES")
 
 
 @task(name="bronze-vps-hose", retries=3, retry_delay_seconds=30)
@@ -71,19 +71,19 @@ def task_bronze_vps() -> int:
 
 # ─── Prefect Flows ────────────────────────────────────────────────────────────
 
-@flow(name="okx-daily-bronze-flow")
+@flow(name="binance-daily-bronze-flow")
 def daily_bronze_flow() -> dict:
     """
-    Flow chạy hourly: Bronze OKX SPOT + SWAP candles.
+    Flow chạy hourly: Bronze Binance SPOT + FUTURES candles.
     Schedule: mỗi giờ (*/1 * * * *)
 
     Không bao gồm VPS (VPS có flow riêng để schedule phù hợp giờ giao dịch).
     """
     logger.info("[prefect] daily_bronze_flow started at %s", datetime.now(timezone.utc).isoformat())
-    spot_n = task_bronze_okx_spot()
-    swap_n = task_bronze_okx_swap()
-    logger.info("[prefect] daily_bronze_flow done: spot=%d, swap=%d", spot_n, swap_n)
-    return {"okx_spot": spot_n, "okx_swap": swap_n}
+    spot_n    = task_bronze_binance_spot()
+    futures_n = task_bronze_binance_futures()
+    logger.info("[prefect] daily_bronze_flow done: spot=%d, futures=%d", spot_n, futures_n)
+    return {"binance_spot": spot_n, "binance_futures": futures_n}
 
 
 @flow(name="vps-market-snapshot-flow")
@@ -116,14 +116,14 @@ class PrefectETLPipelineConfig:
     """
 
     # Cron schedules
-    SCHEDULE_HOURLY_OKX  = "0 * * * *"          # Mỗi giờ đầu giờ
-    SCHEDULE_VPS_TRADING = "*/1 9-14 * * 1-5"   # Mỗi 1 phút, giờ giao dịch, Thứ 2–6
-    SCHEDULE_EOD         = "30 15 * * 1-5"      # 15:30 hàng ngày (sau đóng cửa)
+    SCHEDULE_HOURLY_BINANCE = "0 * * * *"          # Mỗi giờ đầu giờ
+    SCHEDULE_VPS_TRADING    = "*/1 9-14 * * 1-5"   # Mỗi 1 phút, giờ giao dịch, Thứ 2–6
+    SCHEDULE_EOD            = "30 15 * * 1-5"      # 15:30 hàng ngày (sau đóng cửa)
 
     # Deployment names
-    DEPLOY_BRONZE_HOURLY = "okx-bronze-hourly-prod"
+    DEPLOY_BRONZE_HOURLY = "binance-bronze-hourly-prod"
     DEPLOY_VPS_MARKET    = "vps-market-snapshot-prod"
-    DEPLOY_FULL_DAILY    = "okx-full-daily-eod-prod"
+    DEPLOY_FULL_DAILY    = "binance-full-daily-eod-prod"
 
     # Prefect work queue
     WORK_QUEUE = "default"

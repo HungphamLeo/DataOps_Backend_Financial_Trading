@@ -1,33 +1,26 @@
 """
-logger_setup.py — Head Logger Manager cho toàn bộ dataops_batch_api.
+logger_setup.py — Centralized Logger Manager cho toàn bộ dataops_batch_api.
 
-Đây là ENTRY POINT DUY NHẤT để khởi tạo logging cho cả pipeline.
-Tất cả modules chỉ cần gọi `logging.getLogger(__name__)` sau khi
-`setup_pipeline_logging()` được gọi một lần từ entrypoint.
-
-Hierarchy logger trong pipeline:
-
-    Root (WARNING)
-    ├── dataops_batch_api.cli.flows.serving.bronze_flow     → bronze_flow  (INFO+)
-    ├── dataops_batch_api.cli.flows.serving.silver_flow     → silver_flow  (INFO+)
-    ├── dataops_batch_api.cli.flows.serving.backfill_flow   → backfill_flow (INFO+)
-    ├── dataops_batch_api.cli.flows.serving.daily_pipeline  → daily_pipeline (INFO+)
-    ├── dataops_batch_api.cli.ingestion.sources.okx_client  → okx_client   (DEBUG+)
-    ├── dataops_batch_api.cli.ingestion.sources.vps_client  → vps_client   (DEBUG+)
-    ├── dataops_batch_api.cli.ingestion.indicators.*        → indicator.*  (WARNING+)
-    ├── dataops_batch_api.platforms.processing.*            → platform.*   (INFO+)
-    ├── delta_utils                                         → delta_utils  (INFO+)
-    ├── prefect_main                                        → prefect_main (INFO+)
-    └── dataops_batch_api.config                            → config       (INFO+)
+Pattern:
+    - LoggerManager: singleton, load config từ logger_config.yaml một lần duy nhất.
+    - JsonFormatter: serialize log records thành JSON cho ELK / Loki / Grafana.
+    - get_logger(): convenience wrapper, cache logger instance theo __name__.
 
 Usage (entrypoint — gọi 1 lần duy nhất):
     from log.logger_setup import setup_pipeline_logging
     setup_pipeline_logging()
 
-Usage (mọi module khác — chỉ getLogger, KHÔNG gọi setup):
+Usage (mọi module — chỉ dùng __name__, KHÔNG hardcode tên ngắn):
     import logging
     logger = logging.getLogger(__name__)
+
     logger.info("msg — key=%s", value)
+
+Logger name = __name__ của module → Python tự route theo hierarchy trong YAML:
+    cli.flows.serving.bronze_flow   → khớp logger "cli"
+    platforms.processing.delta_utils → khớp logger "platforms.processing"
+    ...
+Thay đổi routing chỉ cần sửa logger_config.yaml, không đụng vào từng module.
 
 Rules:
     - Dùng %s formatting, KHÔNG dùng f-string trong logger calls.
@@ -36,154 +29,195 @@ Rules:
 """
 from __future__ import annotations
 
+import json
 import logging
 import logging.config
+import logging.handlers
 import sys
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 
-# ─── Root của dataops_batch_api package ───────────────────────────────────────
-_BASE_DIR = Path(__file__).parent.parent.resolve()
-_LOG_STORAGE = _BASE_DIR / "log" / "log_storage"
-_LOGGER_CONFIG_YAML = _BASE_DIR / "log" / "config" / "logger_config.yaml"
+# ─── JsonFormatter ────────────────────────────────────────────────────────────
 
-# Module-level logger — chỉ dùng trong logger_setup.py này
-_log = logging.getLogger(__name__)
-
-
-def setup_pipeline_logging(
-    config_path: Path | None = None,
-    log_storage: Path | None = None,
-) -> None:
+class JsonFormatter(logging.Formatter):
     """
-    Khởi tạo logging từ logger_config.yaml.
+    Serialize log records thành valid JSON cho log collectors (ELK / Loki / Grafana).
 
-    Gọi đúng 1 lần tại entrypoint (daily_pipeline.py, prefect_main.py, backfill_flow.py
-    khi chạy __main__, hoặc unit test conftest.py).
-
-    Sau khi gọi hàm này, mọi `logging.getLogger(name)` trên toàn bộ pipeline
-    đều được route đúng handler theo logger_config.yaml.
-
-    Args:
-        config_path: Override đường dẫn đến logger_config.yaml.
-                     Mặc định: dataops_batch_api/log/config/logger_config.yaml
-        log_storage: Override thư mục lưu log files.
-                     Mặc định: dataops_batch_api/log/log_storage/
-
-    Raises:
-        Không raise exception — fallback sang basicConfig nếu YAML có lỗi.
-        Lý do: logging không được phép làm crash entrypoint của pipeline.
+    Fields chuẩn: time, level, logger, message, module, line, process, thread.
+    Extra fields được gắn vào record qua logger.info("msg", extra={...}):
+        run_id, component, operation, table, source, target
     """
-    resolved_config   = config_path or _LOGGER_CONFIG_YAML
-    resolved_storage  = log_storage or _LOG_STORAGE
 
-    # Tạo thư mục log_storage trước khi RotatingFileHandler cố mở file
-    try:
-        resolved_storage.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        # Không thể tạo thư mục — fallback ngay, không crash
-        _bootstrap_fallback()
-        _log.warning(
-            "Cannot create log_storage dir %s: %s — using console-only logging",
-            resolved_storage, exc,
+    def format(self, record: logging.LogRecord) -> str:
+        payload: Dict[str, Any] = {
+            "time":    self.formatTime(record, self.datefmt),
+            "level":   record.levelname,
+            "logger":  record.name,
+            "message": record.getMessage(),
+            "module":  record.module,
+            "line":    record.lineno,
+            "process": record.process,
+            "thread":  record.threadName,
+        }
+        for field in ("run_id", "component", "operation", "table", "source", "target"):
+            value = getattr(record, field, None)
+            if value is not None:
+                payload[field] = value
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False)
+
+
+# ─── LoggerManager ────────────────────────────────────────────────────────────
+
+class LoggerManager:
+    """
+    Singleton quản lý toàn bộ logging configuration cho pipeline.
+
+    - Load dictConfig từ logger_config.yaml một lần duy nhất.
+    - Patch filename handlers sang absolute path (tránh phụ thuộc working dir).
+    - Cache logger instances để tránh tạo lại.
+    - Fallback sang console-only khi YAML không tồn tại hoặc bị lỗi.
+    """
+
+    _instance: Optional["LoggerManager"] = None
+    _loggers:  Dict[str, logging.Logger] = {}
+
+    def __new__(cls) -> "LoggerManager":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self) -> None:
+        if getattr(self, "_initialized", False):
+            return
+        # Resolve config path qua config.py nếu có; fallback sang sibling yaml.
+        # Import nằm trong try/except vì logger_setup.py có thể được import
+        # trước khi dataops_batch_api/ được thêm vào sys.path (ví dụ: chạy từ
+        # thư mục ngoài, test runner, hay Prefect worker).
+        # Fallback dùng Path(__file__) — luôn resolve đúng bất kể working dir.
+        try:
+            from config import Paths  # noqa: PLC0415
+            self._config_path = Paths.LOGGER_CONFIG_YAML
+            self._log_storage = Paths.LOG_STORAGE
+        except (ImportError, AttributeError):
+            _here = Path(__file__).parent
+            self._config_path = _here / "config" / "logger_config.yaml"
+            self._log_storage = _here / "log_storage"
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def configure(self) -> None:
+        """
+        Load logger_config.yaml và áp dụng dictConfig.
+
+        Gọi 1 lần tại entrypoint. Gọi nhiều lần là no-op sau lần đầu thành công.
+        Fallback sang console-only nếu YAML không khả dụng — pipeline không crash.
+        """
+        if self._initialized:
+            return
+
+        try:
+            self._log_storage.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._bootstrap_fallback()
+            logging.getLogger(__name__).warning(
+                "Cannot create log_storage dir %s: %s — console-only logging",
+                self._log_storage, exc,
+            )
+            self._initialized = True
+            return
+
+        if not self._config_path.exists():
+            self._bootstrap_fallback()
+            logging.getLogger(__name__).warning(
+                "logger_config.yaml not found at %s — console-only logging",
+                self._config_path,
+            )
+            self._initialized = True
+            return
+
+        try:
+            import yaml  # noqa: PLC0415
+            with open(self._config_path, "r", encoding="utf-8") as fh:
+                cfg: Dict[str, Any] = yaml.safe_load(fh) or {}
+            self._patch_file_handler_paths(cfg)
+            logging.config.dictConfig(cfg)
+            self._initialized = True
+            logging.getLogger(__name__).debug(
+                "Pipeline logging configured from %s", self._config_path,
+            )
+        except Exception as exc:
+            self._bootstrap_fallback()
+            logging.getLogger(__name__).warning(
+                "Failed to load logger_config.yaml: %s — console-only logging", exc,
+            )
+            self._initialized = True
+
+    def get_logger(self, name: str) -> logging.Logger:
+        """
+        Trả về logger theo name, có cache.
+
+        Args:
+            name: Thường là __name__ của module gọi vào.
+                  Ví dụ: 'cli.flows.serving.bronze_flow'
+
+        Returns:
+            logging.Logger đã được route theo hierarchy trong logger_config.yaml.
+        """
+        if not self._initialized:
+            self.configure()
+        if name not in self._loggers:
+            self._loggers[name] = logging.getLogger(name)
+        return self._loggers[name]
+
+    # ── Internal helpers ──────────────────────────────────────────────────────
+
+    def _bootstrap_fallback(self) -> None:
+        """Console-only logging tối thiểu — đảm bảo pipeline không crash."""
+        if logging.root.handlers:
+            return
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S",
+            stream=sys.stdout,
         )
-        return
 
-    # Load dictConfig từ YAML
-    if not resolved_config.exists():
-        _bootstrap_fallback()
-        _log.warning(
-            "logger_config.yaml not found at %s — using console-only logging",
-            resolved_config,
-        )
-        return
+    def _patch_file_handler_paths(self, cfg: Dict[str, Any]) -> None:
+        """
+        Thay relative filename trong RotatingFileHandler thành absolute path.
 
-    try:
-        import yaml
-        with open(resolved_config, "r", encoding="utf-8") as fh:
-            cfg = yaml.safe_load(fh) or {}
+        Tránh phụ thuộc working directory khi chạy pipeline từ các vị trí khác nhau.
+        """
+        for handler_cfg in cfg.get("handlers", {}).values():
+            if not isinstance(handler_cfg, dict):
+                continue
+            if "filename" in handler_cfg:
+                original = Path(handler_cfg["filename"])
+                if not original.is_absolute():
+                    handler_cfg["filename"] = str(self._log_storage / original.name)
 
-        # Patch filename trong RotatingFileHandler sang đường dẫn tuyệt đối
-        # (tránh phụ thuộc vào working directory khi chạy pipeline)
-        _patch_file_handler_paths(cfg, resolved_storage)
 
-        logging.config.dictConfig(cfg)
-        _log.debug(
-            "Pipeline logging configured from %s — log_storage=%s",
-            resolved_config, resolved_storage,
-        )
+# ─── Singleton instance ───────────────────────────────────────────────────────
 
-    except Exception as exc:  # pylint: disable=broad-except
-        _bootstrap_fallback()
-        _log.warning(
-            "Failed to load logger_config.yaml (%s): %s — using console-only logging",
-            resolved_config, exc,
-        )
+logger_manager = LoggerManager()
+
+
+# ─── Convenience functions (public API) ──────────────────────────────────────
+
+def setup_pipeline_logging() -> None:
+    """
+    Khởi tạo logging từ logger_config.yaml. Gọi 1 lần tại entrypoint.
+
+    Sau lần gọi này, mọi `logging.getLogger(__name__)` trên toàn pipeline
+    được route đúng handler theo hierarchy trong logger_config.yaml.
+    """
+    logger_manager.configure()
 
 
 def get_logger(name: str) -> logging.Logger:
-    """
-    Convenience wrapper: trả về logger theo name.
-
-    Dùng thay cho `logging.getLogger(name)` khi muốn gọi rõ ràng
-    rằng đây là logger của pipeline (không bắt buộc, chỉ là alias).
-
-    Args:
-        name: Tên logger — thường là __name__ của module gọi vào.
-
-    Returns:
-        logging.Logger instance đã được cấu hình bởi setup_pipeline_logging().
-    """
-    return logging.getLogger(name)
-
-
-# ─── Internal helpers ──────────────────────────────────────────────────────────
-
-def _bootstrap_fallback() -> None:
-    """
-    Cấu hình logging tối thiểu khi logger_config.yaml không khả dụng.
-
-    Chỉ ghi ra stdout, level INFO — đảm bảo pipeline vẫn chạy và
-    có đủ output để debug mà không crash vì lỗi logging setup.
-    """
-    if logging.root.handlers:
-        # Đã có handler (gọi nhiều lần hoặc đã basicConfig) — không override
-        return
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S",
-        stream=sys.stdout,
-    )
-
-
-def _patch_file_handler_paths(cfg: dict, log_storage: Path) -> None:
-    """
-    Thay thế filename trong RotatingFileHandler config thành đường dẫn tuyệt đối.
-
-    Khi logger_config.yaml khai báo:
-        filename: "log/log_storage/pipeline.log"
-    thì sẽ được patch thành:
-        filename: "/absolute/path/to/dataops_batch_api/log/log_storage/pipeline.log"
-
-    Điều này quan trọng vì working directory khi chạy pipeline có thể khác nhau
-    (chạy từ root repo vs chạy từ dataops_batch_api/).
-
-    Args:
-        cfg: dict đọc từ logger_config.yaml (sẽ bị modify in-place)
-        log_storage: đường dẫn tuyệt đối đến thư mục log_storage
-    """
-    handlers = cfg.get("handlers", {})
-    for handler_name, handler_cfg in handlers.items():
-        if "filename" in handler_cfg:
-            original = handler_cfg["filename"]
-            # Chỉ patch nếu là relative path
-            original_path = Path(original)
-            if not original_path.is_absolute():
-                # Lấy tên file cuối cùng (e.g. "pipeline.log") và ghép với log_storage
-                new_path = log_storage / original_path.name
-                handler_cfg["filename"] = str(new_path)
-                _log.debug(
-                    "Patched handler '%s' filename: %s → %s",
-                    handler_name, original, new_path,
-                )
+    """Convenience wrapper: trả về logger theo name (thường là __name__)."""
+    return logger_manager.get_logger(name)

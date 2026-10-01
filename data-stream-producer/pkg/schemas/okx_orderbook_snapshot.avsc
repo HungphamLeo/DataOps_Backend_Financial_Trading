@@ -1,19 +1,19 @@
 {
   "type": "record",
-  "name": "OKXOrderBookSnapshot",
-  "namespace": "com.okx.vps.events",
-  "doc": "Level 2 order book snapshot from OKX. Published every ~100ms on channel books5 (top 5 levels).",
+  "name": "BinanceOrderBookSnapshot",
+  "namespace": "com.binance.vps.events",
+  "doc": "Level 2 order book snapshot from Binance. Published on channel <symbol>@depth5 (top 5 levels).",
   "fields": [
     {
       "name": "instId",
       "type": "string",
-      "doc": "Instrument ID, e.g. BTC-USDT"
+      "doc": "Instrument ID, e.g. BTCUSDT"
     },
     {
       "name": "tsMs",
       "type": "long",
       "logicalType": "timestamp-millis",
-      "doc": "Orderbook snapshot timestamp from OKX"
+      "doc": "Orderbook snapshot timestamp from Binance"
     },
     {
       "name": "producedAtMs",
@@ -49,7 +49,7 @@
       "name": "checksum",
       "type": ["null", "int"],
       "default": null,
-      "doc": "OKX checksum for orderbook integrity verification (optional)"
+      "doc": "Binance last update ID for orderbook integrity verification (optional)"
     }
   ]
 }

@@ -126,17 +126,17 @@ func (p *kafkaProducer) registerSchemas() error {
 		idPtr    *int
 	}{
 		{
-			subject:  constants.TopicOKXTrades + "-value",
+			subject:  constants.TopicBinanceTrades + "-value",
 			filePath: "pkg/schemas/okx_trade_event.avsc",
 			idPtr:    &p.tradeSchemaID,
 		},
 		{
-			subject:  constants.TopicOKXOrderBook + "-value",
+			subject:  constants.TopicBinanceOrderBook + "-value",
 			filePath: "pkg/schemas/okx_orderbook_snapshot.avsc",
 			idPtr:    &p.obSchemaID,
 		},
 		{
-			subject:  constants.TopicOKXLiquidations + "-value",
+			subject:  constants.TopicBinanceLiquidations + "-value",
 			filePath: "pkg/schemas/okx_liquidation_event.avsc",
 			idPtr:    &p.liqSchemaID,
 		},
@@ -164,11 +164,11 @@ func (p *kafkaProducer) registerSchemas() error {
 func (p *kafkaProducer) PublishTrade(ctx context.Context, instID string, event TradeEvent) error {
 	payload, err := p.serializeAvro(p.tradeSchemaID, event)
 	if err != nil {
-		return p.sendToDLQ(constants.TopicOKXTradesDLQ, instID, event, err)
+		return p.sendToDLQ(constants.TopicBinanceTradesDLQ, instID, event, err)
 	}
 
 	msg := &sarama.ProducerMessage{
-		Topic: constants.TopicOKXTrades,
+		Topic: constants.TopicBinanceTrades,
 		Key:   sarama.StringEncoder(instID),  // key = instID → same partition per instrument
 		Value: sarama.ByteEncoder(payload),
 		// Timestamp cho phép Kafka brokers và consumers biết thời gian thực của message
@@ -178,7 +178,7 @@ func (p *kafkaProducer) PublishTrade(ctx context.Context, instID string, event T
 	_, _, err = p.producer.SendMessage(msg)
 	if err != nil {
 		log.Printf("[Producer] SendMessage trade %s error: %v — routing to DLQ", instID, err)
-		return p.sendToDLQ(constants.TopicOKXTradesDLQ, instID, event, err)
+		return p.sendToDLQ(constants.TopicBinanceTradesDLQ, instID, event, err)
 	}
 	return nil
 }
@@ -186,11 +186,11 @@ func (p *kafkaProducer) PublishTrade(ctx context.Context, instID string, event T
 func (p *kafkaProducer) PublishOrderBook(ctx context.Context, instID string, event OrderBookEvent) error {
 	payload, err := p.serializeAvro(p.obSchemaID, event)
 	if err != nil {
-		return p.sendToDLQ(constants.TopicOKXOrderBookDLQ, instID, event, err)
+		return p.sendToDLQ(constants.TopicBinanceOrderBookDLQ, instID, event, err)
 	}
 
 	msg := &sarama.ProducerMessage{
-		Topic:     constants.TopicOKXOrderBook,
+		Topic:     constants.TopicBinanceOrderBook,
 		Key:       sarama.StringEncoder(instID),
 		Value:     sarama.ByteEncoder(payload),
 		Timestamp: time.UnixMilli(event.TsMs),
@@ -198,7 +198,7 @@ func (p *kafkaProducer) PublishOrderBook(ctx context.Context, instID string, eve
 
 	_, _, err = p.producer.SendMessage(msg)
 	if err != nil {
-		return p.sendToDLQ(constants.TopicOKXOrderBookDLQ, instID, event, err)
+		return p.sendToDLQ(constants.TopicBinanceOrderBookDLQ, instID, event, err)
 	}
 	return nil
 }
@@ -206,11 +206,11 @@ func (p *kafkaProducer) PublishOrderBook(ctx context.Context, instID string, eve
 func (p *kafkaProducer) PublishLiquidation(ctx context.Context, instID string, event LiquidationEvent) error {
 	payload, err := p.serializeAvro(p.liqSchemaID, event)
 	if err != nil {
-		return p.sendToDLQ(constants.TopicOKXLiquidationsDLQ, instID, event, err)
+		return p.sendToDLQ(constants.TopicBinanceLiquidationsDLQ, instID, event, err)
 	}
 
 	msg := &sarama.ProducerMessage{
-		Topic:     constants.TopicOKXLiquidations,
+		Topic:     constants.TopicBinanceLiquidations,
 		Key:       sarama.StringEncoder(instID),
 		Value:     sarama.ByteEncoder(payload),
 		Timestamp: time.UnixMilli(event.TsMs),
@@ -218,7 +218,7 @@ func (p *kafkaProducer) PublishLiquidation(ctx context.Context, instID string, e
 
 	_, _, err = p.producer.SendMessage(msg)
 	if err != nil {
-		return p.sendToDLQ(constants.TopicOKXLiquidationsDLQ, instID, event, err)
+		return p.sendToDLQ(constants.TopicBinanceLiquidationsDLQ, instID, event, err)
 	}
 	return nil
 }

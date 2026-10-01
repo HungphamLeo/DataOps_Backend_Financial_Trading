@@ -1,13 +1,13 @@
 {
   "type": "record",
-  "name": "OKXLiquidationEvent",
-  "namespace": "com.okx.vps.events",
-  "doc": "Forced liquidation event from OKX. Occurs when a position's margin falls below maintenance margin. High liquidation volume = high market stress signal.",
+  "name": "BinanceLiquidationEvent",
+  "namespace": "com.binance.vps.events",
+  "doc": "Forced liquidation event from Binance. Occurs when a position's margin falls below maintenance margin. High liquidation volume = high market stress signal.",
   "fields": [
     {
       "name": "instId",
       "type": "string",
-      "doc": "Instrument ID, e.g. BTC-USDT-SWAP"
+      "doc": "Instrument ID, e.g. BTCUSDT (FUTURES)"
     },
     {
       "name": "instType",
@@ -43,7 +43,7 @@
       "name": "tsMs",
       "type": "long",
       "logicalType": "timestamp-millis",
-      "doc": "Liquidation timestamp from OKX"
+      "doc": "Liquidation timestamp from Binance"
     },
     {
       "name": "producedAtMs",

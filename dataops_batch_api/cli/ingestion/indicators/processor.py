@@ -14,8 +14,12 @@ import pandas as pd
 from .calculator import compute_atr, compute_bbands, compute_ema, compute_macd, compute_rsi, compute_sma
 from .params import IndicatorConfig
 
-
 logger = logging.getLogger(__name__)
+
+
+def _col(df: pd.DataFrame, name: str) -> pd.Series:
+    """Extract một cột từ DataFrame thành pd.Series (giúp type checker hiểu đúng kiểu)."""
+    return df[name]  # type: ignore[return-value]
 
 
 class IndicatorProcessor:
@@ -60,24 +64,26 @@ class IndicatorProcessor:
             df = df.sort_values("timestamp").copy()
 
             # SMA & EMA
-            df["sma"] = compute_sma(df["close"], self.config.sma)
-            df["ema"] = compute_ema(df["close"], self.config.ema)
+            df["sma"] = compute_sma(_col(df, "close"), self.config.sma)
+            df["ema"] = compute_ema(_col(df, "close"), self.config.ema)
 
             # RSI
-            df["rsi"] = compute_rsi(df["close"], self.config.rsi)
+            df["rsi"] = compute_rsi(_col(df, "close"), self.config.rsi)
 
             # ATR — cần high + low
             if "high" in df.columns and "low" in df.columns:
-                df["atr"] = compute_atr(df["high"], df["low"], df["close"], self.config.atr)
+                df["atr"] = compute_atr(
+                    _col(df, "high"), _col(df, "low"), _col(df, "close"), self.config.atr,
+                )
 
             # Bollinger Bands
-            bb_mid, bb_upper, bb_lower = compute_bbands(df["close"], self.config.bbands)
+            bb_mid, bb_upper, bb_lower = compute_bbands(_col(df, "close"), self.config.bbands)
             df["bb_middle"] = bb_mid
             df["bb_upper"]  = bb_upper
             df["bb_lower"]  = bb_lower
 
             # MACD
-            macd_line, macd_signal, macd_hist = compute_macd(df["close"], self.config.macd)
+            macd_line, macd_signal, macd_hist = compute_macd(_col(df, "close"), self.config.macd)
             df["macd"]        = macd_line
             df["macd_signal"] = macd_signal
             df["macd_hist"]   = macd_hist

@@ -36,20 +36,22 @@ class Paths:
     """Tập trung tất cả đường dẫn runtime của pipeline."""
 
     # ── Config files ──────────────────────────────────────────────────────────
-    OKX_CONFIG_YAML    = CONFIG_DIR / "exchange_config.yaml"
-    STACK_CONFIG_YAML  = BASE_DIR / "platforms" / "config" / "stack.yaml"
-    LOGGER_CONFIG_YAML = BASE_DIR / "log" / "config" / "logger_config.yaml"
+    BINANCE_CONFIG_YAML = CONFIG_DIR / "exchange_config.yaml"
+    STACK_CONFIG_YAML   = BASE_DIR / "platforms" / "config" / "stack.yaml"
+    LOGGER_CONFIG_YAML  = BASE_DIR / "log" / "config" / "logger_config.yaml"
+    # Backward-compat alias — remove khi toàn bộ caller đã migrate
+    OKX_CONFIG_YAML     = CONFIG_DIR / "exchange_config.yaml"
 
     # ── Log storage ───────────────────────────────────────────────────────────
     LOG_STORAGE = LOG_DIR
 
     # ── Delta Lake paths (MinIO S3) ───────────────────────────────────────────
-    MINIO_BUCKET = os.getenv("MINIO_BUCKET", "okx-datalake")
+    MINIO_BUCKET = os.getenv("MINIO_BUCKET", "binance-datalake")
 
     @classmethod
-    def delta_bronze_okx(cls, inst_type: str = "SPOT") -> str:
-        """s3://okx-datalake/delta/bronze/okx_candles_spot"""
-        return f"s3://{cls.MINIO_BUCKET}/delta/bronze/okx_candles_{inst_type.lower()}"
+    def delta_bronze_binance(cls, inst_type: str = "SPOT") -> str:
+        """s3://binance-datalake/delta/bronze/binance_candles_spot"""
+        return f"s3://{cls.MINIO_BUCKET}/delta/bronze/binance_candles_{inst_type.lower()}"
 
     @classmethod
     def delta_bronze_vps(cls) -> str:
@@ -114,7 +116,7 @@ class _YAMLLoader:
 
     def pipeline_config(self) -> dict:
         """Đọc exchange_config.yaml — pipeline params, instruments, topics, paths."""
-        return self._load(Paths.OKX_CONFIG_YAML)
+        return self._load(Paths.BINANCE_CONFIG_YAML)
 
     def stack_config(self) -> dict:
         """Đọc stack.yaml — Spark + MinIO platform config."""

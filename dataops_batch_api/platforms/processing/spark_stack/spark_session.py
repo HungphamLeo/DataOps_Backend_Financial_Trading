@@ -1,5 +1,5 @@
 """
-spark_session.py — SparkSession Factory cho OKX Financial Stream Processor.
+spark_session.py — SparkSession Factory cho Binance Financial Stream Processor.
 
 Tách biệt việc khởi tạo SparkSession khỏi business logic.
 Đọc cấu hình từ platforms/config/stack.yaml qua config.loader.stack_config().
@@ -53,7 +53,7 @@ def create_spark_session(app_name: str = None) -> SparkSession:
         )
         stack = {}
 
-    _app_name    = app_name or stack.get("spark", {}).get("app_name", "OKX-Financial-Stream-Processor")
+    _app_name    = app_name or stack.get("spark", {}).get("app_name", "Binance-Financial-Stream-Processor")
     _master      = os.getenv("SPARK_MASTER", stack.get("spark", {}).get("master", "local[*]"))
     _minio_url   = os.getenv("MINIO_ENDPOINT", stack.get("minio", {}).get("endpoint", "http://localhost:9000"))
     _minio_key   = os.getenv("MINIO_ACCESS_KEY", stack.get("minio", {}).get("access_key", "minioadmin"))

@@ -1,8 +1,8 @@
 """
-bronze_flow.py — Bronze Ingestion Flow: OKX/VPS REST → Delta Lake Bronze.
+bronze_flow.py — Bronze Ingestion Flow: Binance/VPS REST → Delta Lake Bronze.
 
 Đây là Stage 1 (T1) trong pipeline:
-    OKX REST API → Pydantic Validate → Delta Lake Bronze (MinIO)
+    Binance REST API → Pydantic Validate → Delta Lake Bronze (MinIO)
     VPS REST API → Pydantic Validate → Delta Lake Bronze (MinIO)
 
 Medallion Architecture:
@@ -11,7 +11,7 @@ Medallion Architecture:
 
 Idempotency:
     - partitionBy(year, month, inst_id) → re-run an toàn, không tạo duplicate.
-    - OKX rate limit: 20 req/2s — enforce qua OKXRestClient._throttle().
+    - Binance rate limit: 1200 req/min — enforce qua BinanceRestClient._throttle().
 
 12-Factor alignment:
     - Factor III: mọi config đọc qua metadata.get_*_cfg(), không hardcode.
@@ -23,64 +23,70 @@ import logging
 import time
 from typing import List, Optional
 
-from cli.flows.serving.metadata import get_okx_cfg, get_vps_cfg, setup_logging
-from cli.ingestion.schema.models import OKXCandleRecord, VPSCandleRecord
-from cli.ingestion.sources.okx_client import OKXRestClient
+from cli.flows.serving.metadata import get_binance_cfg, get_vps_cfg, setup_logging
+from cli.ingestion.schema.models import BinanceCandleRecord, VPSCandleRecord
+from cli.ingestion.sources.binance_client import BinanceRestClient
 from cli.ingestion.sources.vps_client import VPSRestClient
 from platforms.processing.config.delta_utils import DeltaBronzeWriter
 
-logger = logging.getLogger("bronze_flow")
+logger = logging.getLogger(__name__)
 
 
-# ─── OKX Bronze Ingestion ─────────────────────────────────────────────────────
+# ─── Binance Bronze Ingestion ─────────────────────────────────────────────────
 
-def run_okx_bronze(
+def run_binance_bronze(
     inst_ids: Optional[List[str]] = None,
     inst_type: str = "SPOT",
     bar: str = "1m",
     limit: int = 300,
 ) -> int:
     """
-    Fetch OKX candles và ghi vào Delta Bronze.
+    Fetch Binance candles và ghi vào Delta Bronze.
 
     Dùng cho incremental daily run (lấy ~300 candles gần nhất).
     Backfill lịch sử dùng backfill_flow.py.
 
     Args:
         inst_ids:  Danh sách instrument IDs. None → đọc từ exchange_config.yaml.
-        inst_type: "SPOT" | "SWAP" | "FUTURES"
+        inst_type: "SPOT" | "FUTURES" | "PERP"
         bar:       Timeframe, mặc định "1m"
-        limit:     Số candles tối đa mỗi instrument (max 300)
+        limit:     Số candles tối đa mỗi instrument (max 1000)
 
     Returns:
         Tổng số records đã ghi thành công.
     """
-    okx_cfg = get_okx_cfg()
-    if inst_ids is None:
-        key     = "swap" if inst_type == "SWAP" else "spot"
-        inst_ids = okx_cfg.get("instruments", {}).get(key, ["BTC-USDT", "ETH-USDT"])
+    binance_cfg = get_binance_cfg()
 
-    client  = OKXRestClient.from_env()
+    resolved_ids: List[str]
+    if inst_ids is None:
+        key          = "futures" if inst_type == "FUTURES" else "spot"
+        resolved_ids = list(binance_cfg.get("instruments", {}).get(key, ["BTCUSDT", "ETHUSDT"]))
+    else:
+        resolved_ids = inst_ids
+
+    client  = BinanceRestClient.from_env()
     writer  = DeltaBronzeWriter.from_env()
     total   = 0
 
     logger.info(
-        "[bronze_flow:okx] Starting %s ingestion — %d instruments, bar=%s",
-        inst_type, len(inst_ids), bar,
+        "[bronze_flow:binance] Starting %s ingestion — %d instruments, bar=%s",
+        inst_type, len(resolved_ids), bar,
     )
 
-    for inst_id in inst_ids:
+    for inst_id in resolved_ids:
         try:
             raw = client.get_candles(inst_id=inst_id, bar=bar, limit=limit)
             if not raw:
-                logger.warning("[bronze_flow:okx] No data returned for %s", inst_id)
+                logger.warning("[bronze_flow:binance] No data returned for %s", inst_id)
                 continue
 
-            records: List[OKXCandleRecord] = []
+            records: List[BinanceCandleRecord] = []
             for row in raw:
                 try:
-                    # OKX format: [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
-                    records.append(OKXCandleRecord(
+                    # Binance klines format: [openTime, open, high, low, close, volume,
+                    #   closeTime, quoteAssetVolume, numTrades, takerBuyBaseVol,
+                    #   takerBuyQuoteVol, ignore]
+                    records.append(BinanceCandleRecord(
                         inst_id=inst_id,
                         inst_type=inst_type,
                         ts_ms=int(row[0]),
@@ -89,27 +95,27 @@ def run_okx_bronze(
                         low=float(row[3]),
                         close=float(row[4]),
                         vol=float(row[5]),
-                        vol_ccy=float(row[6]) if len(row) > 6 else 0.0,
-                        confirm=int(row[8]) if len(row) > 8 else 1,
+                        vol_ccy=float(row[7]) if len(row) > 7 else 0.0,
+                        confirm=1,
                     ))
                 except Exception as e:
-                    logger.warning("[bronze_flow:okx] Validation failed %s: %s", inst_id, e)
+                    logger.warning("[bronze_flow:binance] Validation failed %s: %s", inst_id, e)
 
             if records:
-                n = writer.write_okx_candles(records, inst_type)
+                n = writer.write_binance_candles(records, inst_type)
                 total += n
-                logger.info("[bronze_flow:okx] %s: wrote %d records", inst_id, n)
+                logger.info("[bronze_flow:binance] %s: wrote %d records", inst_id, n)
 
         except Exception as e:
-            logger.error("[bronze_flow:okx] Error fetching %s: %s", inst_id, e, exc_info=True)
+            logger.error("[bronze_flow:binance] Error fetching %s: %s", inst_id, e, exc_info=True)
 
-    logger.info("[bronze_flow:okx] Done — total %d records written", total)
+    logger.info("[bronze_flow:binance] Done — total %d records written", total)
     return total
 
 
 # ─── VPS Bronze Ingestion ──────────────────────────────────────────────────────
 
-def run_vps_bronze(exchange: str = None) -> int:
+def run_vps_bronze(exchange: Optional[str] = None) -> int:
     """
     Fetch VPS market snapshots và ghi vào Delta Bronze.
 
@@ -150,7 +156,7 @@ def run_vps_bronze(exchange: str = None) -> int:
         return 0
 
     # ── Lấy market data ───────────────────────────────────────────────────────
-    batch_size = vps_cfg.get("symbols_per_batch", 200)
+    batch_size = int(vps_cfg.get("symbols_per_batch", 200))
     try:
         raw_data = client.get_market_data(symbols, batch_size=batch_size)
     except Exception as exc:
@@ -195,6 +201,6 @@ def run_vps_bronze(exchange: str = None) -> int:
 
 if __name__ == "__main__":
     setup_logging()
-    run_okx_bronze(inst_type="SPOT")
-    run_okx_bronze(inst_type="SWAP")
+    run_binance_bronze(inst_type="SPOT")
+    run_binance_bronze(inst_type="FUTURES")
     run_vps_bronze()   # exchange đọc từ exchange_config.yaml

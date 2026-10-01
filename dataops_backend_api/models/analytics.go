@@ -1,10 +1,10 @@
 // Models cho Crypto và VN Stocks analytics data
 package models
 
-// ─── Crypto (OKX) ─────────────────────────────────────────────
+// ─── Crypto (Binance) ─────────────────────────────────────────────
 
-// OKXTradeTick là 1 trade tick từ OKX WebSocket
-type OKXTradeTick struct {
+// BinanceTradeTick là 1 trade tick từ Binance WebSocket
+type BinanceTradeTick struct {
 	InstID    string  `json:"instId"`
 	TradeID   string  `json:"tradeId"`
 	Price     float64 `json:"px,string"`
@@ -13,16 +13,16 @@ type OKXTradeTick struct {
 	Timestamp int64   `json:"ts,string"`
 }
 
-// OKXOrderBook5 là top 5 bid/ask levels
-type OKXOrderBook5 struct {
+// BinanceOrderBook5 là top 5 bid/ask levels
+type BinanceOrderBook5 struct {
 	InstID    string      `json:"instId"`
 	Bids      [][4]string `json:"bids"` // [price, qty, _, numOrders]
 	Asks      [][4]string `json:"asks"`
 	Timestamp int64       `json:"ts,string"`
 }
 
-// OKXFundingRate là funding rate của perpetual swap
-type OKXFundingRate struct {
+// BinanceFundingRate là funding rate của perpetual futures
+type BinanceFundingRate struct {
 	InstID          string  `json:"instId"`
 	FundingRate     float64 `json:"fundingRate,string"`
 	NextFundingRate float64 `json:"nextFundingRate,string"`
@@ -55,7 +55,7 @@ type VPSMarketSnapshot struct {
 	Timestamp  int64   `json:"ts"`
 }
 
-// OHLCV là candle data — dùng chung cho cả OKX và VPS
+// OHLCV là candle data — dùng chung cho cả Binance và VPS
 type OHLCV struct {
 	Symbol    string  `json:"symbol"`
 	Interval  string  `json:"interval"`
@@ -71,7 +71,7 @@ type OHLCV struct {
 type Alert struct {
 	Type      string  `json:"type"`   // "funding_anomaly" | "unusual_volume"
 	Symbol    string  `json:"symbol"`
-	Source    string  `json:"source"` // "okx" | "vps"
+	Source    string  `json:"source"` // "binance" | "vps"
 	Value     float64 `json:"value"`
 	ZScore    float64 `json:"z_score"`
 	Timestamp int64   `json:"ts"`

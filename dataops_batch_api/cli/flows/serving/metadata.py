@@ -5,13 +5,12 @@ Cung cấp các helper function đọc và trả về config sections từ excha
 Flows (bronze, silver, backfill) gọi vào đây — không đọc YAML trực tiếp.
 
 Usage:
-    from cli.flows.serving.metadata import get_okx_cfg, get_spark_cfg, setup_logging
-    okx = get_okx_cfg()
-    symbols = okx["instruments"]["spot"]
+    from cli.flows.serving.metadata import get_binance_cfg, get_spark_cfg, setup_logging
+    binance = get_binance_cfg()
+    symbols = binance["instruments"]["spot"]
 """
 from __future__ import annotations
 
-import logging
 import os
 from pathlib import Path
 from typing import Any, Dict
@@ -21,12 +20,10 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from config import loader
 
-logger = logging.getLogger(__name__)
 
-
-def get_okx_cfg() -> Dict[str, Any]:
-    """Trả về toàn bộ section 'okx' từ exchange_config.yaml."""
-    return loader.pipeline_config().get("okx", {})
+def get_binance_cfg() -> Dict[str, Any]:
+    """Trả về toàn bộ section 'binance' từ exchange_config.yaml."""
+    return loader.pipeline_config().get("binance", {})
 
 
 def get_vps_cfg() -> Dict[str, Any]:

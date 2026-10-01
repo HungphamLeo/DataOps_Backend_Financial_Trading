@@ -36,7 +36,7 @@ type Config struct {
 func FromEnv() (*Config, error) {
 	cfg := &Config{}
 
-	cfg.MySQL.DNS = utils.GetEnvAsString("MYSQL_DNS", "root:123456@tcp(localhost:3306)/okx_analytics?parseTime=true")
+	cfg.MySQL.DNS = utils.GetEnvAsString("MYSQL_DNS", "root:123456@tcp(localhost:3306)/binance_analytics?parseTime=true")
 
 	cfg.Redis.Address = utils.GetEnvAsString("REDIS_ADDRESS", "localhost:6379")
 	cfg.Redis.Password = utils.GetEnvAsString("REDIS_PASSWORD", "")
@@ -44,7 +44,7 @@ func FromEnv() (*Config, error) {
 
 	cfg.InfluxDB.URL = utils.GetEnvAsString("INFLUXDB_URL", "http://localhost:8086")
 	cfg.InfluxDB.Token = utils.GetEnvAsString("INFLUXDB_TOKEN", "")
-	cfg.InfluxDB.Org = utils.GetEnvAsString("INFLUXDB_ORG", "okx-vps-platform")
+	cfg.InfluxDB.Org = utils.GetEnvAsString("INFLUXDB_ORG", "binance-vps-platform")
 	cfg.InfluxDB.Bucket = utils.GetEnvAsString("INFLUXDB_BUCKET", "market-data")
 
 	cfg.Web.URL = utils.GetEnvAsString("WEB_URL", "http://localhost:3000")

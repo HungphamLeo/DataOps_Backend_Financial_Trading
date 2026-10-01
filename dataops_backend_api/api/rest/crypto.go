@@ -1,4 +1,4 @@
-// crypto.go — Gin HTTP handlers cho OKX crypto analytics endpoints.
+// crypto.go — Gin HTTP handlers cho Binance crypto analytics endpoints.
 //
 // Mỗi handler trong file này làm đúng 3 việc:
 //  1. Parse và validate query parameters (symbol, interval, from, to)
@@ -7,8 +7,6 @@
 //
 // Tất cả magic numbers (time ranges, defaults) được lấy từ constants/defaults.go.
 // Symbol validation dùng constants/symbols.go — không hardcode string trong handler.
-//
-// REUSE pattern: market-maker-api/api/authentication.go
 package rest
 
 import (
@@ -21,7 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// CryptoHandler xử lý các OKX analytics endpoints.
+// CryptoHandler xử lý các Binance analytics endpoints.
 // Tất cả routes đều yêu cầu JWT (đăng ký trong protected group).
 //
 // Dependencies được inject qua field AnalyticsSvc — dễ mock trong unit tests.
@@ -50,14 +48,14 @@ func (h *CryptoHandler) Register(r *gin.RouterGroup) {
 //
 // Query params:
 //
-//	symbol   (required) — OKX instId, e.g. "BTC-USDT". Phải có trong constants.okxSpotSymbols.
+//	symbol   (required) — Binance symbol, e.g. "BTCUSDT". Phải có trong constants.binanceSpotSymbols.
 //	interval (optional) — timeframe, mặc định constants.DefaultCryptoVWAPInterval ("5m")
 //	from     (optional) — Unix timestamp (giây). Mặc định: now - constants.DefaultVWAPLookback
 //	to       (optional) — Unix timestamp (giây). Mặc định: now
 //
 // Response 200:
 //
-//	{ "symbol":"BTC-USDT", "interval":"5m", "from":..., "to":..., "data":[{"ts","vwap","volume"}] }
+//	{ "symbol":"BTCUSDT", "interval":"5m", "from":..., "to":..., "data":[{"ts","vwap","volume"}] }
 //
 // GET /api/v1/crypto/vwap
 func (h *CryptoHandler) GetVWAP(ctx *gin.Context) {
@@ -67,11 +65,11 @@ func (h *CryptoHandler) GetVWAP(ctx *gin.Context) {
 		return
 	}
 	// Validate symbol hợp lệ — tránh inject tuỳ ý vào Flux query
-	if !constants.IsValidOKXSymbol(symbol) {
+	if !constants.IsValidBinanceSymbol(symbol) {
 		ctx.JSON(http.StatusBadRequest, gin.H{
-			"error":            "unsupported symbol",
-			"supported_spot":   constants.GetOKXSpotSymbols(),
-			"supported_swap":   constants.GetOKXSwapSymbols(),
+			"error":              "unsupported symbol",
+			"supported_spot":     constants.GetBinanceSpotSymbols(),
+			"supported_futures":  constants.GetBinanceFuturesSymbols(),
 		})
 		return
 	}
@@ -95,11 +93,11 @@ func (h *CryptoHandler) GetVWAP(ctx *gin.Context) {
 	})
 }
 
-// GetOHLCV trả về OHLCV candles cho 1 OKX instrument.
+// GetOHLCV trả về OHLCV candles cho 1 Binance instrument.
 //
 // Query params:
 //
-//	symbol   (required) — OKX instId, e.g. "BTC-USDT"
+//	symbol   (required) — Binance symbol, e.g. "BTCUSDT"
 //	interval (optional) — timeframe, mặc định constants.DefaultCryptoOHLCVInterval ("1h")
 //	from     (optional) — Unix timestamp (giây). Mặc định: now - constants.DefaultOHLCVLookback (7 ngày)
 //	to       (optional) — Unix timestamp (giây). Mặc định: now
@@ -115,7 +113,7 @@ func (h *CryptoHandler) GetOHLCV(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "symbol is required"})
 		return
 	}
-	if !constants.IsValidOKXSymbol(symbol) {
+	if !constants.IsValidBinanceSymbol(symbol) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "unsupported symbol"})
 		return
 	}
@@ -137,15 +135,15 @@ func (h *CryptoHandler) GetOHLCV(ctx *gin.Context) {
 }
 
 // GetOrderBook trả về real-time order book snapshot (top 5 bid/ask levels).
-// Data được đọc từ Redis cache — được cập nhật bởi okx-stream-producer mỗi tick.
+// Data được đọc từ Redis cache — được cập nhật bởi data-stream-producer mỗi tick.
 //
 // Query params:
 //
-//	symbol (required) — OKX instId, e.g. "BTC-USDT"
+//	symbol (required) — Binance symbol, e.g. "BTCUSDT"
 //
 // Response 200:
 //
-//	{ "instId":"BTC-USDT", "bids":[[price,qty]],"asks":[[price,qty]],"ts":... }
+//	{ "instId":"BTCUSDT", "bids":[[price,qty]],"asks":[[price,qty]],"ts":... }
 //
 // GET /api/v1/crypto/orderbook
 func (h *CryptoHandler) GetOrderBook(ctx *gin.Context) {
@@ -154,7 +152,7 @@ func (h *CryptoHandler) GetOrderBook(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "symbol is required"})
 		return
 	}
-	if !constants.IsValidOKXSymbol(symbol) {
+	if !constants.IsValidBinanceSymbol(symbol) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "unsupported symbol"})
 		return
 	}
@@ -167,18 +165,18 @@ func (h *CryptoHandler) GetOrderBook(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, data)
 }
 
-// GetFundingRate trả về lịch sử funding rate của OKX Perpetual Swap.
-// Funding rate được thu bởi okx-stream-producer từ channel "funding-rate" của OKX WS.
+// GetFundingRate trả về lịch sử funding rate của Binance Perpetual Futures.
+// Funding rate được thu bởi data-stream-producer từ Binance WS funding rate stream.
 //
 // Query params:
 //
-//	symbol (required) — OKX Swap instId, e.g. "BTC-USDT-SWAP"
+//	symbol (required) — Binance Futures symbol, e.g. "BTCUSDT"
 //	from   (optional) — Unix timestamp (giây). Mặc định: now - 30 ngày
 //	to     (optional) — Unix timestamp (giây). Mặc định: now
 //
 // Response 200:
 //
-//	{ "symbol":"BTC-USDT-SWAP", "data":[{"ts","funding_rate","next_funding_rate"}] }
+//	{ "symbol":"BTCUSDT", "data":[{"ts","funding_rate","next_funding_rate"}] }
 //
 // GET /api/v1/crypto/funding
 func (h *CryptoHandler) GetFundingRate(ctx *gin.Context) {
@@ -187,11 +185,11 @@ func (h *CryptoHandler) GetFundingRate(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "symbol is required"})
 		return
 	}
-	// Funding rate chỉ có cho Perpetual Swap — validate riêng
-	if !constants.IsValidOKXSwapSymbol(symbol) {
+	// Funding rate chỉ có cho Perpetual Futures — validate riêng
+	if !constants.IsValidBinanceFuturesSymbol(symbol) {
 		ctx.JSON(http.StatusBadRequest, gin.H{
-			"error":   "symbol must be a perpetual swap (e.g. BTC-USDT-SWAP)",
-			"example": "BTC-USDT-SWAP",
+			"error":   "symbol must be a perpetual futures (e.g. BTCUSDT)",
+			"example": "BTCUSDT",
 		})
 		return
 	}
@@ -213,7 +211,7 @@ func (h *CryptoHandler) GetFundingRate(ctx *gin.Context) {
 //
 // Query params:
 //
-//	symbol (required) — OKX instId (spot hoặc swap)
+//	symbol (required) — Binance symbol (spot hoặc futures)
 //	from   (optional) — Unix timestamp (giây). Mặc định: now - 7 ngày
 //	to     (optional) — Unix timestamp (giây). Mặc định: now
 //
@@ -228,7 +226,7 @@ func (h *CryptoHandler) GetLiquidations(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "symbol is required"})
 		return
 	}
-	if !constants.IsValidOKXSymbol(symbol) {
+	if !constants.IsValidBinanceSymbol(symbol) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "unsupported symbol"})
 		return
 	}

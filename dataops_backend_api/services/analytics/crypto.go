@@ -1,5 +1,6 @@
 // CryptoService interface + implementation
 // Query VWAP, OHLCV, OrderBook từ InfluxDB (real-time) và Delta Lake (historical)
+// Source: Binance data via data-stream-producer → Kafka → InfluxDB
 package analytics
 
 import (
@@ -16,8 +17,8 @@ import (
 type CryptoService interface {
 	GetVWAP(ctx context.Context, symbol, interval string, from, to int64) ([]*models.VWAPPoint, error)
 	GetOHLCV(ctx context.Context, symbol, interval string, from, to int64) ([]*models.OHLCV, error)
-	GetOrderBook(ctx context.Context, symbol string) (*models.OKXOrderBook5, error)
-	GetFundingRate(ctx context.Context, symbol string, from, to int64) ([]*models.OKXFundingRate, error)
+	GetOrderBook(ctx context.Context, symbol string) (*models.BinanceOrderBook5, error)
+	GetFundingRate(ctx context.Context, symbol string, from, to int64) ([]*models.BinanceFundingRate, error)
 	GetLiquidations(ctx context.Context, symbol string, from, to int64) ([]map[string]interface{}, error)
 }
 
@@ -116,13 +117,13 @@ func (s *cryptoService) GetOHLCV(ctx context.Context, symbol, interval string, f
 }
 
 // GetOrderBook — placeholder, real-time data từ Redis cache
-func (s *cryptoService) GetOrderBook(_ context.Context, symbol string) (*models.OKXOrderBook5, error) {
-	// TODO: đọc từ Redis cache key "okx_{symbol}_books5"
-	return &models.OKXOrderBook5{InstID: symbol}, nil
+func (s *cryptoService) GetOrderBook(_ context.Context, symbol string) (*models.BinanceOrderBook5, error) {
+	// TODO: đọc từ Redis cache key "binance_{symbol}_depth5"
+	return &models.BinanceOrderBook5{InstID: symbol}, nil
 }
 
 // GetFundingRate query funding rate từ InfluxDB
-func (s *cryptoService) GetFundingRate(ctx context.Context, symbol string, from, to int64) ([]*models.OKXFundingRate, error) {
+func (s *cryptoService) GetFundingRate(ctx context.Context, symbol string, from, to int64) ([]*models.BinanceFundingRate, error) {
 	queryAPI := s.client.QueryAPI(s.cfg.InfluxDB.Org)
 
 	fluxQuery := fmt.Sprintf(`
@@ -139,10 +140,10 @@ func (s *cryptoService) GetFundingRate(ctx context.Context, symbol string, from,
 	}
 	defer result.Close()
 
-	var rates []*models.OKXFundingRate
+	var rates []*models.BinanceFundingRate
 	for result.Next() {
 		r := result.Record()
-		rate := &models.OKXFundingRate{
+		rate := &models.BinanceFundingRate{
 			InstID:      symbol,
 			FundingTime: r.Time().Unix(),
 		}
