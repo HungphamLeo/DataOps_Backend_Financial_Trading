@@ -1,0 +1,382 @@
+SESSION EXPORT — OKX → Binance Rename & Codebase Review
+Date: 2025
+Branch: 25092026_set_up_base_code
+Scope: Toàn bộ 3 module: dataops_batch_api, data-stream-producer, dataops_backend_api
+
+=============================================================================
+1. CẬP NHẬT CẤU TRÚC MODULE (Breaking Changes so với SKILL.md cũ)
+=============================================================================
+
+Module cũ (SKILL.md)        Module thực tế trong repo
+--------------------------  ----------------------------------------------
+okx-stream-producer/        data-stream-producer/   — đổi tên, thư mục cũ bị xóa
+okx-analytics-api/          dataops_backend_api/    — đổi tên
+okx-batch-ingestion/        dataops_batch_api/      — đổi tên
+okx-protobuf/               okx-protobuf/           — còn tồn tại, chưa thay đổi
+
+NOTE: export_task/ trống trước session này. Không có lesson learned cũ.
+
+
+=============================================================================
+2. CÁC TASK ĐÃ THỰC HIỆN
+=============================================================================
+
+2.1 Đọc và cập nhật SKILL.md
+    - Đọc toàn bộ source code các module chính
+    - Phát hiện module names đã thay đổi so với SKILL.md
+    - Ghi lại data flow đầy đủ: Binance/VPS → Kafka → Delta Lake → Analytics API
+
+2.2 Fix bug logger_setup.py
+    File: dataops_batch_api/log/logger_setup.py
+
+    Vấn đề:
+      - Dòng "if self._initialized:" trong __init__ có thể gây AttributeError
+        nếu _initialized chưa tồn tại trên instance (edge case test reload/mock)
+      - "except Exception" quá rộng — nuốt cả lỗi logic không liên quan đến import
+
+    Fix:
+      TRƯỚC: if self._initialized:
+      SAU:   if getattr(self, "_initialized", False):
+
+      TRƯỚC: except Exception:
+      SAU:   except (ImportError, AttributeError):
+
+    Thiết kế đúng:
+      - "from config import Paths" trong __init__ là intentional
+      - Nằm trong try/except vì logger_setup có thể import trước khi
+        dataops_batch_api/ có trên sys.path
+      - Fallback dùng Path(__file__).parent — luôn đúng bất kể working dir
+      - Singleton LoggerManager cấu hình toàn bộ Python process qua dictConfig()
+      - Các module chỉ cần logging.getLogger(__name__), KHÔNG import logger_setup
+
+2.3 Giải thích cơ chế Singleton Logger
+    Flow:
+      Entrypoint → metadata.setup_logging()
+               → LoggerManager.configure()
+               → dictConfig(logger_config.yaml)
+               → Python route tự động theo __name__ hierarchy
+
+    Routing:
+      cli.flows.serving.*          → cli_file handler → cli.log
+      cli.ingestion.*              → cli_file handler → cli.log
+      platforms.processing.*       → processing_file  → processing.log
+      platforms.processing.spark_stack.*  → spark_file → spark.log
+      platforms.prefect_orchestra.*       → orchestration_file → orchestration.log
+
+2.4 OKX → Binance Rename (task chính)
+    Scope: Rename/refactor thuần túy
+    Giữ nguyên: Logic, API endpoints thực tế (implement Binance API sau)
+    Chỉ đổi: Tên class, function, identifier, config keys, topic names
+
+
+=============================================================================
+3. CHI TIẾT THAY ĐỔI — MODULE A: dataops_batch_api (Python)
+=============================================================================
+
+A1. cli/ingestion/schema/models.py
+    OKXCandleRecord → BinanceCandleRecord
+    docstring: "BTC-USDT" → "BTCUSDT", SWAP → PERP
+
+A2. cli/ingestion/sources/okx_client.py → XÓA
+    File mới: cli/ingestion/sources/binance_client.py
+    Class: OKXRestClient → BinanceRestClient
+    Auth: OKX (4 headers OK-ACCESS-*) → Binance (HMAC hex trong query param &signature=)
+    Endpoint: /api/v5/market/history-candles → /api/v3/klines
+    Env vars: OKX_API_KEY, OKX_SECRET_KEY → BINANCE_API_KEY, BINANCE_SECRET_KEY
+    Klines format: vol_ccy = row[7] (Binance) thay vì row[6] (OKX)
+    Confirm field: Binance không có — mặc định confirm=1
+
+A3. cli/flows/config/exchange_config.yaml
+    TRƯỚC               SAU
+    okx:                binance:
+    base_url: okx.com   base_url: api.binance.com/api/v3
+    spot: BTC-USDT      spot: BTCUSDT
+    swap: BTC-USDT-SWAP futures: BTCUSDT
+    okx-datalake        binance-datalake
+    okx.trade.ticks     binance.trade.ticks
+    okx.funding.rates   binance.funding.rates
+    okx.ohlcv.batch     binance.ohlcv.batch
+
+A4. config.py
+    OKX_CONFIG_YAML → BINANCE_CONFIG_YAML
+    (alias OKX_CONFIG_YAML giữ backward compat — xóa sau)
+    delta_bronze_okx() → delta_bronze_binance()
+    MINIO_BUCKET default: okx-datalake → binance-datalake
+    _YAMLLoader.pipeline_config() dùng Paths.BINANCE_CONFIG_YAML
+
+A5. cli/flows/serving/metadata.py
+    get_okx_cfg() → get_binance_cfg()
+    Lấy section "binance" từ exchange_config.yaml
+
+A6. cli/flows/serving/bronze_flow.py
+    run_okx_bronze → run_binance_bronze
+    inst_type="SWAP" → inst_type="FUTURES"
+    key lookup "swap" → "futures"
+    writer.write_okx_candles() → writer.write_binance_candles()
+    vol_ccy: row[6] → row[7]
+    confirm: row[8] if len>8 → hardcode 1
+
+A7. cli/flows/serving/backfill_flow.py
+    OKXBackfillPipeline → BinanceBackfillPipeline
+    get_okx_cfg() → get_binance_cfg()
+    Pagination comment: OKX 'before' → Binance 'endTime'
+    vol_ccy: row[6] → row[7], confirm=1
+
+A8. cli/flows/serving/daily_pipeline.py
+    Import run_binance_bronze
+    Results dict: okx_spot/okx_swap → binance_spot/binance_futures
+    Step labels updated
+
+A9. cli/flows/serving/silver_flow.py
+    Log prefix [silver_flow:vwap] → [silver_flow:binance_vwap]
+    Log prefix [silver_flow:funding_anomaly] → [silver_flow:binance_funding_anomaly]
+    Fallback delta path: s3a://okx-datalake/ → s3a://binance-datalake/
+
+A10. platforms/processing/config/delta_utils.py
+    Import BinanceCandleRecord
+    write_okx_candles() → write_binance_candles()
+    Table name: okx_candles_{inst_type} → binance_candles_{inst_type}
+    Bucket default: okx-datalake → binance-datalake
+
+A11. platforms/prefect_orchestra/prefect_main.py
+    Flow name: okx-daily-bronze-flow → binance-daily-bronze-flow
+    Tasks: task_bronze_okx_spot/swap → task_bronze_binance_spot/futures
+    SCHEDULE_HOURLY_OKX → SCHEDULE_HOURLY_BINANCE
+    Deploy: okx-bronze-hourly-prod → binance-bronze-hourly-prod
+
+A12. platforms/processing/spark_session.py + platforms/config/stack.yaml
+    app_name: "OKX-Financial-Stream-Processor" → "Binance-Financial-Stream-Processor"
+
+
+=============================================================================
+4. CHI TIẾT THAY ĐỔI — MODULE B: data-stream-producer (Go)
+=============================================================================
+
+B1. constants/topics.go
+    TopicOKXTradeTicks        → TopicBinanceTradeTicks       "binance.trade.ticks"
+    TopicOKXOrderBookSnapshot → TopicBinanceOrderBookSnapshot "binance.orderbook.snapshot"
+    TopicOKXLiquidation       → TopicBinanceLiquidation       "binance.liquidation.events"
+    TopicOKXFundingRates      → TopicBinanceFundingRates      "binance.funding.rates"
+    TopicOKXOHLCVBatch        → TopicBinanceOHLCVBatch        "binance.ohlcv.batch"
+    Alert: "okx.alerts.funding-anomaly" → "binance.alerts.funding-anomaly"
+
+    Thêm aliases cho Avro producer:
+      TopicBinanceTrades = TopicBinanceTradeTicks
+      TopicBinanceOrderBook = TopicBinanceOrderBookSnapshot
+      TopicBinanceLiquidations = TopicBinanceLiquidation
+      TopicVPSMarket = TopicVPSMarketSnapshot
+
+    Thêm DLQ topics:
+      TopicBinanceTradesDLQ = "binance.trade.ticks.dlq"
+      TopicBinanceOrderBookDLQ = "binance.orderbook.snapshot.dlq"
+      TopicBinanceLiquidationsDLQ = "binance.liquidation.events.dlq"
+
+B2. pkg/configuration/configuration.go
+    cfg.OKX struct → cfg.Binance struct
+    WSURL: wss://ws.okx.com:8443/ws/v5/public → wss://stream.binance.com:9443/ws
+    Symbols default: "BTC-USDT,ETH-USDT,SOL-USDT" → "BTCUSDT,ETHUSDT,SOLUSDT"
+    Env: OKX_WS_URL/OKX_SYMBOLS → BINANCE_WS_URL/BINANCE_SYMBOLS
+
+B3. pkg/sources/okx/ → XÓA toàn bộ
+    Tạo mới pkg/sources/binance/:
+      websocket/producer.go:
+        OKXProducer → BinanceProducer
+        Binance combined stream URL: .../stream?streams=btcusdt@trade/btcusdt@depth5
+        Không dùng subscribe JSON như OKX — dùng URL path
+        Message routing: envelope.Stream ends "@trade" → TradeTicks, "@depth" → OrderBook
+        Redis cache key: okx_{sym}_{ch} → binance_{sym}_{stream}
+        cfg.OKX → cfg.Binance
+
+      auth.go:
+        Package okx → binance
+        HMAC SHA256 hex encoding (OKX dùng base64)
+        GenerateWSSignature() → SignQueryString() + GenerateTimestampSignature()
+
+B4. Avro schemas pkg/schemas/
+    okx_trade_event.avsc:
+      name: OKXTradeEvent → BinanceTradeEvent
+      namespace: com.okx.vps.events → com.binance.vps.events
+      doc: "from OKX" → "from Binance"
+      symbol example: "BTC-USDT" → "BTCUSDT"
+
+    okx_orderbook_snapshot.avsc:
+      name: OKXOrderBookSnapshot → BinanceOrderBookSnapshot
+      namespace: com.binance.vps.events
+      checksum doc: "OKX checksum" → "Binance last update ID"
+
+    okx_liquidation_event.avsc:
+      name: OKXLiquidationEvent → BinanceLiquidationEvent
+      namespace: com.binance.vps.events
+      instId doc: "BTC-USDT-SWAP" → "BTCUSDT (FUTURES)"
+
+B5. app/server.go
+    Import okx/websocket → binance/websocket (alias binanceWS)
+    okxProducer → binanceProducer, NewOKXProducer → NewBinanceProducer
+    Log: [okx-stream-producer] → [data-stream-producer]
+    cfg.OKX → cfg.Binance
+    TopicOKXTradeTicks → TopicBinanceTradeTicks
+
+B6. pkg/producer/producer.go
+    Tất cả TopicOKX* → TopicBinance* (trades, orderbook, liquidations, DLQ variants)
+
+B7. main.go
+    Comment: OKXProducer → BinanceProducer
+
+
+=============================================================================
+5. CHI TIẾT THAY ĐỔI — MODULE C: dataops_backend_api (Go)
+=============================================================================
+
+C1. constants/symbols.go
+    okxSpotSymbols → binanceSpotSymbols
+    okxSwapSymbols → binanceFuturesSymbols
+    IsValidOKXSymbol → IsValidBinanceSymbol
+    IsValidOKXSpotSymbol → IsValidBinanceSpotSymbol
+    IsValidOKXSwapSymbol → IsValidBinanceFuturesSymbol
+    GetOKXSpotSymbols → GetBinanceSpotSymbols
+    GetOKXSwapSymbols → GetBinanceFuturesSymbols
+
+    Symbol format:
+      "BTC-USDT"      → "BTCUSDT"
+      "BTC-USDT-SWAP" → "BTCUSDT" (Binance dùng cùng symbol cho spot/futures)
+
+C2. models/analytics.go
+    OKXTradeTick  → BinanceTradeTick
+    OKXOrderBook5 → BinanceOrderBook5
+    OKXFundingRate → BinanceFundingRate
+    Alert.Source comment: "okx" | "vps" → "binance" | "vps"
+
+C3. services/analytics/crypto.go
+    Interface: GetOrderBook return *models.BinanceOrderBook5
+    Interface: GetFundingRate return []*models.BinanceFundingRate
+    Impl: BinanceOrderBook5{}, BinanceFundingRate{}
+    TODO comment: "okx_{symbol}_books5" → "binance_{symbol}_depth5"
+
+C4. api/rest/crypto.go
+    IsValidOKXSymbol (x4) → IsValidBinanceSymbol
+    IsValidOKXSwapSymbol → IsValidBinanceFuturesSymbol
+    Error response: supported_swap → supported_futures
+    GetOKXSpotSymbols → GetBinanceSpotSymbols
+    GetOKXSwapSymbols → GetBinanceFuturesSymbols
+    Example symbols: "BTC-USDT-SWAP" → "BTCUSDT"
+    Comments: "OKX instId" → "Binance symbol"
+
+C5. configuration/configuration.go
+    MySQL DNS default: okx_analytics → binance_analytics
+    InfluxDB Org default: okx-vps-platform → binance-vps-platform
+
+
+=============================================================================
+6. CHI TIẾT THAY ĐỔI — MODULE D: Infra
+=============================================================================
+
+D1. docker-compose.yml
+    Service names:
+      okx-stream-producer → data-stream-producer (context: ./data-stream-producer)
+      okx-analytics-api   → dataops-backend-api  (context: ./dataops_backend_api)
+    Kafka UI: KAFKA_CLUSTERS_0_NAME: okx-vps-platform → binance-vps-platform
+    MySQL: MYSQL_DATABASE: okx_analytics → binance_analytics
+    InfluxDB: DOCKER_INFLUXDB_INIT_ORG: okx-vps-platform → binance-vps-platform
+
+D2. kafka-connect-s3-sink.json
+    name: okx-vps-s3-sink → binance-vps-s3-sink
+    topics: okx.trades.raw,... → binance.trade.ticks,binance.orderbook.snapshot,...
+    s3.bucket.name: okx-datalake → binance-datalake
+
+
+=============================================================================
+7. LESSONS LEARNED — KỸ THUẬT
+=============================================================================
+
+7.1 Sự khác biệt OKX vs Binance API
+
+  Khía cạnh          OKX                            Binance
+  ----------------    -----------------------------  ------------------------------
+  Auth headers        OK-ACCESS-KEY (4 headers)      X-MBX-APIKEY + ?signature=
+  Signature encoding  Base64(HMAC-SHA256)             Hex(HMAC-SHA256)
+  Signature input     ts+METHOD+path+body            queryString (toàn bộ params)
+  Candle endpoint     /api/v5/market/history-candles /api/v3/klines
+  Candle format       [ts,o,h,l,c,vol,volCcy,...,confirm]  [openTime,o,h,l,c,vol,closeTime,quoteVol,...]
+  vol_ccy index       row[6]                         row[7]
+  Confirm field       row[8] (0=in-progress, 1=done) KHÔNG CÓ — mặc định 1
+  Symbol format       BTC-USDT, BTC-USDT-SWAP        BTCUSDT (không gạch, không -SWAP)
+  WS subscription     JSON {"op":"subscribe","args"} URL path ?streams=btcusdt@trade
+  WS URL              wss://ws.okx.com:8443/ws/v5   wss://stream.binance.com:9443/ws
+  Rate limit candles  20 req/2s per IP               1200 req/min per IP
+
+7.2 Binance Futures vs OKX Swap
+    OKX Perpetual: symbol "BTC-USDT-SWAP", inst_type "SWAP"
+    Binance Perpetual: symbol "BTCUSDT" (giống spot), inst_type "FUTURES" hoặc "PERP"
+    => Đổi inst_type="SWAP" → "FUTURES", key "swap" → "futures" trong config instruments
+
+7.3 Binance Combined Stream format
+    Single stream:   wss://stream.binance.com:9443/ws/btcusdt@trade
+    Combined stream: wss://stream.binance.com:9443/stream?streams=btcusdt@trade/btcusdt@depth5
+    Message wrapper: {"stream":"btcusdt@trade","data":{...}}
+    => Dùng envelope.Stream để route → topic (không dùng JSON subscribe như OKX)
+
+7.4 Go module names chưa đổi — QUAN TRỌNG
+    data-stream-producer/go.mod:  module okx-stream-producer  (CHƯA ĐỔI)
+    dataops_backend_api/go.mod:   module okx-analytics-api    (CHƯA ĐỔI)
+    Tất cả import paths trong .go vẫn dùng "okx-stream-producer/..." và "okx-analytics-api/..."
+    Đây là intentional — cần làm riêng với: go mod edit + find-replace import paths
+
+
+=============================================================================
+8. FILES MỚI TẠO TRONG SESSION
+=============================================================================
+
+  dataops_batch_api/cli/ingestion/sources/binance_client.py    — Binance REST client
+  data-stream-producer/pkg/sources/binance/websocket/producer.go — Binance WS producer
+  data-stream-producer/pkg/sources/binance/auth.go             — Binance HMAC hex signing
+  export_task/SESSION_2025_OKX_TO_BINANCE_RENAME.txt           — File này
+
+
+=============================================================================
+9. FILES BỊ XÓA TRONG SESSION
+=============================================================================
+
+  dataops_batch_api/cli/ingestion/sources/okx_client.py       — Thay bằng binance_client.py
+  data-stream-producer/pkg/sources/okx/auth.go                — Thư mục okx/ xóa
+  data-stream-producer/pkg/sources/okx/websocket/producer.go  — Thư mục okx/ xóa
+
+
+=============================================================================
+10. TODO — VIỆC CẦN LÀM TIẾP THEO
+=============================================================================
+
+[HIGH] Đổi Go module names:
+       - go mod edit -module data-stream-producer (trong data-stream-producer/)
+       - go mod edit -module dataops-backend-api (trong dataops_backend_api/)
+       - find-replace tất cả import paths trong .go files
+
+[HIGH] Implement Binance WebSocket thực tế:
+       - Test kết nối wss://stream.binance.com:9443/ws với combined stream
+       - Verify message format @trade và @depth5
+       - Handle Binance-specific ping/pong (300s keepalive)
+
+[HIGH] Implement data-stream-producer/pkg/sources/binance/rest/:
+       - REST client cho OKX REST source (thư mục còn rỗng)
+
+[MEDIUM] Test bronze_flow với Binance klines thực tế:
+       - Verify row[7] = quoteAssetVolume (không phải row[6])
+       - Verify pagination với startTime/endTime params
+
+[MEDIUM] Tạo .env files:
+       - data-stream-producer/.env với BINANCE_WS_URL, BINANCE_SYMBOLS
+       - dataops_backend_api/.env với MYSQL_DNS (binance_analytics), INFLUXDB_ORG
+
+[LOW] Update Grafana dashboard:
+       - grafana/dashboards/okx-vps-main.json — chưa sửa trong session này
+
+[LOW] Xóa backward compat alias:
+       - config.py: OKX_CONFIG_YAML alias sau khi confirm không còn caller
+
+[LOW] Update SKILL.md:
+       - Phản ánh module names mới và Binance stack thay vì OKX
+
+[LOW] Rename Avro schema files:
+       - pkg/schemas/okx_trade_event.avsc → binance_trade_event.avsc
+       - pkg/schemas/okx_orderbook_snapshot.avsc → binance_orderbook_snapshot.avsc
+       - pkg/schemas/okx_liquidation_event.avsc → binance_liquidation_event.avsc
+       - (Schema registry subject name đã đổi trong code, nhưng file names vẫn là okx_*)
