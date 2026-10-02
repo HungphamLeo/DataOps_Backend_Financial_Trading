@@ -16,9 +16,7 @@ const (
 
 	// VPS topics — giữ lại cho backward compatibility với consumer cũ
 	// DEPRECATED: dùng TopicTCBS* cho ingestion mới
-	TopicVPSMarketSnapshot = "vps.market.snapshot"
-	TopicVPSMarket         = TopicVPSMarketSnapshot // alias cho producer.go
-	TopicVPSOrderMatched   = "vps.order.matched"
+
 
 	// TCBS topics — thay thế VPS cho streaming ingestion
 	TopicTCBSMarketSnapshot  = "tcbs.market.snapshot"  // tickerCommons full snapshot
@@ -40,7 +38,6 @@ const (
 	TopicBinanceTradesDLQ       = "binance.trade.ticks.dlq"
 	TopicBinanceOrderBookDLQ    = "binance.orderbook.snapshot.dlq"
 	TopicBinanceLiquidationsDLQ = "binance.liquidation.events.dlq"
-	TopicVPSMarketDLQ           = "vps.market.snapshot.dlq"
 	TopicTCBSMarketDLQ          = "tcbs.market.snapshot.dlq"
 	TopicTCBSBSADLQ             = "tcbs.bsa.events.dlq"
 	TopicTCBSIntradayDLQ        = "tcbs.intraday.ticks.dlq"

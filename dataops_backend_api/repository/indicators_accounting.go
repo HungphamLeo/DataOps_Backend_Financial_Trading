@@ -12,6 +12,8 @@ package repository
 import (
 	"fmt"
 	"dataops-backend-api/models"
+
+	"gorm.io/gorm"
 )
 
 // ─── IndicatorGroup CRUD ──────────────────────────────────────────────────────

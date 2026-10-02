@@ -22,8 +22,11 @@ type User struct {
 type UserSession struct {
 	gorm.Model
 	Session  string              `json:"session"`
-	UserId   uint                `json:"user_id"`
+	UserID   string              `json:"user_id"`
+	UserId   uint                `json:"id"`
 	Username string              `json:"username"`
-	RoleId   constants.AUTH_ROLE `json:"role_id"`
+	RoleID   uint                `json:"role_id"`
+	RoleId   constants.AUTH_ROLE `json:"auth_role"`
+	Status   string              `json:"status"`
 	Active   uint8               `gorm:"default:1" json:"active"`
 }

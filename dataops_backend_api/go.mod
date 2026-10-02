@@ -1,6 +1,6 @@
 module dataops-backend-api
 
-go 1.25
+go 1.27
 
 require (
 	github.com/gin-gonic/gin v1.9.1

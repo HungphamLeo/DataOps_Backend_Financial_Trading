@@ -1,3 +1,5 @@
+//go:build ignore
+
 // REUSE: NEW — Delta Lake query via DuckDB (no Spark overhead for API queries)
 // LEARN: Delta Lake là storage layer trên top của Parquet files + transaction log
 //

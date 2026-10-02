@@ -35,11 +35,11 @@ type Service interface {
 }
 
 type accountingService struct {
-	repo   repository.Repository
+	repo   *repository.Gorm
 	logger *logging.Logger
 }
 
-func NewService(repo repository.Repository, logger *logging.Logger) Service {
+func NewService(repo *repository.Gorm, logger *logging.Logger) Service {
 	return &accountingService{repo: repo, logger: logger}
 }
 

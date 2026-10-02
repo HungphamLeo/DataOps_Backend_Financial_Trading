@@ -1,10 +1,11 @@
 # ─── Stage 1: Build dependencies ─────────────────────────────────────────────
 FROM python:3.11-slim AS builder
 
-# Java 17 cần thiết cho PySpark
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    openjdk-17-jre-headless \
+    default-jre-headless \
     curl \
+    gcc \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -12,18 +13,21 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 
-# ─── Stage 2: Runtime image ───────────────────────────────────────────────────
+# ─── Stage 2: Runtime image (Production & Non-Root) ───────────────────────────
 FROM python:3.11-slim AS runtime
 
 LABEL maintainer="DataOps Team"
-LABEL description="OKX Batch Ingestion Pipeline — Python 3.11 + Java 17 + PySpark 3.5"
+LABEL description="DataOps Batch Lakehouse Pipeline — Python 3.11 + PySpark 3.5"
 
-# Java 17 runtime (cần cho PySpark JVM)
+# Java runtime (cần cho PySpark JVM) & curl cho healthcheck
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    openjdk-17-jre-headless \
-    && rm -rf /var/lib/apt/lists/*
+    default-jre-headless \
+    curl \
+    procps \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r appgroup && useradd -r -g appgroup -d /app appuser
 
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV JAVA_HOME=/usr/lib/jvm/default-java
 ENV PATH="$JAVA_HOME/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -33,11 +37,11 @@ COPY --from=builder /install /usr/local
 
 WORKDIR /app
 
-# Copy toàn bộ project
+# Copy toàn bộ project và cấp quyền cho appuser
 COPY . .
+RUN mkdir -p log/log_storage && chown -R appuser:appgroup /app
 
-# Tạo log storage directory
-RUN mkdir -p log/log_storage
+USER appuser
 
 # Default command: chạy daily pipeline
 CMD ["python", "cli/flows/serving/daily_pipeline.py"]

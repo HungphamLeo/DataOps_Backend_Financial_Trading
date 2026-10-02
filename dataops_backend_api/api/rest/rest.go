@@ -44,11 +44,11 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 
 	// Protected routes (cần JWT)
 	protected := api.Group("")
-	protected.Use(middlewares.JwtAuthMiddleware(cfg, redisDB0))
+	protected.Use(middlewares.JwtAuthMiddleware(cfg.Authentication.Secret, redisDB0))
 
 	// Admin routes
 	admin := api.Group("/admin")
-	admin.Use(middlewares.Admin(cfg, redisDB0))
+	admin.Use(middlewares.JwtAuthMiddleware(cfg.Authentication.Secret, redisDB0), middlewares.AdminMiddleware())
 
 	// ─── Handlers ────────────────────────────────────────────────
 

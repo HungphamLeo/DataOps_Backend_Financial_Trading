@@ -1,83 +1,158 @@
 syntax = "proto3";
 
-// LEARN: Protobuf cho VN Stock Market service
-//        Separate proto file vì:
-//        1. VPS data có domain concepts riêng (VN exchanges, price bands, sessions)
-//        2. Loose coupling — analytics service và vnstock service deploy độc lập
-//        3. Team khác nhau có thể own từng proto
+// Protobuf schema cho Vietnam Stock Market & TCBS iFlash Open API
+// Reference: docs/openapi-v1.0.0.json, dataops_backend_api/models/analytics.go, constants/tcbs.go
 
 package vnstock.v1;
 
-option go_package = "okx-protobuf/vnstock";
+option go_package = "dataops-protobuf/vnstock;vnstockv1";
 
-// VNStockService phục vụ dữ liệu thị trường chứng khoán Việt Nam
+import "google/protobuf/timestamp.proto";
+
+// ─── VNStock / TCBS Service ──────────────────────────────────────────────────
+
 service VNStockService {
+  // Tartarus & Market endpoints
   rpc GetMarketSnapshot(SnapshotRequest) returns (SnapshotResponse);
+  rpc GetOrderBook(OrderBookRequest) returns (OrderBookResponse);
   rpc GetOHLCV(VNOHLCVRequest) returns (VNOHLCVResponse);
   rpc GetTopMovers(TopMoversRequest) returns (TopMoversResponse);
   rpc GetMarketSummary(MarketSummaryRequest) returns (MarketSummaryResponse);
+  rpc GetPutThroughSnaps(PutThroughRequest) returns (PutThroughResponse);
 
-  // Server-streaming: push market updates real-time
-  rpc StreamMarketData(StreamRequest) returns (stream MarketSnapshot);
+  // Nyx endpoints (BSA & Intraday)
+  rpc GetBSA(BSARequest) returns (BSAResponse);
+  rpc GetIntradayTicks(IntradayTicksRequest) returns (IntradayTicksResponse);
+
+  // Streaming real-time updates
+  rpc StreamMarketData(StreamMarketRequest) returns (stream TCBSMarketSnapshot);
+  rpc StreamIntradayTicks(StreamTicksRequest) returns (stream TCBSIntradayTick);
 }
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
-// LEARN: enum trong protobuf — strongly typed, số hóa (tiết kiệm bytes)
 
 enum VNExchange {
-  EXCHANGE_UNSPECIFIED = 0;  // protobuf quy tắc: enum value 0 = default/unknown
-  HOSE = 1;  // Ho Chi Minh Stock Exchange — large caps (VNM, VIC, HPG...)
-  HNX  = 2;  // Hanoi Stock Exchange — mid caps
-  UPCOM = 3; // Unlisted Public Company Market — small caps / recent listings
+  EXCHANGE_UNSPECIFIED = 0;
+  HOSE                 = 1;  // Ho Chi Minh Stock Exchange (VCB, HPG, VIC...)
+  HNX                  = 2;  // Hanoi Stock Exchange
+  UPCOM                = 3;  // Unlisted Public Company Market
+  DERIV                = 4;  // Derivatives (VN30F futures)
+}
+
+enum TCBSIndexCode {
+  INDEX_UNSPECIFIED = 0;
+  INDEX_HOSE        = 1;
+  INDEX_VN30        = 2;
+  INDEX_HNX         = 3;
+  INDEX_HNX30       = 4;
+  INDEX_UPCOM       = 5;
+  INDEX_MIDCAP      = 10;
+  INDEX_VN100       = 11;
+  INDEX_VN_ALL_SHARE= 12;
+  INDEX_VN_SMALL_CAP= 13;
+  INDEX_VNX_ALL_SHARE= 14;
+  INDEX_VN50        = 15;
+  INDEX_VNSI        = 16;
 }
 
 enum SessionState {
   SESSION_UNSPECIFIED = 0;
-  ATO         = 1;  // At the Opening — phiên đấu giá mở cửa (9:00-9:15)
-  CONTINUOUS  = 2;  // Khớp lệnh liên tục (9:15-11:30, 13:00-14:30)
-  ATC         = 3;  // At the Closing — phiên đấu giá đóng cửa (14:30-14:45)
-  BREAK       = 4;  // Nghỉ trưa (11:30-13:00)
-  CLOSED      = 5;  // Đóng cửa
+  ATO                 = 1;  // At The Opening (9:00 - 9:15)
+  CONTINUOUS          = 2;  // Khớp lệnh liên tục (9:15 - 11:30, 13:00 - 14:30)
+  ATC                 = 3;  // At The Closing (14:30 - 14:45)
+  BREAK               = 4;  // Nghỉ trưa (11:30 - 13:00)
+  CLOSED              = 5;  // Đóng cửa
+  HALT                = 6;  // Tạm dừng giao dịch
 }
 
-// ─── Messages ─────────────────────────────────────────────────────────────────
+enum InvestorType {
+  INVESTOR_ALL   = 0;
+  INVESTOR_SHEEP = 1; // Cá nhân nhỏ lẻ (retail)
+  INVESTOR_WOLF  = 2; // Tổ chức vừa (medium institutional)
+  INVESTOR_SHARK = 3; // Tay to / Cá mập (large institutional)
+}
+
+// ─── Tartarus Market Snapshot ─────────────────────────────────────────────────
 
 message SnapshotRequest {
-  repeated string symbols  = 1;  // danh sách mã CK: ["VNM", "HPG", "VIC"]
-  VNExchange      exchange = 2;
+  repeated string symbols    = 1; // e.g. ["VCB", "HPG", "TCB"]
+  string          exchange   = 2; // "HOSE", "HNX", "UPCOM", "VN30"
+  TCBSIndexCode   index_code = 3;
 }
 
-message MarketSnapshot {
-  string       symbol          = 1;
-  VNExchange   exchange        = 2;
-  double       price           = 3;  // VND thousands
-  double       bid             = 4;
-  double       ask             = 5;
-  double       open            = 6;
-  double       high            = 7;
-  double       low             = 8;
-  double       reference_price = 9;
-  double       ceiling_price   = 10; // +7% HOSE, +10% HNX
-  double       floor_price     = 11; // -7% HOSE, -10% HNX
-  double       volume          = 12; // matched volume (shares)
-  double       total_value     = 13; // VND
-  double       change_pct      = 14;
-  SessionState session_state   = 15;
-  int64        timestamp_ms    = 16;
+message TCBSMarketSnapshot {
+  string       symbol            = 1;
+  string       exchange          = 2;
+  double       ref_price         = 3;  // Giá tham chiếu
+  double       ceil_price        = 4;  // Giá trần
+  double       floor_price       = 5;  // Giá sàn
+  double       match_price       = 6;  // Giá khớp hiện tại
+  double       match_qty         = 7;  // Khối lượng khớp
+  // Orderbook bên mua (3 cấp)
+  double       bid_price_01      = 8;
+  double       bid_price_02      = 9;
+  double       bid_price_03      = 10;
+  double       bid_qty_01        = 11;
+  double       bid_qty_02        = 12;
+  double       bid_qty_03        = 13;
+  // Orderbook bên bán (3 cấp)
+  double       offer_price_01    = 14;
+  double       offer_price_02    = 15;
+  double       offer_price_03    = 16;
+  double       offer_qty_01      = 17;
+  double       offer_qty_02      = 18;
+  double       offer_qty_03      = 19;
+  // OHLC & Avg
+  double       open              = 20;
+  double       high              = 21;
+  double       low               = 22;
+  double       avg               = 23;
+  // Tổng giao dịch
+  double       total_vol         = 24;
+  double       total_val         = 25;
+  // Nước ngoài
+  double       buy_foreign_qty   = 26;
+  double       sell_foreign_qty  = 27;
+  string       room              = 28;
+  // Biến động
+  double       change            = 29;
+  double       change_pct        = 30;
+  string       trading_date      = 31;
+  SessionState session_state     = 32;
+  int64        timestamp_ms      = 33;
 }
 
 message SnapshotResponse {
-  repeated MarketSnapshot snapshots = 1;
-  int64                   as_of_ms  = 2; // khi nào data được poll
+  repeated TCBSMarketSnapshot snapshots = 1;
+  int64                       as_of_ms  = 2;
+}
+
+// ─── OrderBook ────────────────────────────────────────────────────────────────
+
+message OrderBookRequest {
+  string symbol = 1; // "VCB"
+}
+
+message PriceLevel {
+  double price    = 1;
+  double quantity = 2;
+}
+
+message OrderBookResponse {
+  string              symbol       = 1;
+  string              exchange     = 2;
+  repeated PriceLevel bids         = 3; // 3 bước giá mua, sorted desc by price
+  repeated PriceLevel asks         = 4; // 3 bước giá bán, sorted asc by price
+  int64               timestamp_ms = 5;
 }
 
 // ─── OHLCV ───────────────────────────────────────────────────────────────────
 
 message VNOHLCVRequest {
-  string     symbol    = 1;
-  string     timeframe = 2;  // "1m", "1d", "1w"
-  int64      from_ms   = 3;
-  int64      to_ms     = 4;
+  string symbol    = 1; // e.g. "VCB"
+  string interval  = 2; // "1m", "15m", "1h", "1d"
+  int64  from_ms   = 3;
+  int64  to_ms     = 4;
 }
 
 message VNOHLCVCandle {
@@ -91,59 +166,132 @@ message VNOHLCVCandle {
 }
 
 message VNOHLCVResponse {
-  string                symbol  = 1;
-  string                timeframe = 2;
+  string                symbol   = 1;
+  string                interval = 2;
   repeated VNOHLCVCandle candles = 3;
 }
 
 // ─── Top Movers ───────────────────────────────────────────────────────────────
 
 message TopMoversRequest {
-  VNExchange exchange  = 1;
-  int32      limit     = 2;  // top N (default 10)
-  string     direction = 3;  // "gainers" | "losers" | "volume" | "both"
+  string exchange  = 1; // "HOSE", "HNX", "UPCOM"
+  int32  limit     = 2; // Top N (default 10)
+  string direction = 3; // "gainers" | "losers" | "volume" | "both"
 }
 
 message TopMover {
-  string     symbol     = 1;
-  VNExchange exchange   = 2;
-  double     price      = 3;
-  double     change_pct = 4;
-  double     volume     = 5;
+  string symbol     = 1;
+  string exchange   = 2;
+  double price      = 3;
+  double change_pct = 4;
+  double volume     = 5;
 }
 
 message TopMoversResponse {
-  repeated TopMover gainers = 1;  // top tăng mạnh nhất
-  repeated TopMover losers  = 2;  // top giảm mạnh nhất
-  repeated TopMover by_volume = 3; // top khối lượng
+  repeated TopMover gainers   = 1;
+  repeated TopMover losers    = 2;
+  repeated TopMover by_volume = 3;
 }
 
 // ─── Market Summary ───────────────────────────────────────────────────────────
-// Tổng quan thị trường theo sàn (giống VN-Index summary)
 
 message MarketSummaryRequest {
-  VNExchange exchange = 1;
+  string exchange = 1; // "HOSE"
 }
 
 message MarketSummaryResponse {
-  VNExchange exchange          = 1;
-  int32      total_stocks      = 2;
-  int32      advancing         = 3;  // số mã tăng
-  int32      declining         = 4;  // số mã giảm
-  int32      unchanged         = 5;  // số mã đứng
-  int32      ceiling_hit       = 6;  // số mã tăng trần
-  int32      floor_hit         = 7;  // số mã giảm sàn
-  double     total_volume      = 8;
-  double     total_value       = 9;
-  double     market_breadth    = 10; // (advancing - declining) / total — thước đo tâm lý TT
-  SessionState session_state   = 11;
-  int64      timestamp_ms      = 12;
+  string                              trading_date = 1;
+  map<string, TCBSMarketSnapshot>     indices      = 2; // "VNINDEX", "VN30", "VN100"
+  int32                               advancing    = 3;
+  int32                               declining    = 4;
+  int32                               unchanged    = 5;
+  int32                               ceiling_hit  = 6;
+  int32                               floor_hit    = 7;
+  double                              total_volume = 8;
+  double                              total_value  = 9;
+  double                              market_breadth = 10;
+}
+
+// ─── Put-Through (Giao dịch thỏa thuận) ─────────────────────────────────────────
+
+message PutThroughRequest {
+  string exchange = 1; // "HOSE", "HNX"
+}
+
+message PutThroughSnap {
+  string symbol          = 1;
+  double price           = 2;
+  double volume          = 3;
+  double value           = 4;
+  string buyer_firm      = 5;
+  string seller_firm     = 6;
+  string formatted_time  = 7;
+  int64  timestamp_ms    = 8;
+}
+
+message PutThroughResponse {
+  repeated PutThroughSnap put_throughs = 1;
+}
+
+// ─── Nyx BSA (Buy/Sell Analysis) ──────────────────────────────────────────────
+
+message BSARequest {
+  string ticker        = 1; // e.g. "VCB", "TCB"
+  string investor_type = 2; // "sheep" | "wolf" | "shark" | "all"
+}
+
+message TCBSBSASnapshot {
+  string ticker        = 1;
+  string investor_type = 2; // "sheep", "wolf", "shark", "all"
+  double bup           = 3; // Buy Up Percent (0-100)
+  double sdp           = 4; // Sell Down Percent (0-100)
+  double bsr           = 5; // Buy/Sell Ratio
+  string event_time    = 6; // e.g. "09:15:00"
+  int64  timestamp_ms  = 7;
+}
+
+message BSAResponse {
+  string                   ticker        = 1;
+  string                   investor_type = 2;
+  repeated TCBSBSASnapshot data          = 3;
+}
+
+// ─── Nyx Intraday Ticks ───────────────────────────────────────────────────────
+
+message IntradayTicksRequest {
+  string ticker = 1; // e.g. "VCB"
+  int32  page   = 2; // 0-based
+  int32  size   = 3; // default 100, max 1000
+}
+
+message TCBSIntradayTick {
+  string ticker       = 1;
+  double price        = 2;
+  double volume       = 3;
+  double price_change = 4; // cp: thay đổi so với tham chiếu
+  string action       = 5; // "Buy Up" | "Sell Down"
+  double buy_acc      = 6; // ba: lũy kế mua chủ động
+  double sell_acc     = 7; // sa: lũy kế bán chủ động
+  bool   highlight    = 8; // hl: true nếu giao dịch > 200M VND
+  string event_time   = 9; // t: "09:15:02"
+  int64  timestamp_ms = 10;
+}
+
+message IntradayTicksResponse {
+  string                    ticker = 1;
+  int32                     page   = 2;
+  int32                     size   = 3;
+  repeated TCBSIntradayTick data   = 4;
 }
 
 // ─── Streaming ────────────────────────────────────────────────────────────────
 
-message StreamRequest {
-  repeated string symbols  = 1;
-  VNExchange      exchange = 2;
-  int32           interval_ms = 3;  // poll interval (min 1000ms = 1 giây)
+message StreamMarketRequest {
+  repeated string symbols     = 1;
+  string          exchange    = 2;
+  int32           interval_ms = 3;
+}
+
+message StreamTicksRequest {
+  repeated string tickers = 1;
 }

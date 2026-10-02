@@ -7,6 +7,11 @@ package utils
 
 import "time"
 
+// GetTimeNow trả về thời gian hiện tại theo định dạng chuẩn log
+func GetTimeNow() string {
+	return time.Now().Format("2006-01-02 15:04:05")
+}
+
 // GetCurrentTimeMs trả về Unix timestamp tính bằng milliseconds
 // LEARN: time.Now().UnixMilli() là Go 1.17+, UnixNano()/1e6 cho Go cũ hơn
 func GetCurrentTimeMs() int64 {

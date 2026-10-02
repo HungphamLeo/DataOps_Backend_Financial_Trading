@@ -1,6 +1,6 @@
 module dataops-stream-producer
 
-go 1.26.0
+go 1.27
 
 require (
 	github.com/IBM/sarama v1.43.3

@@ -39,11 +39,11 @@ type Service interface {
 }
 
 type indicatorService struct {
-	repo   repository.Repository
+	repo   *repository.Gorm
 	logger *logging.Logger
 }
 
-func NewService(repo repository.Repository, logger *logging.Logger) Service {
+func NewService(repo *repository.Gorm, logger *logging.Logger) Service {
 	return &indicatorService{repo: repo, logger: logger}
 }
 

@@ -1,62 +1,77 @@
 syntax = "proto3";
 
+// Protobuf schema cho Internal Unified Data Query Interface
+// Phục vụ backend API query dữ liệu tổng hợp (Market Summary, Range, Indicator Signals, TCBS BSA)
+// Reference: docs/openapi-v1.0.0.json, dataops_backend_api/services
+
 package dataquery.v1;
 
-option go_package = "github.com/HungphamLeo/BackendDataPlatform/protobuf/data-query;dataquerv1";
+option go_package = "dataops-protobuf/dataquery;dataqueryv1";
 
 import "google/protobuf/timestamp.proto";
 
-// DataQuery service: unified internal query interface
+// ─── DataQuery Service ────────────────────────────────────────────────────────
+
 service DataQuery {
   rpc QueryMarketSummary(MarketSummaryRequest) returns (MarketSummaryResponse);
   rpc QueryHistoricalRange(HistoricalRangeRequest) returns (HistoricalRangeResponse);
   rpc QuerySignals(SignalRequest) returns (SignalResponse);
+  rpc QueryBSASummary(BSASummaryRequest) returns (BSASummaryResponse);
 }
 
+// ─── Market Summary ───────────────────────────────────────────────────────────
+
 message MarketSummaryRequest {
-  string symbol   = 1;
-  string exchange = 2;
+  string symbol   = 1; // "BTCUSDT" hoặc "VCB"
+  string exchange = 2; // "binance", "tcbs", "vps"
 }
 
 message MarketSummary {
-  string symbol         = 1;
-  string exchange       = 2;
-  double last_price     = 3;
-  double bid            = 4;
-  double ask            = 5;
-  double volume_24h     = 6;
-  double change_24h_pct = 7;
-  google.protobuf.Timestamp timestamp = 8;
+  string                    symbol         = 1;
+  string                    exchange       = 2;
+  double                    last_price     = 3;
+  double                    bid            = 4;
+  double                    ask            = 5;
+  double                    volume_24h     = 6;
+  double                    change_24h_pct = 7;
+  double                    high_24h       = 8;
+  double                    low_24h        = 9;
+  google.protobuf.Timestamp timestamp      = 10;
 }
 
 message MarketSummaryResponse {
   MarketSummary summary = 1;
 }
 
+// ─── Historical Range ─────────────────────────────────────────────────────────
+
 message HistoricalRangeRequest {
-  string symbol   = 1;
-  string exchange = 2;
-  string interval = 3;
-  google.protobuf.Timestamp from = 4;
-  google.protobuf.Timestamp to   = 5;
-  int32  limit    = 6;
+  string                    symbol   = 1;
+  string                    exchange = 2;
+  string                    interval = 3; // "1m", "5m", "15m", "1h", "1d"
+  google.protobuf.Timestamp from     = 4;
+  google.protobuf.Timestamp to       = 5;
+  int32                     limit    = 6;
 }
 
-message OHLCVBar {
-  string symbol   = 1;
-  string exchange = 2;
-  string interval = 3;
-  double open     = 4;
-  double high     = 5;
-  double low      = 6;
-  double close    = 7;
-  double volume   = 8;
-  google.protobuf.Timestamp timestamp = 9;
+message HistoricalOHLCVBar {
+  string                    symbol       = 1;
+  string                    exchange     = 2;
+  string                    interval     = 3;
+  double                    open         = 4;
+  double                    high         = 5;
+  double                    low          = 6;
+  double                    close        = 7;
+  double                    volume       = 8;
+  double                    quote_volume = 9;
+  google.protobuf.Timestamp timestamp    = 10;
 }
 
 message HistoricalRangeResponse {
-  repeated OHLCVBar bars = 1;
+  repeated HistoricalOHLCVBar bars = 1;
 }
+
+// ─── Signals ──────────────────────────────────────────────────────────────────
 
 message SignalRequest {
   string symbol   = 1;
@@ -65,15 +80,40 @@ message SignalRequest {
 }
 
 message Signal {
-  string symbol         = 1;
-  string exchange       = 2;
-  string interval       = 3;
-  string indicator_name = 4;
-  double value          = 5;
-  string meta_json      = 6;
-  google.protobuf.Timestamp timestamp = 7;
+  string                    symbol         = 1;
+  string                    exchange       = 2;
+  string                    interval       = 3;
+  string                    indicator_name = 4;
+  string                    signal_type    = 5; // "BUY", "SELL", "HOLD", "NEUTRAL"
+  double                    value          = 6;
+  double                    confidence     = 7; // 0.0 - 1.0
+  string                    meta_json      = 8;
+  google.protobuf.Timestamp timestamp      = 9;
 }
 
 message SignalResponse {
   repeated Signal signals = 1;
+}
+
+// ─── TCBS BSA Summary ─────────────────────────────────────────────────────────
+
+message BSASummaryRequest {
+  string ticker        = 1; // "VCB"
+  string investor_type = 2; // "sheep", "wolf", "shark", "all"
+}
+
+message BSASummaryPoint {
+  string                    ticker        = 1;
+  string                    investor_type = 2;
+  double                    bup           = 3; // Buy up percent
+  double                    sdp           = 4; // Sell down percent
+  double                    bsr           = 5; // Buy/Sell ratio
+  string                    event_time    = 6;
+  google.protobuf.Timestamp timestamp     = 7;
+}
+
+message BSASummaryResponse {
+  string                   ticker        = 1;
+  string                   investor_type = 2;
+  repeated BSASummaryPoint points        = 3;
 }

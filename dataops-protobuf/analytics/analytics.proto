@@ -1,34 +1,23 @@
 syntax = "proto3";
 
-// LEARN: Protocol Buffers (protobuf) là binary serialization format của Google
-//        So với JSON: nhỏ hơn ~3-10x, serialize/deserialize nhanh hơn ~100x
-//        Dùng cho gRPC — Remote Procedure Call framework của Google
-//
-// Tại sao gRPC thay vì REST?
-//   - Strongly typed: schema bắt buộc, không thể gửi sai field
-//   - Bidirectional streaming: server push, client stream, full-duplex
-//   - HTTP/2: multiplexing (nhiều requests trên 1 TCP connection)
-//   - Code generation: protoc tạo Go/Python/Java/... code tự động
-//
-// References: "gRPC: Up and Running" (O'Reilly)
-
 package analytics.v1;
 
-option go_package = "okx-protobuf/analytics";
+option go_package = "dataops-protobuf/analytics;analyticsv1";
+
+import "google/protobuf/timestamp.proto";
 
 // ─── Analytics Service ────────────────────────────────────────────────────────
-// Service định nghĩa các RPC methods — đây là contract giữa client và server
+// Service định nghĩa các RPC methods — contract giữa client, stream processing và API server
 
 service AnalyticsService {
-  // Unary RPC: 1 request → 1 response (giống HTTP REST)
+  // Unary RPC: 1 request → 1 response (tương thích REST endpoints)
   rpc GetOHLCV(OHLCVRequest) returns (OHLCVResponse);
   rpc GetVWAP(VWAPRequest) returns (VWAPResponse);
   rpc GetFundingRate(FundingRateRequest) returns (FundingRateResponse);
   rpc GetDailySummary(DailySummaryRequest) returns (DailySummaryResponse);
 
   // Server-streaming RPC: 1 request → nhiều responses (stream)
-  // LEARN: Dùng khi muốn push real-time updates liên tục đến client
-  rpc StreamOKXTrades(StreamTradesRequest) returns (stream TradeEvent);
+  rpc StreamBinanceTrades(StreamTradesRequest) returns (stream BinanceTradeEvent);
   rpc StreamAlerts(StreamAlertsRequest) returns (stream Alert);
 }
 
@@ -47,10 +36,10 @@ message Pagination {
 // ─── OHLCV ───────────────────────────────────────────────────────────────────
 
 message OHLCVRequest {
-  string    symbol    = 1;  // e.g. "BTC-USDT" hoặc "VNM"
-  string    timeframe = 2;  // "1m", "5m", "1h", "1d"
-  TimeRange range     = 3;
-  string    source    = 4;  // "OKX" | "VPS"
+  string     symbol     = 1;  // e.g. "BTCUSDT" hoặc "VCB"
+  string     interval   = 2;  // "1m", "5m", "15m", "1h", "1d"
+  TimeRange  range      = 3;
+  string     source     = 4;  // "binance" | "tcbs" | "vps"
   Pagination pagination = 5;
 }
 
@@ -65,63 +54,67 @@ message OHLCVCandle {
 }
 
 message OHLCVResponse {
-  string          symbol    = 1;
-  string          timeframe = 2;
-  repeated OHLCVCandle candles = 3;  // repeated = array trong protobuf
-  int64           total     = 4;     // total count (for pagination)
+  string               symbol    = 1;
+  string               interval  = 2;
+  repeated OHLCVCandle candles   = 3;
+  int64                total     = 4; // total count for pagination
 }
 
 // ─── VWAP ─────────────────────────────────────────────────────────────────────
 
 message VWAPRequest {
-  string    inst_id   = 1;
-  string    timeframe = 2;
-  TimeRange range     = 3;
+  string    symbol   = 1; // "BTCUSDT"
+  string    interval = 2; // "1m", "5m", "1h"
+  TimeRange range    = 3;
 }
 
 message VWAPPoint {
   int64  window_start_ms = 1;
   int64  window_end_ms   = 2;
-  double vwap            = 3;
-  double volume          = 4;
-  int64  trade_count     = 5;
-  double avg_lag_ms      = 6;  // producer lag monitoring
+  string symbol          = 3;
+  string interval        = 4;
+  double vwap            = 5;
+  double volume          = 6;
+  int64  trade_count     = 7;
+  double avg_lag_ms      = 8; // producer lag monitoring
 }
 
 message VWAPResponse {
-  string            inst_id = 1;
+  string             symbol = 1;
   repeated VWAPPoint points = 2;
 }
 
 // ─── Funding Rate ─────────────────────────────────────────────────────────────
 
 message FundingRateRequest {
-  string    inst_id = 1;
-  TimeRange range   = 2;
+  string    symbol = 1; // "BTCUSDT"
+  TimeRange range  = 2;
 }
 
 message FundingRatePoint {
   int64  timestamp_ms      = 1;
-  double rate              = 2;  // e.g. 0.0001 = 0.01% per 8 hours
-  string next_funding_time = 3;
-  double zscore            = 4;  // rolling 30-day Z-score
-  string signal            = 5;  // "EXTREME_LONG" | "NEUTRAL" | "EXTREME_SHORT"
+  double rate              = 2;  // e.g. 0.0001 = 0.01%
+  double next_rate         = 3;
+  int64  funding_time_ms   = 4;
+  string next_funding_time = 5;
+  double zscore            = 6;  // rolling 30-day Z-score
+  string signal            = 7;  // "EXTREME_LONG" | "NEUTRAL" | "EXTREME_SHORT"
 }
 
 message FundingRateResponse {
-  string                    inst_id = 1;
-  repeated FundingRatePoint points  = 2;
+  string                    symbol = 1;
+  repeated FundingRatePoint points = 2;
 }
 
 // ─── Daily Summary ────────────────────────────────────────────────────────────
 
 message DailySummaryRequest {
-  string inst_id   = 1;
-  string date      = 2;  // "2024-01-15" format
+  string symbol = 1;
+  string date   = 2; // "2026-03-30" format hoặc Unix date
 }
 
 message DailySummaryResponse {
-  string inst_id      = 1;
+  string symbol       = 1;
   string date         = 2;
   double price_open   = 3;
   double price_high   = 4;
@@ -137,27 +130,30 @@ message DailySummaryResponse {
 // ─── Streaming Types ──────────────────────────────────────────────────────────
 
 message StreamTradesRequest {
-  repeated string inst_ids = 1;  // subscribe nhiều instruments cùng lúc
+  repeated string symbols = 1; // subscribe nhiều symbols cùng lúc, e.g. ["BTCUSDT", "ETHUSDT"]
 }
 
-message TradeEvent {
-  string inst_id      = 1;
+message BinanceTradeEvent {
+  string symbol       = 1; // e.g. "BTCUSDT"
   string trade_id     = 2;
   double price        = 3;
-  double size         = 4;
-  string side         = 5;  // "buy" | "sell"
+  double quantity     = 4;
+  string side         = 5; // "buy" | "sell"
   int64  timestamp_ms = 6;
 }
 
 message StreamAlertsRequest {
-  repeated string inst_ids  = 1;
-  double          lag_threshold_ms = 2;  // alert khi lag > này
+  repeated string symbols          = 1;
+  string          source           = 2; // "binance" | "tcbs"
+  double          lag_threshold_ms = 3; // alert khi lag > threshold
 }
 
 message Alert {
-  string alert_type = 1;   // "PRICE_SPIKE" | "HIGH_LIQUIDATION" | "CONSUMER_LAG" | "EXTREME_FUNDING"
-  string inst_id    = 2;
-  string message    = 3;
-  double value      = 4;   // giá trị trigger alert (price, lag ms, funding rate...)
-  int64  timestamp_ms = 5;
+  string alert_type   = 1; // "funding_anomaly" | "unusual_volume" | "bsa_anomaly" | "price_spike" | "consumer_lag"
+  string symbol       = 2;
+  string source       = 3; // "binance" | "tcbs"
+  string message      = 4;
+  double value        = 5; // trigger value (price, lag ms, funding rate, volume)
+  double z_score      = 6;
+  int64  timestamp_ms = 7;
 }

@@ -1,0 +1,94 @@
+=============================================================================
+SESSION EXPORT — DOCKER INFRASTRUCTURE HARMONIZATION & BUILD FIXES
+Date: 2026-10-02
+Branch: 25092026_set_up_base_code
+Scope: infra_dataops_finance_trading/docker-compose.yml, dataops_backend_api,
+       dataops_batch_api, dataops-stream-producer, export_task
+References:
+  - docs/openapi-v1.0.0.json (TCBS OpenAPI Spec)
+  - github/skill/SKILL.md (Project Skill Manifest & Hierarchy of Truth)
+  - allskill/docker_production.skill.md (Docker Production Standards)
+=============================================================================
+
+1. TỔNG KẾT NHỮNG GÌ ĐÃ HOÀN THÀNH TRONG SESSION (ACCOMPLISHED)
+-----------------------------------------------------------------------------
+
+1.1 Khảo sát & Phân tích xung đột Port với các dự án đang chạy:
+  Đã rà soát ma trận cổng của 2 stack dự án khác đang chiếm dụng trên máy (infra_webcraw và infra_homecredit):
+  - 5432:5432 (postgres-webcraw) & 5433:5432 (homecredit_postgres)
+  - 7077:7077 (spark-webcraw)
+  - 9000:9000 (minio-webcraw) & 9002:9000 (homecredit_minio)
+
+  Quyết định kỹ thuật:
+  - Giữ nguyên cơ sở dữ liệu MySQL theo yêu cầu của người dùng để tối ưu thời gian phát triển và không làm xáo trộn kiến trúc data layer hiện tại.
+  - Cập nhật ma trận port mới độc lập 100% trong infra_dataops_finance_trading/docker-compose.yml:
+    * MinIO S3 API: 9010:9000 (Console: 9011:9001)
+    * Spark Master RPC: 7087:7077 (Web UI: 8095:8080)
+    * MySQL: Giữ nguyên 3306:3306 (Internal DB: binance_analytics)
+
+1.2 Di chuyển hạ tầng Docker & Điều chỉnh Build Context:
+  - File infra_dataops_finance_trading/docker-compose.yml đã được đặt chính thức tại thư mục infra_dataops_finance_trading/.
+  - Cập nhật tất cả các đường dẫn tương đối từ `.` sang `..`:
+    * dataops-stream-producer: context: ../dataops-stream-producer
+    * dataops-backend-api: context: ../dataops_backend_api
+    * dataops-batch-api: context: ../dataops_batch_api
+    * grafana: volumes trỏ tới ../grafana/dashboards và ../grafana/datasources
+
+1.3 Fix toàn bộ lỗi biên dịch Go trong dataops_backend_api:
+  Đã sửa triệt để các lỗi biên dịch và xác nhận `go build -v .` pass thành công:
+  1. repository/indicators_accounting.go: Bổ sung import "gorm.io/gorm".
+  2. utils/time.go: Bổ sung hàm GetTimeNow() string trả về timestamp log chuẩn.
+  3. models/auth.go: Đồng bộ struct models.UserSession (thêm field Status string, UserID string, RoleID uint, RoleId constants.AUTH_ROLE) đảm bảo khớp chặt chẽ giữa GORM DB và Gin context trong middlewares/auth_tiers.go.
+  4. middlewares/jwt_auth.go: Loại bỏ unused import "time".
+  5. api/rest/rest.go: Đồng bộ tham số gọi middlewares.JwtAuthMiddleware(cfg.Authentication.Secret, redisDB0) và middlewares.AdminMiddleware().
+  6. services/accounting/accounting.go & services/indicator/indicator.go: Chuyển repo sang con trỏ *repository.Gorm.
+  7. repository/delta/delta.go: Thêm //go:build ignore do DuckDB driver CGO chưa cần thiết khi chạy REST API.
+
+
+=============================================================================
+2. NHỮNG GÌ CẦN LÀM TIẾP THEO (PENDING / NEXT STEPS)
+=============================================================================
+
+2.1 Cần làm ngay (Immediate - Để Docker Build & Run 100% thành công):
+
+  1. Đồng bộ Golang Base Image Version trong Dockerfile:
+     - Hiện trạng: dataops-stream-producer/go.mod khai báo go 1.26.0, dataops_backend_api/go.mod khai báo go 1.25, trong khi Dockerfile builder đang dùng golang:1.21-alpine -> Gây lỗi `go.mod requires go >= ...`.
+     - Hành động:
+       * Cách A: Hạ version trong go.mod của cả 2 service Go về chuẩn ổn định go 1.21 (khuyên dùng).
+       * Hoặc Cách B: Nâng image builder trong cả 2 Dockerfile lên golang:1.22-alpine / golang:alpine.
+
+  2. Khởi động và Xác thực Toàn diện Hệ thống qua Docker Compose:
+     - Thực thi lệnh:
+         cd infra_dataops_finance_trading
+         docker compose up -d --build
+     - Kiểm tra trạng thái đồng bộ healthchecks:
+         docker compose ps
+     - Xác nhận 14 services đều đạt trạng thái healthy (Kafka x3, Schema Registry, Kafka UI, MinIO, MySQL, Redis, InfluxDB, Grafana, Spark Master, Spark Worker, Stream Producer, Backend API, Batch API).
+
+2.2 Các hạng mục trong kế hoạch tiếp theo (Planned Backlog):
+
+  [Option 3] Tạo Script / Makefile tự động compile Protobuf Codegen:
+  - Tạo script PowerShell scripts/gen_proto.ps1 hoặc Makefile:
+    * Biên dịch toàn bộ .proto từ dataops-protobuf/ (analytics, vnstock, market-data, batch-data, data-query, ingestion).
+    * Sinh code Go output cho dataops-stream-producer và dataops_backend_api.
+    * Sinh code Python stubs (_pb2.py, _pb2_grpc.py) cho dataops_batch_api.
+
+  [Option 4] Hoàn thiện Binance REST Client trong dataops-stream-producer:
+  - Triển khai HTTP Client hoàn chỉnh trong thư mục rỗng dataops-stream-producer/pkg/sources/binance/rest/:
+    * Lấy REST Ticker Snapshot (/api/v3/ticker/24hr).
+    * Lấy Depth Snapshot (/api/v3/depth) để khởi tạo/re-sync OrderBook local state khi WebSocket bị reconnect.
+    * Xử lý keepalive ping/pong (chu kỳ 300s) cho WebSocket Binance.
+
+
+=============================================================================
+3. BÀI HỌC KỸ THUẬT & QUY TẮC BẢO TOÀN (LESSONS LEARNED)
+=============================================================================
+
+1. Quản lý phiên bản Go runtime vs Docker build container:
+   - Khi chỉnh sửa go.mod, luôn kiểm tra chỉ thị `go <version>` có tương thích với base image trong Dockerfile (FROM golang:X.XX-alpine) để tránh lỗi build timeout/abort khi go mod download.
+
+2. Nguyên tắc cô lập Port giữa các cụm dự án DataOps:
+   - Khi chạy nhiều stack song song (Webcraw, Homecredit, Financial Trading), luôn thiết lập ma trận offset port cho các dịch vụ phổ biến (MinIO: 9000 -> 9010, Spark: 7077 -> 7087, Postgres/MySQL) để tránh conflict socket binding trên host Windows/Linux.
+
+3. Quy tắc bảo toàn DB Engine:
+   - Không vội vàng chuyển đổi DB Engine (MySQL <-> PostgreSQL) khi chưa có task di chuyển dữ liệu & migration schema cụ thể, nhằm duy trì tính liên tục và giảm thiểu rủi ro phát sinh bug trong các repository query hiện hành.
