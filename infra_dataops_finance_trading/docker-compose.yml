@@ -330,7 +330,7 @@ services:
   # ─── STREAM PRODUCER (Go WebSocket/Poller to Kafka) ────────────────────────
   dataops-stream-producer:
     build:
-      context: ../dataops-stream-producer
+      context: ../dataops_stream_producer
       dockerfile: Dockerfile
     container_name: dataops-stream-producer
     restart: unless-stopped
@@ -351,9 +351,17 @@ services:
       KAFKA_URL: kafka1:29092,kafka2:29092,kafka3:29092
       REDIS_ADDRESS: redis:6379
       SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      # Binance WebSocket
       BINANCE_WS_URL: wss://stream.binance.com:9443/ws
       BINANCE_SYMBOLS: BTCUSDT,ETHUSDT,SOLUSDT
-      VPS_SYMBOLS: VCB,VHM,TCB,VIC,HPG
+      # TCBS iFlash Open API (thay thế VPS)
+      TCBS_BASE_URL: https://openapi.tcbs.com.vn
+      TCBS_API_KEY: ""
+      TCBS_JWT_TOKEN: ""
+      TCBS_SYMBOLS: VCB,VHM,TCB,VIC,HPG,MSN,VNM,MBB,CTG,BID
+      TCBS_INDEXES: HOSE,VN30,HNX
+      TCBS_BSA_INVESTOR_TYPE: all
+      TCBS_INTRADAY_MAX_PAGES: "5"
       MODE: prod
     deploy:
       resources:
@@ -386,18 +394,22 @@ services:
       - "8080:8080"
     environment:
       PORT: 8080
-      MYSQL_HOST: mysql
-      MYSQL_PORT: 3306
-      MYSQL_USER: root
-      MYSQL_PASSWORD: root123
-      MYSQL_DB: binance_analytics
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
+      # MySQL DSN — khớp với configuration.go cfg.MySQL.DNS
+      MYSQL_DNS: root:root123@tcp(mysql:3306)/binance_analytics?parseTime=true
+      REDIS_ADDRESS: redis:6379
       INFLUXDB_URL: http://influxdb:8086
       INFLUXDB_TOKEN: my-super-secret-auth-token
       INFLUXDB_ORG: binance-vps-platform
       INFLUXDB_BUCKET: market-data
       KAFKA_BROKERS: kafka1:29092,kafka2:29092,kafka3:29092
+      # JWT Auth
+      JWT_SECRET: ""
+      JWT_REFRESH_SECRET: ""
+      # TCBS iFlash Open API
+      TCBS_BASE_URL: https://openapi.tcbs.com.vn
+      TCBS_API_KEY: ""
+      TCBS_JWT_TOKEN: ""
+      MODE: prod
     deploy:
       resources:
         limits:
@@ -420,7 +432,7 @@ services:
       minio:
         condition: service_healthy
       spark-master:
-        condition: service_started
+        condition: service_healthy
     environment:
       SPARK_MASTER_URL: spark://spark-master:7077
       AWS_ACCESS_KEY_ID: minioadmin
@@ -463,11 +475,11 @@ services:
       - ./jars:/opt/spark/custom_jars
       - ./data:/opt/spark/data
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c 'import socket; s=socket.socket(); s.settimeout(2); s.connect((\"spark-master\", 7077)); s.close()' || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080 > /dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 15s
+      start_period: 20s
     deploy:
       resources:
         limits:
