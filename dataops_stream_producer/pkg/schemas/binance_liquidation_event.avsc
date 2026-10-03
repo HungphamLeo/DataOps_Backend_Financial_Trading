@@ -1,0 +1,55 @@
+{
+  "type": "record",
+  "name": "BinanceLiquidationEvent",
+  "namespace": "com.binance.vps.events",
+  "doc": "Forced liquidation event from Binance. Occurs when a position's margin falls below maintenance margin. High liquidation volume = high market stress signal.",
+  "fields": [
+    {
+      "name": "instId",
+      "type": "string",
+      "doc": "Instrument ID, e.g. BTCUSDT (FUTURES)"
+    },
+    {
+      "name": "instType",
+      "type": "string",
+      "doc": "Instrument type: FUTURES, SWAP"
+    },
+    {
+      "name": "totalLoss",
+      "type": "double",
+      "doc": "Total loss amount in USD"
+    },
+    {
+      "name": "bkLoss",
+      "type": "double",
+      "doc": "Bankruptcy loss (amount exchange absorbs beyond insurance fund)"
+    },
+    {
+      "name": "side",
+      "type": "string",
+      "doc": "Liquidated position side: buy=long was liquidated, sell=short was liquidated"
+    },
+    {
+      "name": "size",
+      "type": "double",
+      "doc": "Liquidated position size in contracts"
+    },
+    {
+      "name": "price",
+      "type": "double",
+      "doc": "Liquidation price"
+    },
+    {
+      "name": "tsMs",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Liquidation timestamp from Binance"
+    },
+    {
+      "name": "producedAtMs",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Kafka producer timestamp"
+    }
+  ]
+}

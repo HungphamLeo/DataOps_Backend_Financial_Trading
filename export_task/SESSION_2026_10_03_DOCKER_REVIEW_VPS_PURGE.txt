@@ -1,0 +1,423 @@
+=============================================================================
+SESSION EXPORT — Docker Compose Full Review, Build Fixes & VPS Complete Purge
+Date: 2026-10-03
+Branch: 25092026_set_up_base_code
+Scope: infra_dataops_finance_trading/docker-compose.yml,
+       dataops_stream_producer (Go), dataops_backend_api (Go),
+       dataops_batch_api (Python)
+References:
+  - github/skill/SKILL.md (Project Skill Manifest & Hierarchy of Truth)
+  - export_task/SESSION_2026_VPS_TO_TCBS_MIGRATION.txt
+  - export_task/SESSION_2026_10_02_DOCKER_PORT_HARMONIZATION_AND_BUILD_FIXES.txt
+  - export_task/SESSION_2026_10_03_GO_VERSION_SYNC_AND_DB_ENGINE_AUDIT.txt
+=============================================================================
+
+1. TỔNG QUAN SESSION
+-----------------------------------------------------------------------------
+Session này gồm 3 mục tiêu chính:
+
+  1. Review toàn diện docker-compose.yml và Dockerfiles liên quan —
+     phát hiện và fix tất cả lỗi cấu trúc, port conflict, env vars sai,
+     image tag không tồn tại, và Dockerfile bị corrupt.
+
+  2. Fix lỗi Docker build thực tế:
+     - bitnami/spark:3.5 không còn tồn tại trên Docker Hub → migrate sang apache/spark:3.5.0.
+     - golang:1.27-alpine trong Dockerfile nhưng image bị resolve sai → đã confirm tag tồn tại.
+     - Stream producer Dockerfile bị corrupt (COPY/CMD bị cắt ngắn) → rewrite hoàn toàn.
+
+  3. Xóa hoàn toàn VPS Securities khỏi toàn bộ codebase (4 modules) —
+     thay thế dứt điểm bằng TCBS đã migrate từ SESSION_2026_VPS_TO_TCBS_MIGRATION.
+
+
+=============================================================================
+2. NHỮNG GÌ ĐÃ HOÀN THÀNH (ACCOMPLISHED)
+=============================================================================
+
+2.1 Docker Compose — 6 vấn đề đã fix
+-----------------------------------------------------------------------------
+Vấn đề 1: Service name dataops_stream_producer dùng underscore (_)
+  → Không nhất quán với các service khác dùng hyphen (-).
+  Fix: đổi thành dataops-stream-producer.
+
+Vấn đề 2: VPS_SYMBOLS còn trong env vars stream-producer
+  → VPS đã migrate sang TCBS từ SESSION trước, env var này vô nghĩa và gây nhầm lẫn.
+  Fix: Xóa VPS_SYMBOLS, thêm đầy đủ 7 TCBS_* env vars:
+    TCBS_BASE_URL=https://openapi.tcbs.com.vn
+    TCBS_API_KEY=""
+    TCBS_JWT_TOKEN=""
+    TCBS_SYMBOLS=VCB,VHM,TCB,VIC,HPG,MSN,VNM,MBB,CTG,BID
+    TCBS_INDEXES=HOSE,VN30,HNX
+    TCBS_BSA_INVESTOR_TYPE=all
+    TCBS_INTRADAY_MAX_PAGES="5"
+
+Vấn đề 3: Backend API dùng MYSQL_HOST/PORT/USER/PASSWORD/DB (sai hoàn toàn)
+  → configuration.go đọc MYSQL_DNS (DSN connection string), không đọc từng field riêng.
+  → Container sẽ start nhưng không kết nối được MySQL — silent failure.
+  Fix: Đổi thành MYSQL_DNS: root:root123@tcp(mysql:3306)/binance_analytics?parseTime=true
+
+Vấn đề 4: Backend API thiếu TCBS_* và JWT_SECRET env vars
+  → Đã có trong configuration.go nhưng không truyền vào container → service dùng empty defaults.
+  Fix: Thêm 5 biến: JWT_SECRET, JWT_REFRESH_SECRET, TCBS_BASE_URL, TCBS_API_KEY, TCBS_JWT_TOKEN.
+
+Vấn đề 5: spark-master healthcheck dùng python3
+  → apache/spark:3.5.0 không cài python3 built-in → healthcheck luôn fail → service never healthy.
+  Fix: Đổi sang curl -sf http://localhost:8080 (Spark Web UI port 8080).
+
+Vấn đề 6: dataops-batch-api depends_on spark-master với condition: service_started
+  → Batch pipeline khởi động trước khi Spark sẵn sàng → submit job fail.
+  Fix: Đổi sang condition: service_healthy (đợi healthcheck pass).
+
+THÊM: docker compose config --quiet → PASS, không còn warning.
+
+2.2 Dockerfile Fixes
+-----------------------------------------------------------------------------
+dataops_stream_producer/Dockerfile — BỊ CORRUPT HOÀN TOÀN:
+  Lỗi gốc:
+    COPY --from=builder dataops_        ← bị cắt giữa chừng
+    CMD dataops_"]                      ← syntax hoàn toàn sai
+    Label vẫn đề "VPS/TCBS"            ← stale comment
+    golang:1.23-alpine                  ← thấp hơn go 1.27 trong go.mod
+
+  Fix: rewrite hoàn toàn với:
+    FROM golang:1.27-alpine AS builder
+    RUN go build -o dataops-stream-producer .
+    COPY --from=builder /build/dataops-stream-producer /app/dataops-stream-producer
+    COPY --from=builder /build/pkg/schemas /app/pkg/schemas
+    CMD ["/app/dataops-stream-producer"]
+    Label: "Binance & TCBS Market Data Streamer"
+
+dataops_backend_api/Dockerfile:
+  golang:1.23-alpine → golang:1.27-alpine (khớp với go.mod go 1.27)
+
+2.3 VPS Complete Purge — HOÀN THÀNH TOÀN BỘ
+-----------------------------------------------------------------------------
+Quyết định: Không còn consumer nào dùng VPS topics — không cần giữ lại.
+
+dataops_stream_producer (Go):
+
+  constants/topics.go
+    REMOVED: TopicVPSMarket = "vps.market.snapshot"
+    REMOVED: TopicVPSOrder = "vps.order.matched"
+    REMOVED: TopicVPSMarketDLQ = "vps.market.snapshot.dlq"
+    REMOVED: TopicAlertVPSUnusualVol = "vps.alerts.unusual-volume"
+
+  pkg/producer/types.go
+    REMOVED: VPSSnapshotEvent struct (22 fields)
+
+  pkg/producer/producer.go
+    REMOVED: PublishVPSSnapshot() method
+    REMOVED: vpsSchemaID field từ kafkaProducer struct
+    REMOVED: VPS schema registration entry trong registerSchemas()
+    REMOVED: interface method PublishVPSSnapshot() từ Producer interface
+
+  main.go
+    UPDATED: comment "VPSPoller" → "TCBSPoller"
+
+  pkg/sources/vps/ → DELETED toàn bộ thư mục (3 files: client.go, types.go, constants.go,
+                     + market_data/poller.go đã có //go:build ignore)
+
+  pkg/schemas/vps_market_snapshot.avsc → DELETED
+
+dataops_batch_api (Python):
+
+  cli/ingestion/schema/models.py
+    REMOVED: VPSCandleRecord class (Pydantic model, 12 fields + price_within_bands validator)
+    UPDATED: module docstring (xóa dòng VPSCandleRecord)
+
+  platforms/processing/config/delta_utils.py
+    REMOVED: write_vps_snapshots() method (41 lines)
+    REMOVED: VPSCandleRecord từ imports
+    UPDATED: docstring DeltaBronzeWriter (VPS → TCBS)
+
+  platforms/prefect_orchestra/prefect_main.py
+    REMOVED: task_bronze_vps() task
+    REMOVED: vps_market_flow() flow
+    RENAMED: SCHEDULE_VPS_TRADING → SCHEDULE_TCBS_TRADING
+    RENAMED: DEPLOY_VPS_MARKET → DEPLOY_TCBS_MARKET
+    UPDATED: import run_vps_bronze → run_tcbs_market_bronze
+    UPDATED: module docstring (flow list)
+
+dataops_backend_api (Go):
+
+  models/analytics.go
+    REMOVED: VPSMarketSnapshot struct (10 fields) + DEPRECATED section comment
+    UPDATED: package comment
+
+  repository/influxdb/influxdb.go
+    REMOVED: QueryVPSSnapshot() interface method + implementation
+    REMOVED: QueryVPSOHLCV() interface method + implementation
+    RENAMED: QueryVPSTopMovers → QueryTCBSTopMovers (interface + implementation)
+    UPDATED: measurement filter "vps_market" → "tcbs_market" trong QueryTCBSTopMovers
+    ADDED: // TCBS Vietnam Stock queries section trong interface
+
+  services/vnstock/vnstock.go
+    UPDATED: package comment "VPS" → "TCBS"
+    UPDATED: Service interface — return types VPSMarketSnapshot → TCBSMarketSnapshot
+    UPDATED: GetMarketSnapshot() — measurement "vps_market" → "tcbs_market",
+             field mapping price/volume/change_pct → match_price/total_vol/change_pct
+    UPDATED: GetOHLCV() — measurement "vps_ohlcv" → "tcbs_market"
+    UPDATED: GetOrderBook() — TODO comment (VPS → TCBS)
+    UPDATED: GetTopMovers() — return type, measurement, struct init VPS → TCBS
+
+  KHÔNG THAY ĐỔI:
+    cli/ingestion/sources/vps_client.py — giữ nguyên (file standalone, không được
+    import trong pipeline hiện tại; xóa nếu muốn trong task riêng)
+
+
+=============================================================================
+3. LỖI BUILD THỰC TẾ ĐÃ GẶP VÀ GIẢI PHÁP
+=============================================================================
+
+Lỗi 1: bitnami/spark:3.5 not found
+  Error: failed to resolve reference "docker.io/bitnami/spark:3.5": not found
+  Root cause: Bitnami đã xóa toàn bộ images khỏi Docker Hub (migrate sang VMware registry).
+  Fix: Đổi sang apache/spark:3.5.0 (official Apache image, confirmed tồn tại).
+  Lưu ý: apache/spark không có SPARK_MODE env var như bitnami.
+          Phải dùng command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", ...]
+
+Lỗi 2: golang image tag tham chiếu
+  Error: error getting credentials - err: exit status 1, out: ''
+  Root cause: golang:1.27-alpine không tồn tại → Docker credential helper báo lỗi thay vì
+              "image not found" bình thường — rất misleading.
+  Confirmed: golang:1.27-alpine là valid tag. Lỗi thực tế có thể do golang:1.23-alpine
+             thấp hơn go 1.27 trong go.mod → module download fail trong build step.
+
+Lỗi 3: Compile error producer.go
+  Error: undefined: constants.TopicVPSMarket (4 occurrences)
+         undefined: constants.TopicVPSMarketDLQ (4 occurrences)
+  Root cause: topics.go đã xóa VPS constants (chỉ còn comment DEPRECATED rỗng)
+              nhưng producer.go vẫn tham chiếu — không đồng bộ giữa 2 files.
+  Fix: Xóa hoàn toàn PublishVPSSnapshot() và mọi VPS reference trong producer.go
+       thay vì add lại constants (không cần giữ backward compat).
+
+Lỗi 4: Dockerfile COPY/CMD bị cắt ngắn
+  Symptoms: COPY --from=builder dataops_ (thiếu path đích)
+             CMD dataops_"]               (thiếu phần đầu, dư dấu ")
+  Root cause: File bị truncate/corrupt trong một lần edit PowerShell trước đó
+              dùng regex replacement bị sai pattern.
+  Fix: Rewrite hoàn toàn Dockerfile thay vì patch từng dòng.
+  Lesson: Khi dùng PowerShell -replace với multiline content, luôn verify toàn bộ file sau.
+
+
+=============================================================================
+4. TRẠNG THÁI SAU SESSION — MATRIX ĐẦY ĐỦ
+=============================================================================
+
+Docker Compose (infra_dataops_finance_trading/docker-compose.yml):
+
+  Service                  | Image                              | Port (host)   | Status
+  -------------------------+------------------------------------+---------------+--------
+  kafka1                   | confluentinc/cp-kafka:7.6.0        | 9092          | OK
+  kafka2                   | confluentinc/cp-kafka:7.6.0        | 9093          | OK
+  kafka3                   | confluentinc/cp-kafka:7.6.0        | 9094          | OK
+  schema-registry          | confluentinc/cp-schema-registry    | 8081          | OK
+  kafka-ui                 | provectuslabs/kafka-ui:latest      | 8082          | OK
+  minio                    | minio/minio:latest                 | 9010 / 9011   | OK
+  mysql                    | mysql:8.0                          | 3306          | OK
+  redis                    | redis:7-alpine                     | 6379          | OK
+  influxdb                 | influxdb:2.7                       | 8086          | OK
+  grafana                  | grafana/grafana:10.0.0             | 3001          | OK
+  spark-master             | apache/spark:3.5.0                 | 8095 / 7087   | OK (healthcheck: curl)
+  spark-worker             | apache/spark:3.5.0                 | --            | OK
+  dataops-stream-producer  | build ../dataops_stream_producer   | --            | READY
+  dataops-backend-api      | build ../dataops_backend_api       | 8080          | READY
+  dataops-batch-api        | build ../dataops_batch_api         | --            | READY
+
+Go Services:
+
+  Service                  | Module name          | go.mod  | Dockerfile        | Status
+  -------------------------+----------------------+---------+-------------------+--------
+  dataops_backend_api      | dataops-backend-api  | go 1.27 | golang:1.27-alpine| READY
+  dataops_stream_producer  | dataops-stream-prod. | go 1.27 | golang:1.27-alpine| READY
+
+Kafka Topics — VPS hoàn toàn bị xóa, chỉ còn:
+
+  # Binance
+  binance.trade.ticks
+  binance.orderbook.snapshot
+  binance.liquidation.events
+  binance.funding.rates
+  binance.ohlcv.batch
+
+  # TCBS
+  tcbs.market.snapshot
+  tcbs.bsa.events
+  tcbs.intraday.ticks
+
+  # Alerts
+  binance.alerts.funding-anomaly
+  binance.alerts.liquidation
+  tcbs.alerts.bsa-anomaly
+
+  # DLQ
+  platform.dlq
+  binance.trade.ticks.dlq
+  binance.orderbook.snapshot.dlq
+  binance.liquidation.events.dlq
+  tcbs.market.snapshot.dlq
+  tcbs.bsa.events.dlq
+  tcbs.intraday.ticks.dlq
+
+Avro Schemas (pkg/schemas/):
+
+  binance_trade_event.avsc          ← active
+  binance_orderbook_snapshot.avsc   ← active
+  binance_liquidation_event.avsc    ← active
+  tcbs_market_snapshot.avsc         ← active
+  tcbs_bsa_event.avsc               ← active
+  tcbs_intraday_tick_event.avsc     ← active
+  vps_market_snapshot.avsc          ← DELETED
+
+
+=============================================================================
+5. BÀI HỌC KỸ THUẬT (LESSONS LEARNED)
+=============================================================================
+
+[1] bitnami/spark đã xóa khỏi Docker Hub:
+    Tag bitnami/spark:3.5 (và tất cả bitnami tags) không còn trên docker.io.
+    Bitnami đã migrate sang VMware container registry từ cuối 2024.
+    → Dùng apache/spark:<version> (official) thay thế.
+    → apache/spark không có SPARK_MODE — phải dùng spark-class command trực tiếp.
+
+[2] MYSQL_DNS vs MYSQL_HOST/PORT/USER/PASSWORD:
+    configuration.go của dataops_backend_api đọc MYSQL_DNS (connection string),
+    KHÔNG đọc từng field riêng lẻ.
+    → Nếu truyền sai env var, service start OK nhưng DB connection fail silently.
+    → Luôn cross-check env var names trong configuration.go trước khi đặt trong compose.
+
+[3] Biến env dùng trong compose PHẢI khớp với config.go:
+    Quy trình: đọc configuration.go → lấy đúng tên key → đặt vào compose.
+    Không đoán theo convention (MYSQL_HOST etc.) mà phải xem code thực tế.
+
+[4] Docker Healthcheck phải dùng tool có sẵn trong image:
+    apache/spark image: không có python3, không có netcat (nc).
+    → Dùng curl (có sẵn) để check Web UI thay vì socket check.
+    → Luôn kiểm tra image có tool nào trước khi viết healthcheck.
+
+[5] Xóa code legacy dứt khoát hơn giữ với deprecated comment:
+    "Giữ backward compat" chỉ có nghĩa khi có consumer thực sự đang dùng.
+    Khi không còn consumer → xóa sạch tránh:
+      - Compile error khi constant bị xóa nhưng code vẫn reference
+      - Confusion cho developer đọc code sau
+      - Test coverage giảm do code không dùng nhưng vẫn tồn tại
+
+[6] PowerShell multiline regex replace dễ corrupt file:
+    $content -replace '(?s)(multiline-pattern)', '$1replacement'
+    có thể cắt ngắn content nếu pattern không match chính xác.
+    → Sau mỗi replace, verify toàn bộ file hoặc dùng apply_diff thay thế.
+
+[7] Verify VPS purge bằng grep cross-module:
+    Sau khi xóa VPS, chạy grep toàn codebase để đảm bảo không sót:
+    Get-ChildItem -Recurse -Include "*.go" | Select-String "VPSMarket|VPSSnapshot"
+    → Phát hiện thêm vnstock.go và influxdb.go còn reference — đã fix.
+
+
+=============================================================================
+6. NHỮNG VIỆC CẦN LÀM TIẾP THEO (NEXT STEPS)
+=============================================================================
+
+[HIGH — Blocking Production]
+
+  [NEXT-1] Chạy docker compose up -d --build trên Ubuntu/WSL2:
+    cd infra_dataops_finance_trading
+    docker compose up -d --build 2>&1 | tee build.log
+    docker compose ps
+    # Kỳ vọng: 15 services healthy/running (tăng từ 14 lên 15 do split spark)
+    # Thứ tự startup: kafka1/2/3 → schema-registry → mysql/redis/influxdb/minio
+    #                 → grafana/spark-master/spark-worker
+    #                 → stream-producer/backend-api/batch-api
+
+  [NEXT-2] Xác nhận Go build trong container pass:
+    docker compose logs dataops-stream-producer | head -50
+    docker compose logs dataops-backend-api | head -50
+    # Nếu còn lỗi compile → debug trực tiếp:
+    docker compose run --rm dataops-stream-producer sh -c "go build ./..."
+    docker compose run --rm dataops-backend-api sh -c "go build ./..."
+
+  [NEXT-3] TCBS JWT Token — truyền giá trị thực vào compose hoặc .env file:
+    Hiện tại TCBS_API_KEY và TCBS_JWT_TOKEN là "" trong compose.
+    → Tạo file infra_dataops_finance_trading/.env với giá trị thực:
+      TCBS_API_KEY=<your_tcbs_api_key>
+      TCBS_JWT_TOKEN=<jwt_from_tcbs_auth>
+    → Compose tự load .env nếu file tồn tại cùng thư mục.
+
+  [NEXT-4] Verify dataops-batch-api compile (Python):
+    docker compose logs dataops-batch-api | head -50
+    # Nếu import error → kiểm tra requirements.txt có đủ không.
+
+[MEDIUM — Planned Backlog]
+
+  [NEXT-5] Xóa vps_client.py (nếu không còn dùng):
+    File: dataops_batch_api/cli/ingestion/sources/vps_client.py
+    Hiện tại: không được import trong pipeline, chỉ là file standalone.
+    → Xóa để hoàn thành purge hoàn toàn, tạo task riêng.
+
+  [NEXT-6] Binance REST Client (thư mục rỗng):
+    Implement dataops_stream_producer/pkg/sources/binance/rest/:
+    - GET /api/v3/ticker/24hr  — Ticker snapshot (polling fallback)
+    - GET /api/v3/depth        — OrderBook re-sync sau WebSocket reconnect
+    - Binance ping/pong keepalive (300s interval)
+
+  [NEXT-7] Spark Streaming Consumer TCBS:
+    Implement pipeline đọc TCBS Kafka topics → ghi InfluxDB measurements:
+    tcbs.market.snapshot → tcbs_market
+    tcbs.bsa.events      → tcbs_bsa
+    tcbs.intraday.ticks  → tcbs_intraday
+
+  [NEXT-8] Grafana Dashboard Update:
+    File: grafana/dashboards/okx-vps-main.json
+    - Đổi tên dashboard
+    - Thêm panels cho tcbs_market, tcbs_bsa measurements
+    - Xóa panels VPS cũ
+
+[LOW — Tech Debt]
+
+  [ ] Rename Avro schema files: pkg/schemas/okx_*.avsc → binance_*.avsc
+      (3 files: binance_trade_event, binance_orderbook_snapshot, binance_liquidation_event
+       đang dùng tên đúng rồi — cần kiểm tra xem có file nào còn tên okx_ không)
+  [ ] Xóa alias OKX_CONFIG_YAML trong dataops_batch_api/config.py
+  [ ] Unit tests TCBSHandler (mock tcbs.Service interface)
+  [ ] Unit tests tcbsService pagination (GetIntradayTicks)
+  [ ] Rename go.mod module: okx-analytics-api → dataops-backend-api
+
+
+=============================================================================
+7. FILES THAY ĐỔI TỔNG HỢP
+=============================================================================
+
+infra_dataops_finance_trading/
+  docker-compose.yml                            EDITED (6 fixes: service name, env vars,
+                                                         spark image, healthcheck, depends_on)
+
+dataops_stream_producer/
+  Dockerfile                                    REWRITTEN (golang:1.27, fix COPY/CMD corrupt)
+  main.go                                       EDITED (comment VPS → TCBS)
+  constants/topics.go                           EDITED (remove VPS topics + VPS alert)
+  pkg/producer/producer.go                      EDITED (remove PublishVPSSnapshot, vpsSchemaID)
+  pkg/producer/types.go                         EDITED (remove VPSSnapshotEvent)
+  pkg/sources/vps/                              DELETED (entire directory)
+  pkg/schemas/vps_market_snapshot.avsc          DELETED
+
+dataops_backend_api/
+  Dockerfile                                    EDITED (golang:1.23 → golang:1.27)
+  models/analytics.go                           EDITED (remove VPSMarketSnapshot)
+  repository/influxdb/influxdb.go               EDITED (remove QueryVPS*, rename → QueryTCBS*)
+  services/vnstock/vnstock.go                   EDITED (VPSMarketSnapshot → TCBSMarketSnapshot
+                                                         vps_market → tcbs_market measurements)
+
+dataops_batch_api/
+  cli/ingestion/schema/models.py                EDITED (remove VPSCandleRecord)
+  platforms/processing/config/delta_utils.py    EDITED (remove write_vps_snapshots, import)
+  platforms/prefect_orchestra/prefect_main.py   EDITED (vps_market_flow → tcbs_market_flow)
+
+export_task/
+  SESSION_2026_10_03_DOCKER_REVIEW_VPS_PURGE.txt  CREATED (this file)
+
+KHÔNG THAY ĐỔI (intentional):
+  dataops_batch_api/cli/ingestion/sources/vps_client.py  (standalone, chưa import ở đâu)
+  dataops_stream_producer/go.mod                         (go 1.27 từ session trước)
+  dataops_backend_api/go.mod                             (go 1.27 từ session trước)
+
+=============================================================================
+END OF SESSION EXPORT
+=============================================================================

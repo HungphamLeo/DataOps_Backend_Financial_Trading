@@ -1,0 +1,446 @@
+=============================================================================
+SESSION EXPORT — OKX → Binance Full Migration + SKILL.md Knowledge Sync
+Date: 2026-10-01
+Branch: 25092026_set_up_base_code
+Scope: github/skill/SKILL.md, dataops-stream-producer, dataops_backend_api,
+       dataops_batch_api, shared/platform, grafana
+Reference: OKX_TO_BINANCE_MIGRATION.md
+=============================================================================
+
+1. TỔNG QUAN SESSION
+-----------------------------------------------------------------------------
+Session này thực hiện 2 nhóm công việc:
+
+1.1 Cập nhật SKILL.md (github/skill/ + .bob/skills/)
+    - Đồng bộ toàn bộ kiến thức từ export_task/ và codebase thực tế vào SKILL.md
+    - Bổ sung SESSION_2026_09_29 knowledge (BinancePartitioner, IBM/sarama, DLQ)
+    - Ghi rõ cấu trúc thư mục dataops-stream-producer, env vars, Redis cache keys
+    - Bảng so sánh OKX vs Binance API chi tiết
+    - Mục TODO backlog từ export_task
+
+1.2 OKX → Binance Migration toàn bộ repo
+    - Dựa trên OKX_TO_BINANCE_MIGRATION.md làm reference guide
+    - 4 modules: dataops-stream-producer, dataops_backend_api, dataops_batch_api,
+      shared/platform + grafana
+    - Build verification: dataops-stream-producer EXIT 0 ✅
+
+
+=============================================================================
+2. THAY ĐỔI CHI TIẾT — SKILL.md
+=============================================================================
+
+2.1 File: github/skill/SKILL.md + C:\Users\Admin\.bob\skills\dataops-financial-trading\SKILL.md
+
+    Nội dung cập nhật:
+    - Section 1: liệt kê cụ thể 2 file export_task hiện có kèm mô tả
+    - Section 2: Go module names thực tế (dataops-stream-producer ✅, okx-analytics-api ⚠️)
+                 Hai Kafka client library: IBM/sarama (production) vs kafka-go (internal)
+    - Section 3: Bảng so sánh hai lớp Producer, BinancePartitioner detail,
+                 Confluent Wire Format, DLQ dual implementation, Consumer Groups
+    - Section 5.2: Cấu trúc thư mục đầy đủ, env vars với defaults, WS field mapping,
+                   VPS cron schedules, Redis key patterns, all Kafka topics
+    - Section 6: Bảng OKX vs Binance API differences
+    - Section 7: TODO backlog từ export_task
+    - Section 10: Mục Kết luận
+
+    File size: ~19,000 characters (từ ~5,500 characters phiên bản cũ)
+
+
+=============================================================================
+3. THAY ĐỔI CHI TIẾT — dataops-stream-producer
+=============================================================================
+
+3.1 Rename Avro schema files (pkg/schemas/)
+    TRƯỚC                          SAU
+    okx_trade_event.avsc      →    binance_trade_event.avsc
+    okx_orderbook_snapshot.avsc → binance_orderbook_snapshot.avsc
+    okx_liquidation_event.avsc →   binance_liquidation_event.avsc
+    vps_market_snapshot.avsc  →    vps_market_snapshot.avsc (namespace đổi)
+
+    Note: Avro name/namespace đã được đổi trong session trước
+          (BinanceTradeEvent, com.binance.vps.events)
+          Session này chỉ rename file names + fix vps namespace
+
+3.2 pkg/schemas/vps_market_snapshot.avsc
+    namespace: "com.okx.vps.events" → "com.binance.vps.events"
+
+3.3 pkg/producer/producer.go (registerSchemas)
+    filePath: "pkg/schemas/okx_trade_event.avsc"       → "binance_trade_event.avsc"
+    filePath: "pkg/schemas/okx_orderbook_snapshot.avsc" → "binance_orderbook_snapshot.avsc"
+    filePath: "pkg/schemas/okx_liquidation_event.avsc"  → "binance_liquidation_event.avsc"
+
+3.4 pkg/producer/types.go
+    Comment: "maps với okx_trade_event.avsc"       → "binance_trade_event.avsc"
+    Comment: "maps với okx_orderbook_snapshot.avsc" → "binance_orderbook_snapshot.avsc"
+    Comment: "maps với okx_liquidation_event.avsc"  → "binance_liquidation_event.avsc"
+    Comment: "Unix milliseconds từ OKX"             → "từ Binance"
+
+3.5 pkg/producer/transactional_producer.go
+    Comment example: "okx-producer-btc-usdt-1" → "binance-producer-btc-usdt-1"
+
+BUILD RESULT: go build ./... → EXIT 0 ✅
+
+
+=============================================================================
+4. THAY ĐỔI CHI TIẾT — dataops_backend_api
+=============================================================================
+
+4.1 go.mod — BREAKING CHANGE
+    module okx-analytics-api → module dataops-backend-api
+
+    Files cập nhật import paths (28 files):
+    api/rest/auth.go, crypto.go, indicators_accounting.go, rest.go, vnstock.go
+    app/server.go
+    configuration/configuration.go
+    constants/constants.go, defaults.go
+    infrastructure/gateway.go, load_balancer.go
+    logging/logger.go
+    main.go
+    middlewares/auth_tiers.go, jwt_auth.go, security.go
+    models/accounting.go, auth.go
+    redis/redis.go
+    repository/delta/delta.go, indicators_accounting.go, influxdb/influxdb.go, repository.go
+    services/accounting/accounting.go, analytics/crypto.go, authentication/authentication.go
+    services/indicator/indicator.go, vnstock/vnstock.go, services.go
+
+4.2 constants/constants.go
+    TRƯỚC                          SAU
+    OKX_FUTURE = "okx_future"  →  BINANCE_FUTURE = "binance_future"
+    OKX_SPOT   = "okx_spot"    →  BINANCE_SPOT   = "binance_spot"
+    Comment: "tài sản tiền điện tử (OKX)" → "(Binance)"
+
+4.3 constants/defaults.go
+    DefaultCryptoExchange = "OKX" → "BINANCE"
+
+4.4 repository/influxdb/influxdb.go — Interface + Implementation
+    Interface:
+      QueryOKXTrades()    → QueryBinanceTrades() → returns []models.BinanceTradeTick
+      QueryOKXOHLCV()     → QueryBinanceOHLCV()
+      QueryOKXOrderBook() → QueryBinanceOrderBook()
+      Comment "// OKX Crypto queries" → "// Binance Crypto queries"
+
+    InfluxDB measurements (Flux queries):
+      "okx_trades"       → "binance_trades"
+      "okx_orderbook"    → "binance_orderbook"
+      "okx_funding_rate" → "binance_funding_rate"
+      "okx_liquidation"  → "binance_liquidation"
+
+    Error messages:
+      "influxdb query okx_trades"   → "influxdb query binance_trades"
+      "influxdb iterate okx_trades" → "influxdb iterate binance_trades"
+
+    Struct fields (từ OKXTradeTick → BinanceTradeTick):
+      trade.Size       → trade.Quantity
+      record.Time()    → record.Time().UnixMilli() (int64 không phải time.Time)
+      candle.Timeframe → candle.Interval
+      snap.Bid/Ask     → xóa (VPSMarketSnapshot không có field này)
+
+4.5 repository/delta/delta.go
+    Interface:
+      QueryHistoricalTrades() → returns []models.BinanceTradeTick
+
+    Delta table paths:
+      "okx_trades" → "binance_trades" (2 places: QueryHistoricalTrades + QueryDailySummary)
+
+    Struct usage:
+      models.OKXTradeTick → models.BinanceTradeTick
+
+    DailySummary fields:
+      Date:        date  → date.UnixMilli()
+      TotalVolume  → Volume
+
+    OHLCV fields:
+      candle.Timeframe = "1d" → candle.Interval = "1d"
+      candle.Timestamp = t    → candle.Timestamp = t.UnixMilli()
+
+4.6 models/analytics.go — Thêm missing structs
+    Thêm mới (pre-existing build errors cần fix):
+      OrderBookSnapshot{InstID, BidsJSON, AsksJSON, Timestamp}
+      FundingRate{InstID, Rate, NextFundingTime, Timestamp}
+      Liquidation{InstID, Size, Price, Side, Timestamp}
+      TopMover{Symbol, Exchange, Price, ChangePct}
+      DailySummary{InstID, TradeCount, PriceLow/High/Open/Close, Volume, BuyVolume, SellVolume, VWAP, Date}
+
+4.7 api/rest/rest.go
+    Comment: "// Crypto Analytics (OKX data)" → "// Crypto Analytics (Binance data)"
+
+4.8 configuration/configuration.go — Fix pre-existing bug
+    utils.GetEnvAsString() → utils.GetEnv()     (function không tồn tại trong utils package)
+    utils.GetEnvAsInt()    → utils.GetEnvInt()   (function không tồn tại)
+    cfg.Redis.DB_0, _ = ... → cfg.Redis.DB_0 = ... (GetEnvInt không return error)
+
+4.9 configuration/config.go
+    Thêm //go:build ignore để tránh conflict với configuration.go
+    (Cả 2 file cùng package khai báo type Config struct)
+    config.go là bản refactored mới chưa được wire vào app
+
+BUILD STATUS: Pre-existing errors còn lại (không do migration):
+    - go-duckdb: external library incompatible với Go 1.26/Windows
+    - repository/repository.go: utils.GetTimeNow không tồn tại
+    - repository/indicators_accounting.go: gorm undefined (missing import)
+    - middlewares/auth_tiers.go: UserSession field name mismatch (Status/RoleID/UserID)
+    - middlewares/jwt_auth.go: unused import "time"
+    Note: Tất cả các lỗi này tồn tại từ TRƯỚC session này (xác nhận bằng git stash test)
+
+
+=============================================================================
+5. THAY ĐỔI CHI TIẾT — dataops_batch_api
+=============================================================================
+
+5.1 config.py
+    Docstring: "delta_bronze_okx" → "delta_bronze_binance"
+    Xóa backward-compat alias: OKX_CONFIG_YAML = CONFIG_DIR / "exchange_config.yaml"
+    (Đã không còn caller nào dùng alias này)
+
+5.2 cli/flows/serving/silver_flow.py
+    Default Kafka topic fallback:
+      "okx.trade.ticks"           → "binance.trade.ticks"
+      "okx.funding.rates"         → "binance.funding.rates"
+      "okx.alerts.funding-anomaly" → "binance.alerts.funding-anomaly"
+    Docstring: "okx.alerts.funding-anomaly Kafka topic" → "binance.alerts.funding-anomaly"
+
+5.3 cli/flows/serving/daily_pipeline.py
+    Docstring returns dict:
+      {"okx_spot": n, "okx_swap": n, ...} → {"binance_spot": n, "binance_futures": n, ...}
+
+5.4 platforms/prefect_orchestra/prefect_main.py
+    @flow(name="okx-full-daily-pipeline") → @flow(name="binance-full-daily-pipeline")
+    Docstring: "Bao gồm cả OKX và VPS" → "Bao gồm cả Binance và VPS"
+
+5.5 platforms/processing/spark_stack/spark_session.py
+    Docstring app_name default:
+      "OKX-Financial-Stream-Processor" → "Binance-Financial-Stream-Processor"
+
+5.6 log/config/logger_config.yaml
+    Comment example:
+      "cli.ingestion.sources.okx_client" → "cli.ingestion.sources.binance_client"
+
+
+=============================================================================
+6. THAY ĐỔI CHI TIẾT — shared/platform
+=============================================================================
+
+6.1 config/config.go
+    Struct rename:
+      OKXConfig{APIKey, SecretKey, Passphrase, BaseURL, WSBaseURL, WSURLPub, WSURLPri, IsSimulate}
+      → BinanceConfig{APIKey, SecretKey, BaseURL, WSBaseURL, WSURLSpot, WSURLFutures}
+
+    PlatformConfig field:
+      OKX OKXConfig → Binance BinanceConfig
+
+    Env vars:
+      OKX_API_KEY       → BINANCE_API_KEY
+      OKX_SECRET_KEY    → BINANCE_SECRET_KEY
+      OKX_PASSPHRASE    → (removed — Binance không có passphrase)
+      OKX_BASE_URL      → BINANCE_BASE_URL (default: https://api.binance.com)
+      OKX_WS_URL        → BINANCE_WS_URL (default: wss://stream.binance.com:9443/ws)
+      OKX_WS_URL_PUB    → BINANCE_WS_URL_SPOT (default: ...9443/stream)
+      OKX_WS_URL_PRI    → BINANCE_FUTURES_WS_URL (default: wss://fstream.binance.com/stream)
+      OKX_IS_SIMULATE   → (removed — Binance không có simulate mode riêng)
+
+    MinIO bucket default:
+      "okx-delta" → "binance-datalake"
+
+    Comment: "// Exchange Credentials - OKX" → "// Exchange Credentials - Binance"
+
+6.2 di/interfaces.go
+    Package comment: "okx-analytics-api" → "dataops-backend-api"
+
+6.3 observability/observability.go
+    Package comment: "okx-analytics-api" → "dataops-backend-api"
+    Usage example: InitLogger("okx-analytics-api"...) → InitLogger("dataops-backend-api"...)
+
+
+=============================================================================
+7. THAY ĐỔI CHI TIẾT — grafana
+=============================================================================
+
+7.1 File rename:
+    grafana/dashboards/okx-vps-main.json → binance-vps-main.json
+
+7.2 Nội dung dashboard (binance-vps-main.json):
+    description:    "OKX + VPS Securities..."   → "Binance + VPS Securities..."
+    panel title:    "OKX Crypto — Real-time"    → "Binance Crypto — Real-time"
+    InfluxDB bucket: "okx-realtime"             → "binance-realtime"
+    measurements:   "okx_trades"               → "binance_trades"
+                    "okx_funding_rate"          → "binance_funding_rate"
+    Funding rate filter: instId == "${inst_id}-SWAP" → instId == "${inst_id}"
+    Panel title:    "OKX Producer Lag (avg)"    → "Binance Producer Lag (avg)"
+    Panel title:    "Funding Rate (...-SWAP)"   → "Funding Rate (...)"
+    tags:           ["okx","vps",...]           → ["binance","vps",...]
+    Symbol options: BTC-USDT → BTCUSDT, ETH-USDT → ETHUSDT,
+                    SOL-USDT → SOLUSDT, BNB-USDT → BNBUSDT
+    Template label: "OKX Instrument"            → "Binance Symbol"
+    Dashboard title: "OKX + VPS Market Analytics" → "Binance + VPS Market Analytics"
+    uid:            "okx-vps-main"              → "binance-vps-main"
+
+
+=============================================================================
+8. DANH SÁCH FILE THAY ĐỔI VÀ TẠO MỚI
+=============================================================================
+
+File tạo mới (Created):
+-----------------------
+1. grafana/dashboards/binance-vps-main.json              (renamed từ okx-vps-main.json)
+2. dataops-stream-producer/pkg/schemas/binance_trade_event.avsc
+3. dataops-stream-producer/pkg/schemas/binance_orderbook_snapshot.avsc
+4. dataops-stream-producer/pkg/schemas/binance_liquidation_event.avsc
+5. export_task/SESSION_2026_10_01_OKX_TO_BINANCE_MIGRATION_FULL.txt (file này)
+6. github/skill/SKILL.md                                  (tạo mới — trước đây rỗng)
+
+File xóa (Deleted):
+-------------------
+1. grafana/dashboards/okx-vps-main.json
+2. dataops-stream-producer/pkg/schemas/okx_trade_event.avsc
+3. dataops-stream-producer/pkg/schemas/okx_orderbook_snapshot.avsc
+4. dataops-stream-producer/pkg/schemas/okx_liquidation_event.avsc
+
+File sửa đổi (Modified):
+------------------------
+dataops-stream-producer:
+  1. pkg/schemas/vps_market_snapshot.avsc
+  2. pkg/producer/producer.go
+  3. pkg/producer/transactional_producer.go
+  4. pkg/producer/types.go
+
+dataops_backend_api:
+  5.  go.mod
+  6.  api/rest/auth.go          (import path)
+  7.  api/rest/crypto.go        (import path)
+  8.  api/rest/indicators_accounting.go (import path)
+  9.  api/rest/rest.go          (import path + comment)
+  10. api/rest/vnstock.go       (import path)
+  11. app/server.go             (import path)
+  12. configuration/config.go   (//go:build ignore thêm vào)
+  13. configuration/configuration.go (import path + fix utils.GetEnv*)
+  14. constants/constants.go    (OKX_* → BINANCE_*, import path)
+  15. constants/defaults.go     (DefaultCryptoExchange, import path)
+  16. infrastructure/gateway.go (import path)
+  17. infrastructure/load_balancer.go (import path)
+  18. logging/logger.go         (import path)
+  19. main.go                   (import path)
+  20. middlewares/auth_tiers.go (import path)
+  21. middlewares/jwt_auth.go   (import path)
+  22. middlewares/security.go   (import path)
+  23. models/accounting.go      (import path)
+  24. models/analytics.go       (import path + thêm 5 structs mới)
+  25. models/auth.go            (import path)
+  26. redis/redis.go             (import path)
+  27. repository/delta/delta.go  (import path + BinanceTradeTick + paths + fixes)
+  28. repository/indicators_accounting.go (import path)
+  29. repository/influxdb/influxdb.go (import path + QueryBinance* + measurements + fixes)
+  30. repository/repository.go   (import path)
+  31. services/accounting/accounting.go (import path)
+  32. services/analytics/crypto.go (import path)
+  33. services/authentication/authentication.go (import path)
+  34. services/indicator/indicator.go (import path)
+  35. services/vnstock/vnstock.go (import path)
+  36. services/services.go (import path)
+
+dataops_batch_api:
+  37. cli/flows/serving/silver_flow.py
+  38. cli/flows/serving/daily_pipeline.py
+  39. platforms/prefect_orchestra/prefect_main.py
+  40. platforms/processing/spark_stack/spark_session.py
+  41. config.py
+  42. log/config/logger_config.yaml
+
+shared/platform:
+  43. config/config.go
+  44. di/interfaces.go
+  45. observability/observability.go
+
+github/skill:
+  46. SKILL.md (cập nhật toàn diện)
+
+.bob/skills:
+  47. C:\Users\Admin\.bob\skills\dataops-financial-trading\SKILL.md (đồng bộ)
+
+
+=============================================================================
+9. KẾT QUẢ BUILD & VERIFICATION
+=============================================================================
+
+dataops-stream-producer:
+  go build ./...  → EXIT 0 ✅ (không có lỗi)
+  (tests trong pkg/producer/ vẫn PASS từ session trước)
+
+dataops_backend_api:
+  go build ./...  → Pre-existing errors (5 nhóm lỗi tồn tại từ trước):
+    1. go-duckdb: external C library incompatible (Windows + Go 1.26)
+    2. repository.go: utils.GetTimeNow undefined
+    3. indicators_accounting.go: gorm undefined
+    4. auth_tiers.go: UserSession field name mismatch
+    5. jwt_auth.go: unused import
+  ⚠️ Không có lỗi MỚI do migration tạo ra (đã xác nhận bằng git stash test)
+
+dataops_batch_api: Python — không build check, chỉ syntax review
+shared/platform: Không có binary riêng (shared library)
+
+
+=============================================================================
+10. LESSONS LEARNED — KỸ THUẬT
+=============================================================================
+
+10.1 Go module naming conflict
+    Khi rename module, tất cả import paths trong .go files phải được cập nhật.
+    Dùng PowerShell replace over files toàn bộ thư mục:
+      Get-ChildItem -Recurse -Include "*.go" | ForEach-Object {
+          (Get-Content $_.FullName -Raw) -replace 'old-module', 'new-module' |
+          Set-Content $_.FullName -NoNewline
+      }
+
+10.2 Hai file cùng khai báo type trong cùng package
+    Khi có 2 file trong cùng package khai báo `type Config struct`:
+    → Dùng `//go:build ignore` để loại file cũ ra khỏi build
+    → Không xóa file (giữ làm reference / migration target)
+
+10.3 BinanceTradeTick field names khác OKXTradeTick
+    OKXTradeTick.Timestamp = time.Time   →  BinanceTradeTick.Timestamp = int64
+    OKXTradeTick.Size                    →  BinanceTradeTick.Quantity
+    → record.Time() phải gọi .UnixMilli() khi assign vào int64 field
+    → Khi scan VPSMarketSnapshot không có Bid/Ask, phải xóa code đó
+
+10.4 Pre-existing build errors cần phân biệt
+    Luôn xác nhận lỗi có tồn tại trước task hay không bằng git stash test:
+      git stash; go build ./...; git stash pop
+    Nếu lỗi đã có → document là "pre-existing", không phải do migration gây ra
+
+10.5 OKX Passphrase không có trong Binance
+    OKXConfig có Passphrase (3-factor auth: apiKey + secret + passphrase)
+    BinanceConfig chỉ có APIKey + SecretKey (2-factor: apiKey + HMAC signature)
+    → Xóa Passphrase field và OKX_PASSPHRASE env var khi migrate
+
+
+=============================================================================
+11. TODO — VIỆC CẦN LÀM TIẾP THEO
+=============================================================================
+
+[HIGH — Pre-existing build errors cần fix riêng]
+    A. repository/repository.go: thêm utils.GetTimeNow() vào utils/time.go
+    B. repository/indicators_accounting.go: thêm import "gorm.io/gorm"
+    C. middlewares/auth_tiers.go: đổi user.Status → user.IsActive (hoặc field đúng)
+                                   user.RoleID → user.RoleId
+                                   user.UserID → user.UserId
+    D. middlewares/jwt_auth.go: xóa unused import "time"
+    E. go-duckdb: nâng cấp phiên bản hoặc dùng build tag để skip trên Windows
+
+[HIGH — Implement còn thiếu]
+    F. dataops-stream-producer/pkg/sources/binance/rest/ — REST client rỗng
+    G. Test kết nối Binance WebSocket thực tế với combined stream
+    H. Handle Binance ping/pong (300s keepalive)
+
+[MEDIUM]
+    I. configuration/config.go trong dataops_backend_api:
+       Hiện đang //go:build ignore. Khi muốn migrate sang bản mới:
+       - Wire configuration.Load() vào app/server.go thay cho configuration.FromEnv()
+       - Xóa configuration/configuration.go (bản cũ)
+       - Xóa //go:build ignore tag
+    J. Test bronze_flow với Binance klines thực tế
+
+[LOW]
+    K. dataops_backend_api/go.mod: package name là "dataops-backend-api"
+       nhưng service log vẫn print "okx-analytics-api" ở một số chỗ — cần scan lại
+    L. Tạo .env files cho từng service
+    M. Update grafana InfluxDB bucket từ "okx-realtime" → "binance-realtime" ở infra level
+=============================================================================

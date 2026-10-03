@@ -1,0 +1,120 @@
+=============================================================================
+SESSION EXPORT — PROTOBUF REFACTOR, DOCKER INFRASTRUCTURE CONSOLIDATION & DOCKER PRODUCTION SKILL INTEGRATION
+Date: 2026-03-30
+Branch: 25092026_set_up_base_code
+Scope: dataops-protobuf, dataops-stream-producer, dataops_backend_api,
+       dataops_batch_api, docker-compose.yml, ai_workspace_management allskill
+References:
+  - docs/openapi-v1.0.0.json (TCBS iFlash Open API v1.0.0)
+  - github/skill/SKILL.md (Project Skill Manifest)
+  - allskill/docker_production.skill.md (Docker Production Best Practice)
+=============================================================================
+
+1. TỔNG QUAN SESSION
+-----------------------------------------------------------------------------
+Mục tiêu session:
+1. Đọc và tiếp thu tri thức từ `github/skill/SKILL.md` (Thứ tự ưu tiên tri thức, NFR Zero Data Loss, Strict Ordering, Binance/TCBS pipelines).
+2. Refactor toàn bộ schema `.proto` trong `dataops-protobuf/` để đồng bộ 100% với Open API spec (`docs/openapi-v1.0.0.json` - TCBS iFlash) và tương thích hoàn toàn với các models, services trong `dataops_backend_api`.
+3. Trích xuất kiến thức từ 4 infographic chuyên sâu về Docker Production và tạo file `docker_production.skill.md` vào `../ai_workspace_management/.ai_workspace/allskill/`, đồng thời cập nhật `INDEX.md`.
+4. Review, chuẩn hóa và gom toàn bộ hạ tầng Docker (Dockerfiles, docker-compose.yml) ra repo tổng: áp dụng multi-stage build, non-root user (least privilege), healthchecks, resource limits, isolated network, và dọn dẹp các thư mục rỗng/rải rác.
+5. Tư vấn kiến trúc và best practice quản lý dependencies/package giữa Golang (go.mod) và Python (requirements.txt) trong môi trường Polyglot Microservices với Docker.
+
+
+=============================================================================
+2. CHI TIẾT CÁC THAY ĐỔI THEO TỪNG MODULE
+=============================================================================
+
+2.1 dataops-protobuf/ (Protobuf Schema Refactor)
+-----------------------------------------------------------------------------
+Đã refactor và chuẩn hóa toàn bộ các file schema `.proto` với syntax `proto3`:
+
+- analytics/analytics.proto:
+  * Package: `analytics.v1`, go_package: `dataops-protobuf/analytics;analyticsv1`.
+  * Chuẩn hóa RPC: `GetOHLCV`, `GetVWAP`, `GetFundingRate`, `GetDailySummary`, `StreamBinanceTrades`, `StreamAlerts`.
+  * Fields: Đồng bộ với `dataops_backend_api/models/analytics.go` (`BinanceTradeEvent`, `Alert`, `VWAPPoint`, `FundingRatePoint`, `DailySummaryResponse`).
+
+- vnstock/vnstock.proto:
+  * Package: `vnstock.v1`, go_package: `dataops-protobuf/vnstock;vnstockv1`.
+  * Đồng bộ hoàn toàn theo TCBS iFlash Open API:
+    - Enums: `VNExchange` (HOSE, HNX, UPCOM, DERIV), `TCBSIndexCode` (HOSE=1, VN30=2, HNX=3, VN100=11...), `SessionState` (ATO, CONTINUOUS, ATC, BREAK, CLOSED, HALT), `InvestorType` (SHEEP, WOLF, SHARK, ALL).
+    - Messages:
+      * `TCBSMarketSnapshot`: Khớp 3 cấp OrderBook (`bid_price_01..03`, `offer_price_01..03`), `total_vol`, `total_val`, `buy_foreign_qty`, `sell_foreign_qty`, `room`.
+      * `TCBSBSASnapshot`: Phục vụ endpoint `/nyx/v1/intraday/{ticker}/bsa` (`bup`, `sdp`, `bsr`, `event_time`).
+      * `TCBSIntradayTick`: Phục vụ endpoint `/nyx/v1/intraday/{ticker}/his/paging` (`price`, `volume`, `price_change`, `action`, `buy_acc`, `sell_acc`, `highlight`).
+      * `PutThroughSnap`: Giao dịch thỏa thuận TCBS Tartarus.
+      * `MarketSummaryResponse`: Map các indices (`VNINDEX`, `VN30`, `VN100`) và `market_breadth`.
+
+- market-data/market_data.proto:
+  * Package: `marketdata.v1`, go_package: `dataops-protobuf/marketdata;marketdatav1`.
+  * RPC methods: `GetTicker`, `GetOrderBook`, `GetKline`, `StreamTicker`, `StreamOrderBook`, `StreamTrades`.
+  * Messages: `TickerResponse`, `OrderBookResponse` (bids/asks với `orders`), `Kline` (`quote_vol`), `MarketTrade`.
+
+- batch-data/batch_data.proto:
+  * Package: `batchdata.v1`, go_package: `dataops-protobuf/batchdata;batchdatav1`.
+  * Đồng bộ Delta Lake Bronze/Silver/Gold: `BatchOHLCVBar` (`vwap`, `quote_volume`, `trade_count`), `IndicatorPoint` (`meta_json`), `DailySummaryBatchRequest/Response`.
+
+- data-query/data_query.proto:
+  * Package: `dataquery.v1`, go_package: `dataops-protobuf/dataquery;dataqueryv1`.
+  * Thêm `QueryBSASummary` (`BSASummaryRequest/Response`) bên cạnh `QueryMarketSummary`, `QueryHistoricalRange`, `QuerySignals`.
+
+- ingestion/ingestion.proto (Tạo mới):
+  * Package: `ingestion.v1`, go_package: `dataops-protobuf/ingestion;ingestionv1`.
+  * Định nghĩa `IngestionService`: `TriggerBatchIngestion`, `GetIngestionStatus`, `IngestRawTicks` (Streaming raw ticks payload kèm metadata).
+
+
+2.2 allskill Integration (Docker Production Skill)
+-----------------------------------------------------------------------------
+- Đọc nội dung 4 infographic:
+  1. Docker Compose Production Setup (App + DB, Healthcheck, Secrets, Restart policy, Resource limits).
+  2. Docker Environment & Secrets (ENV, .env, Docker secrets, 12-Factor App config).
+  3. Docker Security (Non-root user, Linux capabilities drop ALL, Read-only filesystem, Image CVE scan).
+  4. Docker Resource Management (CPU/Memory limits & reservations, OOM 137 kill, stats, prune).
+- Đã tạo file: `../ai_workspace_management/.ai_workspace/allskill/docker_production.skill.md`.
+- Đã cập nhật mục lục: `../ai_workspace_management/.ai_workspace/allskill/INDEX.md` (Skill #23: docker-production).
+
+
+2.3 Docker Infrastructure Consolidation & Security Hardening
+-----------------------------------------------------------------------------
+- Dọn dẹp thư mục thừa/rải rác:
+  * Xóa bỏ thư mục lồng nhau `dataops_batch_api/infra_dataops_batch_trading/`.
+  * Gom Dockerfile của batch pipeline về đúng chuẩn: [`dataops_batch_api/Dockerfile`](dataops_batch_api/Dockerfile).
+  * Xóa bỏ các folder rỗng không cần thiết: `infra/gateway/`, `infra/load_balancer/`.
+
+- Chuẩn hóa Dockerfiles (Multi-stage + Non-root + Healthcheck):
+  * `dataops-stream-producer/Dockerfile`: Multi-stage Go build (`-ldflags="-w -s"`), base `alpine:3.19`, user non-root `appuser:appgroup`, `HEALTHCHECK` tích hợp.
+  * `dataops_backend_api/Dockerfile`: Multi-stage Go build, base `alpine:3.19`, user non-root `appuser:appgroup`, `HEALTHCHECK` qua `curl http://localhost:8080/health`.
+  * `dataops_batch_api/Dockerfile`: Multi-stage Python 3.11 + OpenJDK 17, user non-root `appuser:appgroup`, phân quyền thư mục `log/log_storage`.
+
+- Nâng cấp `docker-compose.yml` tổng (Unified Production Infrastructure):
+  * Mạng cô lập: Custom bridge network `dataops-internal-net`.
+  * Healthchecks toàn diện: Kafka 3x (KRaft broker api check), Schema Registry (`/subjects`), MinIO (`/minio/health/live`), MySQL (`mysqladmin ping`), Redis (`redis-cli ping`), InfluxDB (`/health`).
+  * Khởi động đồng bộ: `depends_on: { condition: service_healthy }` trên tất cả dependent services.
+  * Resource Limits & Reservations: Giới hạn CPU và RAM cho toàn bộ 14 containers (chống Noisy Neighbor & OOM Exit Code 137).
+  * Restart Policy: `restart: unless-stopped`.
+  * Named Volumes bền vững: `kafka1-data`, `kafka2-data`, `kafka3-data`, `minio-data`, `mysql-data`, `redis-data`, `influxdb-data`, `grafana-data`.
+
+
+=============================================================================
+3. BÀI HỌC KỸ THUẬT & QUY TẮC ĐƯỢC RÚT RA (LESSONS LEARNED)
+=============================================================================
+
+1. Polyglot Architecture & Package Isolation:
+   - Golang (`dataops-stream-producer`, `dataops_backend_api`) quản lý độc lập bằng `go.mod`/`go.sum` và biên dịch ra static binary trong container Alpine nhỏ gọn (<30MB).
+   - Python (`dataops_batch_api`) quản lý độc lập bằng `dataops_batch_api/requirements.txt` trong container `python:3.11-slim` kèm Java JRE cho Spark.
+   - Không gộp dependencies của 2 ngôn ngữ vào cùng 1 runtime; giao tiếp thuần túy qua Kafka / S3 / REST / gRPC.
+
+2. Production Docker Synchronization:
+   - Tuyệt đối không dùng `depends_on` dạng list thuần túy cho database/broker, phải dùng `condition: service_healthy` kết hợp `healthcheck` chuẩn lệnh của service (ví dụ `kafka-broker-api-versions`, `redis-cli ping`, `mysqladmin ping`).
+
+3. TCBS Protobuf Contract Alignment:
+   - Các trường trong Protobuf phải nhất quán với InfluxDB measurements (`tcbs_market`, `tcbs_bsa`, `tcbs_intraday`, `tcbs_ohlcv`) và Open API schema specs (3-level orderbook, BSA parameters, Intraday price action).
+
+
+=============================================================================
+4. CÁC ĐẦU VIỆC TIẾP THEO (NEXT STEPS)
+=============================================================================
+1. [Backend Test Fix] Sửa import `gorm` trong `repository/indicators_accounting.go` và đồng bộ trường `models.UserSession` trong `middlewares/auth_tiers.go` để chạy `go test ./...` pass 100%.
+2. [Protobuf Codegen] Viết script/Makefile tự động biên dịch `.proto` sang code Go struct và Python classes.
+3. [Binance REST Client] Triển khai code cho thư mục `dataops-stream-producer/pkg/sources/binance/rest/`.
+4. [Infra Validation] Chạy thử `docker-compose up -d --build` trên môi trường Docker để kiểm tra tính tương thích thực tế.
+=============================================================================

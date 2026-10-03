@@ -1,0 +1,58 @@
+{
+  "type": "record",
+  "name": "BinanceTradeEvent",
+  "namespace": "com.binance.vps.events",
+  "doc": "A single trade tick from Binance exchange. Published when 2 counterparties match an order.",
+  "fields": [
+    {
+      "name": "instId",
+      "type": "string",
+      "doc": "Instrument ID, e.g. BTCUSDT, ETHUSDT"
+    },
+    {
+      "name": "tradeId",
+      "type": "string",
+      "doc": "Unique trade ID assigned by Binance"
+    },
+    {
+      "name": "price",
+      "type": "double",
+      "doc": "Execution price"
+    },
+    {
+      "name": "size",
+      "type": "double",
+      "doc": "Trade size in base currency"
+    },
+    {
+      "name": "side",
+      "type": {
+        "type": "enum",
+        "name": "TradeSide",
+        "symbols": ["buy", "sell"]
+      },
+      "doc": "Taker side: buy = buyer is taker (aggressive), sell = seller is taker"
+    },
+    {
+      "name": "tsMs",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Trade timestamp in Unix milliseconds (from Binance)"
+    },
+    {
+      "name": "producedAtMs",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "When this event was produced into Kafka (for lag monitoring)"
+    },
+    {
+      "name": "instType",
+      "type": {
+        "type": "enum",
+        "name": "InstrumentType",
+        "symbols": ["SPOT", "FUTURES", "SWAP", "OPTION"]
+      },
+      "doc": "Instrument type: SPOT=현물, SWAP=perpetual futures, FUTURES=dated futures"
+    }
+  ]
+}

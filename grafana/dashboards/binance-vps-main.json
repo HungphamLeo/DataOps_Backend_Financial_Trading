@@ -1,0 +1,228 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_INFLUXDB",
+      "label": "InfluxDB",
+      "description": "InfluxDB v2 datasource",
+      "type": "datasource",
+      "pluginId": "influxdb",
+      "pluginName": "InfluxDB"
+    }
+  ],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0" },
+    { "type": "datasource", "id": "influxdb", "name": "InfluxDB", "version": "1.0.0" },
+    { "type": "panel", "id": "timeseries", "name": "Time series", "version": "" },
+    { "type": "panel", "id": "stat",       "name": "Stat",        "version": "" },
+    { "type": "panel", "id": "table",      "name": "Table",       "version": "" },
+    { "type": "panel", "id": "gauge",      "name": "Gauge",       "version": "" }
+  ],
+  "annotations": { "list": [] },
+  "description": "Binance + VPS Securities — Real-time Market Analytics Dashboard",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Binance Crypto — Real-time",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "currencyUSD"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "id": 2,
+      "options": { "legend": { "calcs": ["last", "min", "max"], "displayMode": "table" } },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+          "query": "from(bucket: \"okx-realtime\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"okx_trades\")\n  |> filter(fn: (r) => r.instId == \"${inst_id}\")\n  |> filter(fn: (r) => r._field == \"price\")\n  |> aggregateWindow(every: 1m, fn: last, createEmpty: false)",
+          "refId": "A"
+        }
+      ],
+      "title": "Price — ${inst_id}",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 1 },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "id": 3,
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+          "query": "from(bucket: \"okx-realtime\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"okx_trades\")\n  |> filter(fn: (r) => r.instId == \"${inst_id}\")\n  |> filter(fn: (r) => r._field == \"size\")\n  |> aggregateWindow(every: 1m, fn: sum, createEmpty: false)",
+          "refId": "A"
+        }
+      ],
+      "title": "Volume (1m) — ${inst_id}",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "orange", "mode": "fixed" },
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 9 },
+      "id": 4,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto" },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+          "query": "from(bucket: \"okx-realtime\")\n  |> range(start: -8h)\n  |> filter(fn: (r) => r._measurement == \"okx_funding_rate\")\n  |> filter(fn: (r) => r.instId == \"${inst_id}-SWAP\")\n  |> filter(fn: (r) => r._field == \"funding_rate\")\n  |> last()",
+          "refId": "A"
+        }
+      ],
+      "title": "Funding Rate (${inst_id})",
+      "type": "gauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
+      "id": 10,
+      "title": "Vietnam Stock Market (VPS)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1 }, "unit": "currencyVND" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "id": 11,
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+          "query": "from(bucket: \"okx-realtime\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"vps_market\")\n  |> filter(fn: (r) => r.symbol == \"${vn_symbol}\")\n  |> filter(fn: (r) => r._field == \"price\")\n  |> aggregateWindow(every: 1m, fn: last, createEmpty: false)",
+          "refId": "A"
+        }
+      ],
+      "title": "Price (×1000 VND) — ${vn_symbol}",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1 }, "unit": "short" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "id": 12,
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+          "query": "from(bucket: \"okx-realtime\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"vps_market\")\n  |> filter(fn: (r) => r.symbol == \"${vn_symbol}\")\n  |> filter(fn: (r) => r._field == \"volume\")\n  |> aggregateWindow(every: 5m, fn: sum, createEmpty: false)",
+          "refId": "A"
+        }
+      ],
+      "title": "Volume (5m) — ${vn_symbol}",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "id": 20,
+      "title": "Infrastructure Health",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 500 },
+              { "color": "red", "value": 2000 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 23 },
+      "id": 21,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+          "query": "from(bucket: \"okx-realtime\")\n  |> range(start: -5m)\n  |> filter(fn: (r) => r._measurement == \"okx_trades\")\n  |> filter(fn: (r) => r._field == \"producer_lag_ms\")\n  |> aggregateWindow(every: 30s, fn: mean, createEmpty: false)",
+          "refId": "A"
+        }
+      ],
+      "title": "Binance Producer Lag (avg)",
+      "type": "stat"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "tags": ["binance", "vps", "crypto", "vietnam", "real-time"],
+  "templating": {
+    "list": [
+      {
+        "current": { "text": "BTCUSDT", "value": "BTCUSDT" },
+        "hide": 0,
+        "includeAll": false,
+        "name": "inst_id",
+        "options": [
+          { "text": "BTCUSDT", "value": "BTCUSDT" },
+          { "text": "ETHUSDT", "value": "ETHUSDT" },
+          { "text": "SOLUSDT", "value": "SOLUSDT" },
+          { "text": "BNBUSDT", "value": "BNBUSDT" }
+        ],
+        "query": "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT",
+        "type": "custom",
+        "label": "Binance Symbol"
+      },
+      {
+        "current": { "text": "VNM", "value": "VNM" },
+        "hide": 0,
+        "includeAll": false,
+        "name": "vn_symbol",
+        "options": [
+          { "text": "VNM", "value": "VNM" },
+          { "text": "HPG", "value": "HPG" },
+          { "text": "VIC", "value": "VIC" },
+          { "text": "SSI", "value": "SSI" },
+          { "text": "VHM", "value": "VHM" }
+        ],
+        "query": "VNM,HPG,VIC,SSI,VHM",
+        "type": "custom",
+        "label": "VN Stock Symbol"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "Asia/Ho_Chi_Minh",
+  "title": "Binance + VPS Market Analytics",
+  "uid": "binance-vps-main",
+  "version": 1
+}

@@ -1,0 +1,159 @@
+syntax = "proto3";
+
+package analytics.v1;
+
+option go_package = "dataops-protobuf/analytics;analyticsv1";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── Analytics Service ────────────────────────────────────────────────────────
+// Service định nghĩa các RPC methods — contract giữa client, stream processing và API server
+
+service AnalyticsService {
+  // Unary RPC: 1 request → 1 response (tương thích REST endpoints)
+  rpc GetOHLCV(OHLCVRequest) returns (OHLCVResponse);
+  rpc GetVWAP(VWAPRequest) returns (VWAPResponse);
+  rpc GetFundingRate(FundingRateRequest) returns (FundingRateResponse);
+  rpc GetDailySummary(DailySummaryRequest) returns (DailySummaryResponse);
+
+  // Server-streaming RPC: 1 request → nhiều responses (stream)
+  rpc StreamBinanceTrades(StreamTradesRequest) returns (stream BinanceTradeEvent);
+  rpc StreamAlerts(StreamAlertsRequest) returns (stream Alert);
+}
+
+// ─── Common Types ─────────────────────────────────────────────────────────────
+
+message TimeRange {
+  int64 from_ms = 1;  // Unix milliseconds
+  int64 to_ms   = 2;
+}
+
+message Pagination {
+  int32 limit  = 1;
+  int32 offset = 2;
+}
+
+// ─── OHLCV ───────────────────────────────────────────────────────────────────
+
+message OHLCVRequest {
+  string     symbol     = 1;  // e.g. "BTCUSDT" hoặc "VCB"
+  string     interval   = 2;  // "1m", "5m", "15m", "1h", "1d"
+  TimeRange  range      = 3;
+  string     source     = 4;  // "binance" | "tcbs" | "vps"
+  Pagination pagination = 5;
+}
+
+message OHLCVCandle {
+  int64  timestamp_ms = 1;
+  double open         = 2;
+  double high         = 3;
+  double low          = 4;
+  double close        = 5;
+  double volume       = 6;
+  double vwap         = 7;  // volume-weighted avg price for this candle
+}
+
+message OHLCVResponse {
+  string               symbol    = 1;
+  string               interval  = 2;
+  repeated OHLCVCandle candles   = 3;
+  int64                total     = 4; // total count for pagination
+}
+
+// ─── VWAP ─────────────────────────────────────────────────────────────────────
+
+message VWAPRequest {
+  string    symbol   = 1; // "BTCUSDT"
+  string    interval = 2; // "1m", "5m", "1h"
+  TimeRange range    = 3;
+}
+
+message VWAPPoint {
+  int64  window_start_ms = 1;
+  int64  window_end_ms   = 2;
+  string symbol          = 3;
+  string interval        = 4;
+  double vwap            = 5;
+  double volume          = 6;
+  int64  trade_count     = 7;
+  double avg_lag_ms      = 8; // producer lag monitoring
+}
+
+message VWAPResponse {
+  string             symbol = 1;
+  repeated VWAPPoint points = 2;
+}
+
+// ─── Funding Rate ─────────────────────────────────────────────────────────────
+
+message FundingRateRequest {
+  string    symbol = 1; // "BTCUSDT"
+  TimeRange range  = 2;
+}
+
+message FundingRatePoint {
+  int64  timestamp_ms      = 1;
+  double rate              = 2;  // e.g. 0.0001 = 0.01%
+  double next_rate         = 3;
+  int64  funding_time_ms   = 4;
+  string next_funding_time = 5;
+  double zscore            = 6;  // rolling 30-day Z-score
+  string signal            = 7;  // "EXTREME_LONG" | "NEUTRAL" | "EXTREME_SHORT"
+}
+
+message FundingRateResponse {
+  string                    symbol = 1;
+  repeated FundingRatePoint points = 2;
+}
+
+// ─── Daily Summary ────────────────────────────────────────────────────────────
+
+message DailySummaryRequest {
+  string symbol = 1;
+  string date   = 2; // "2026-03-30" format hoặc Unix date
+}
+
+message DailySummaryResponse {
+  string symbol       = 1;
+  string date         = 2;
+  double price_open   = 3;
+  double price_high   = 4;
+  double price_low    = 5;
+  double price_close  = 6;
+  double total_volume = 7;
+  double buy_volume   = 8;
+  double sell_volume  = 9;
+  double vwap         = 10;
+  int64  trade_count  = 11;
+}
+
+// ─── Streaming Types ──────────────────────────────────────────────────────────
+
+message StreamTradesRequest {
+  repeated string symbols = 1; // subscribe nhiều symbols cùng lúc, e.g. ["BTCUSDT", "ETHUSDT"]
+}
+
+message BinanceTradeEvent {
+  string symbol       = 1; // e.g. "BTCUSDT"
+  string trade_id     = 2;
+  double price        = 3;
+  double quantity     = 4;
+  string side         = 5; // "buy" | "sell"
+  int64  timestamp_ms = 6;
+}
+
+message StreamAlertsRequest {
+  repeated string symbols          = 1;
+  string          source           = 2; // "binance" | "tcbs"
+  double          lag_threshold_ms = 3; // alert khi lag > threshold
+}
+
+message Alert {
+  string alert_type   = 1; // "funding_anomaly" | "unusual_volume" | "bsa_anomaly" | "price_spike" | "consumer_lag"
+  string symbol       = 2;
+  string source       = 3; // "binance" | "tcbs"
+  string message      = 4;
+  double value        = 5; // trigger value (price, lag ms, funding rate, volume)
+  double z_score      = 6;
+  int64  timestamp_ms = 7;
+}

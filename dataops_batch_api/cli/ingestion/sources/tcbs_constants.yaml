@@ -1,0 +1,181 @@
+# tcbs_constants.yaml — TCBS iFlash Open API Constants
+#
+# Single source of truth cho tất cả enums, codes, endpoint paths của TCBS.
+# Không được hardcode bất kỳ giá trị nào trong đây vào source code.
+#
+# Reference: openapi-v1.0.0.json — TCBS iFlash Open API v1.0.0
+# Contact:   openapi@tcbs.com.vn
+# Base URL:  https://openapi.tcbs.com.vn
+#
+# Pattern sử dụng:
+#   from cli.ingestion.sources.tcbs_client import TCBSConstants
+#   idx = TCBSConstants.index_code("HOSE")   # → 1
+#   TCBSConstants.validate_price_type("LO")  # → raises nếu invalid
+
+# ─── API Endpoints (paths từ openapi spec) ────────────────────────────────────
+endpoints:
+  # Auth
+  token:                      "/gaia/v1/oauth2/openapi/token"
+
+  # Market Data (Tartarus & Nyx services)
+  ticker_commons:             "/tartarus/v1/tickerCommons"
+  ticker_snaps:               "/tartarus/v1/tickerSnaps"
+  put_through_snaps:          "/tartarus/v1/putThroughSnaps"
+  derivatives:                "/tartarus/v1/derivatives"
+  derivative_contracts:       "/api/v1/derivatives/contracts"
+  securities:                 "/ananke/v1/securities"
+
+  # Intraday Analytics (Nyx service)
+  intraday_bsa:               "/nyx/v1/intraday/{ticker}/bsa"
+  intraday_bsa_ext:           "/nyx/v1/intraday/{ticker}/bsa-ext"
+  intraday_bsa_month:         "/nyx/v1/intraday/{ticker}/bsa-month"
+  intraday_history_paging:    "/nyx/v1/intraday/{ticker}/his/paging"
+
+  # Account Management (Aion service)
+  account_cash:               "/aion/v1/accounts/{accountNo}/cashInvestments"
+  account_orders:             "/aion/v1/accounts/{accountNo}/orders"
+  account_order_detail:       "/aion/v1/accounts/{accountNo}/orders/{orderID}"
+  account_matching_details:   "/aion/v1/accounts/{accountNo}/matching-details"
+  account_ppse:               "/aion/v1/accounts/{accountNo}/ppse"
+  account_ppse_symbol:        "/aion/v1/accounts/{accountNo}/ppse/{symbol}"
+  account_ppse_symbol_price:  "/aion/v1/accounts/{accountNo}/ppse/{symbol}/{price}"
+  account_stock_asset:        "/aion/v1/accounts/{accountNo}/se"
+  customer_accounts:          "/aion/v1/customers/{custodyId}/accounts"
+
+  # Order Management (Akhlys service)
+  order_place:                "/akhlys/v1/accounts/{accountNo}/orders"
+  order_update:               "/akhlys/v1/accounts/{accountNo}/orders/{orderId}"
+  order_cancel:               "/akhlys/v1/accounts/{accountNo}/cancel-orders"
+
+  # Derivative Trading (Khronos service)
+  deriv_order_place:          "/khronos/v1/order/place"
+  deriv_order_change:         "/khronos/v1/order/change"
+  deriv_order_cancel:         "/khronos/v1/order/cancel"
+  deriv_order_inday:          "/khronos/v1/order/in-day"
+  deriv_condition_place:      "/khronos/v1/order/condition/place"
+  deriv_condition_change:     "/khronos/v2/order/condition/change"
+  deriv_condition_cancel:     "/khronos/v1/order/condition/cancel"
+  deriv_condition_detail:     "/khronos/v1/order/condition/detail"
+  deriv_account_status:       "/khronos/v1/account/status"
+  deriv_portfolio_status:     "/khronos/v1/account/portfolio/status"
+  deriv_portfolio_close:      "/khronos/v1/account/portfolio/position/close"
+  deriv_cash_deposit:         "/khronos/v1/cash/deposit/update"
+  deriv_cash_withdraw:        "/khronos/v1/cash/withdraw/update"
+
+  # Margin & Risk (Hydros / Erebos / Khaos)
+  account_risk:               "/hydros/v1/account/{accountNo}/risk"
+  pricing_policy:             "/hydros/v1/account/{accountNo}/pricing-policy"
+  margin_info:                "/erebos/v2/digital/margin-info"
+  cash_statements:            "/erebos/v2/digital/trans-hist-cashStatements"
+  loan_list:                  "/khaos/v1/loan/{accountNo}"
+  margin_addon_detail:        "/campaign-management/v1/margin/subscription/{accountNo}/addons/detail"
+
+  # Customer (Eros service)
+  sub_account_profile:        "/eros/v2/get-profile/by-username/{custodyCode}"
+
+  # Stock Transfer (Physis service)
+  stock_transfer:             "/physis/v1/stock/transfer"
+
+# ─── Stock Index / Basket Codes ───────────────────────────────────────────────
+# Dùng cho param ?index= trong tickerCommons và tickerSnaps
+index_codes:
+  HOSE:         1
+  VN30:         2
+  HNX:          3
+  HNX30:        4
+  UPCOM:        5
+  MIDCAP:       10
+  VN100:        11
+  VN_ALL_SHARE: 12
+  VN_SMALL_CAP: 13
+  VNX_ALL_SHARE: 14
+  VN50:         15
+  VNSI:         16
+
+# ─── Price Types (lệnh cổ phiếu cơ sở) ──────────────────────────────────────
+# Dùng cho field priceType trong /akhlys/v1/accounts/{accountNo}/orders
+price_types:
+  LO:  "Limit Order — lệnh giới hạn"
+  ATO: "At The Open — khớp tại giá mở cửa (ATO session)"
+  ATC: "At The Close — khớp tại giá đóng cửa (ATC session)"
+  PLO: "Peg Limit Order — lệnh giá trần/sàn"
+  MP:  "Market Price — khớp theo giá thị trường (HNX)"
+  MTL: "Match To Limit — khớp tối đa, phần còn lại chuyển thành LO (HOSE)"
+  MOK: "Match Or Kill — khớp hoàn toàn hoặc hủy (HOSE)"
+  MAK: "Match And Kill — khớp tối đa phần có thể, hủy phần còn lại (HOSE)"
+
+# ─── Order Direction (cổ phiếu cơ sở) ────────────────────────────────────────
+# Dùng cho field execType trong /akhlys/v1/accounts/{accountNo}/orders
+exec_types:
+  NB: "Normal Buy — mua thông thường"
+  NS: "Normal Sell — bán thông thường"
+
+# ─── Order Side (phái sinh) ───────────────────────────────────────────────────
+# Dùng cho field side trong /khronos/v1/order/place
+order_sides_deriv:
+  B: "Buy — mua phái sinh"
+  S: "Sell — bán phái sinh"
+
+# ─── Derivative Order Types ───────────────────────────────────────────────────
+# Dùng cho field orderType trong /khronos/v1/order/place
+deriv_order_types:
+  "0":      "Regular order — lệnh thông thường"
+  "SLP":    "Stop Loss/Take Profit — SL=1.0,0.8 format"
+  "ABI":    "Arbitrage — ABI=contract format"
+
+# ─── BSA Investor Types ───────────────────────────────────────────────────────
+# Dùng cho param ?type= trong /nyx/v1/intraday/{ticker}/bsa
+# Phân loại nhà đầu tư theo quy mô giao dịch
+bsa_investor_types:
+  sheep: "Nhà đầu tư nhỏ lẻ (small retail) — khối lượng < ngưỡng nhỏ"
+  wolf:  "Tổ chức vừa (medium institutional) — khối lượng trung bình"
+  shark: "Tổ chức lớn (large institutional) — khối lượng lớn"
+  all:   "Tất cả loại nhà đầu tư (default)"
+
+# ─── Session States ───────────────────────────────────────────────────────────
+# Trạng thái phiên giao dịch HOSE/HNX — dùng cho market snapshot records
+session_states:
+  ATO:        "At The Open — phiên khớp lệnh mở cửa"
+  ATC:        "At The Close — phiên khớp lệnh đóng cửa"
+  CONTINUOUS: "Phiên khớp lệnh liên tục"
+  CLOSED:     "Đã đóng cửa"
+  HALT:       "Tạm ngưng giao dịch"
+  UNKNOWN:    "Không xác định"
+
+# ─── Exchange Names ───────────────────────────────────────────────────────────
+exchanges:
+  HOSE:   "Sở Giao dịch Chứng khoán TP.HCM"
+  HNX:    "Sở Giao dịch Chứng khoán Hà Nội"
+  UPCOM:  "Thị trường UPCoM"
+  DERIV:  "Thị trường Phái sinh (VSD)"
+
+# ─── HTTP Headers ─────────────────────────────────────────────────────────────
+headers:
+  authorization: "Authorization"
+  bearer_prefix: "Bearer "
+  content_type:  "Content-Type"
+  accept:        "Accept"
+
+# ─── Error / Result Codes ─────────────────────────────────────────────────────
+# Response codes từ các endpoints khác nhau
+result_codes:
+  # Cổ phiếu cơ sở (/akhlys): error field
+  stock_order_success: "0"
+  # Phái sinh (/khronos): rc field
+  deriv_order_success: "1"
+
+# ─── Intraday History Pagination ─────────────────────────────────────────────
+intraday_history:
+  default_page: 0
+  default_size: 100
+  max_size:     100
+  default_head_index: -1   # -1 = lấy từ đầu (mới nhất)
+
+# ─── Securities Filter Fields ─────────────────────────────────────────────────
+# Dùng cho /ananke/v1/securities ?filter=field=value
+securities_filter_fields:
+  - "symbol"
+  - "exchange"
+  - "type"         # STOCK | BOND | FUND | DERIVATIVE
+  - "industry"
+  - "status"       # LISTED | DELISTED | SUSPENDED
