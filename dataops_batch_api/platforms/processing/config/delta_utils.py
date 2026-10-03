@@ -34,7 +34,6 @@ from deltalake import DeltaTable, write_deltalake
 
 from cli.ingestion.schema.models import (
     BinanceCandleRecord,
-    VPSCandleRecord,
     TCBSMarketRecord,
     TCBSBSARecord,
     TCBSIntradayTickRecord,
@@ -50,13 +49,13 @@ class DeltaBronzeWriter:
     Partition strategy:
         Binance candles: partitionBy(["year", "month", "inst_id"])
             → tối ưu query theo instrument và time range
-        VPS market:      partitionBy(["year", "month", "exchange"])
+        TCBS market:     partitionBy(["year", "month", "exchange"])
             → tối ưu query theo sàn và tháng
 
     Usage:
         writer = DeltaBronzeWriter.from_env()
         writer.write_binance_candles(records, inst_type="SPOT")
-        writer.write_vps_snapshots(records)
+        writer.write_tcbs_market(records)
     """
 
     def __init__(self, bucket: str = "binance-datalake", storage_options: dict = None):
@@ -275,46 +274,6 @@ class DeltaBronzeWriter:
         except Exception as exc:
             logger.error(
                 "Failed to write TCBS intraday ticks to %s: %s",
-                delta_path, exc,
-                exc_info=True,
-            )
-            raise
-
-    def write_vps_snapshots(self, records: List[VPSCandleRecord]) -> int:
-        """
-        Ghi VPS market snapshots vào Bronze Delta table.
-
-        Args:
-            records: danh sách VPSCandleRecord đã qua Pydantic validation
-
-        Returns:
-            Số records đã ghi thành công. 0 nếu records rỗng hoặc write thất bại.
-
-        Raises:
-            Exception được log ở ERROR level rồi re-raise.
-        """
-        if not records:
-            logger.warning("write_vps_snapshots called with empty records list")
-            return 0
-
-        delta_path = self._delta_path("vps_market")
-        try:
-            df = pd.DataFrame([r.model_dump() for r in records])
-            df = self._add_time_partitions(df, ts_col="ts_ms")
-            table = pa.Table.from_pandas(df)
-
-            write_deltalake(
-                delta_path,
-                table,
-                mode="append",
-                partition_by=["year", "month", "exchange"],
-                storage_options=self.storage_options,
-            )
-            logger.info("Wrote %d VPS snapshots to %s", len(records), delta_path)
-            return len(records)
-        except Exception as exc:
-            logger.error(
-                "Failed to write VPS snapshots to %s: %s",
                 delta_path, exc,
                 exc_info=True,
             )

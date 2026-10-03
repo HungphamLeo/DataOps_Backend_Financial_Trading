@@ -9,12 +9,11 @@ Design principle: "Bad data in = bad data out"
 
 Schemas:
     BinanceCandleRecord  — OHLCV candle từ Binance REST API
-    VPSCandleRecord      — Market snapshot từ VPS (legacy, giữ lại cho backward compat)
     TCBSMarketRecord     — Full ticker snapshot từ TCBS tickerCommons API
     TCBSTickerSnapRecord — Foreign room + lightweight snapshot từ TCBS tickerSnaps API
     TCBSBSARecord        — Buy/Sell Analysis (cung/cầu) từ TCBS Nyx service
     TCBSIntradayTickRecord — Tick-by-tick khớp lệnh từ TCBS intraday history API
-    OHLCVRecord          — Generic normalized OHLCV (Binance/VPS shared form)
+    OHLCVRecord          — Generic normalized OHLCV
 """
 from __future__ import annotations
 
@@ -57,46 +56,6 @@ class BinanceCandleRecord(BaseModel):
         return v
 
 
-class VPSCandleRecord(BaseModel):
-    """
-    Validated market snapshot từ VPS Securities (HOSE).
-
-    Fields:
-        symbol:          Mã cổ phiếu, e.g. "VCB", "VHM"
-        exchange:        Sàn giao dịch — "HOSE" (scope hiện tại)
-        price:           Giá khớp lệnh hiện tại
-        ceiling_price:   Giá trần (price <= ceiling * 1.001 — 0.1% tolerance)
-        floor_price:     Giá sàn (price >= floor * 0.999)
-        session_state:   Trạng thái phiên: ATO | ATC | CONTINUOUS | CLOSED | UNKNOWN
-        ts_ms:           Unix timestamp milliseconds lúc snapshot
-    """
-    symbol:          str
-    exchange:        str           # HOSE (HOSE only per current scope)
-    price:           float = Field(gt=0)
-    open:            float = Field(ge=0, default=0.0)
-    high:            float = Field(ge=0, default=0.0)
-    low:             float = Field(ge=0, default=0.0)
-    reference_price: float = Field(ge=0, default=0.0)
-    ceiling_price:   float = Field(ge=0, default=0.0)
-    floor_price:     float = Field(ge=0, default=0.0)
-    volume:          float = Field(ge=0, default=0.0)
-    total_value:     float = Field(ge=0, default=0.0)
-    change_pct:      float = 0.0
-    session_state:   str   = "UNKNOWN"
-    ts_ms:           int
-
-    @field_validator("price")
-    @classmethod
-    def price_within_bands(cls, v: float, info) -> float:
-        """VN market rule: giá giao dịch không vượt trần/sàn."""
-        data = info.data
-        if data.get("ceiling_price", 0) > 0 and v > data["ceiling_price"] * 1.001:
-            raise ValueError(f"price {v} exceeds ceiling {data['ceiling_price']}")
-        if data.get("floor_price", 0) > 0 and v < data["floor_price"] * 0.999:
-            raise ValueError(f"price {v} below floor {data['floor_price']}")
-        return v
-
-
 # ─── TCBS Schemas ─────────────────────────────────────────────────────────────
 
 class TCBSMarketRecord(BaseModel):
@@ -104,7 +63,7 @@ class TCBSMarketRecord(BaseModel):
     Validated full market ticker snapshot từ TCBS /tartarus/v1/tickerCommons.
 
     Chứa orderbook 3 bước giá (bid/offer × 3), OHLC, foreign room, average.
-    Tương đương VPSCandleRecord nhưng phong phú hơn nhiều.
+    Chứa đầy đủ orderbook 3 cấp, OHLC, foreign room.
 
     Fields:
         symbol:          Mã cổ phiếu, e.g. "VCB", "VHM"

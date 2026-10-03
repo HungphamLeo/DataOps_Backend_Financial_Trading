@@ -1,12 +1,12 @@
 """
 prefect_main.py — Prefect ETL Pipeline Orchestration.
 
-Định nghĩa Prefect flows và schedules cho Binance batch pipeline.
+Định nghĩa Prefect flows và schedules cho Binance + TCBS batch pipeline.
 Tương đương với Airflow DAGs nhưng dùng Prefect 2.x API.
 
 Flows được định nghĩa:
     1. binance_daily_bronze_flow — Hàng giờ, Bronze ingestion Binance SPOT + FUTURES
-    2. vps_market_flow           — Mỗi 1 phút trong giờ giao dịch (9:00–14:45)
+    2. tcbs_market_flow          — Mỗi 1 phút trong giờ giao dịch (9:00–14:45)
     3. binance_silver_streaming  — Long-running PySpark jobs (chạy 1 lần, không stop)
     4. binance_backfill_flow     — Manual trigger, không schedule tự động
 
@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from cli.flows.serving.bronze_flow import run_binance_bronze, run_vps_bronze
+from cli.flows.serving.bronze_flow import run_binance_bronze, run_tcbs_market_bronze
 from cli.flows.serving.daily_pipeline import run_daily_pipeline
 from cli.flows.serving.metadata import setup_logging
 
@@ -63,10 +63,10 @@ def task_bronze_binance_futures() -> int:
     return run_binance_bronze(inst_type="FUTURES")
 
 
-@task(name="bronze-vps-hose", retries=3, retry_delay_seconds=30)
-def task_bronze_vps() -> int:
-    """Task: Bronze VPS HOSE market snapshot."""
-    return run_vps_bronze(exchange="HOSE")
+@task(name="bronze-tcbs-market", retries=3, retry_delay_seconds=30)
+def task_bronze_tcbs_market() -> int:
+    """Task: Bronze TCBS HOSE market snapshot."""
+    return run_tcbs_market_bronze()
 
 
 # ─── Prefect Flows ────────────────────────────────────────────────────────────
@@ -76,8 +76,6 @@ def daily_bronze_flow() -> dict:
     """
     Flow chạy hourly: Bronze Binance SPOT + FUTURES candles.
     Schedule: mỗi giờ (*/1 * * * *)
-
-    Không bao gồm VPS (VPS có flow riêng để schedule phù hợp giờ giao dịch).
     """
     logger.info("[prefect] daily_bronze_flow started at %s", datetime.now(timezone.utc).isoformat())
     spot_n    = task_bronze_binance_spot()
@@ -86,23 +84,19 @@ def daily_bronze_flow() -> dict:
     return {"binance_spot": spot_n, "binance_futures": futures_n}
 
 
-@flow(name="vps-market-snapshot-flow")
-def vps_market_flow() -> int:
+@flow(name="tcbs-market-snapshot-flow")
+def tcbs_market_flow() -> int:
     """
-    Flow chạy mỗi 1 phút trong giờ giao dịch: VPS HOSE snapshot.
+    Flow chạy mỗi 1 phút trong giờ giao dịch: TCBS HOSE market snapshot.
     Schedule: */1 9-14 * * 1-5 (Thứ 2–6, 9:00–14:59)
-
-    Note: Cron chạy tới 14:59 nhưng VPS đóng cửa lúc 14:45.
-          Record sau 14:45 sẽ có session_state="CLOSED" — vẫn ghi, không drop.
     """
-    return task_bronze_vps()
+    return task_bronze_tcbs_market()
 
 
 @flow(name="binance-full-daily-pipeline")
 def full_daily_flow() -> dict:
     """
-    Flow orchestrator chạy toàn bộ daily pipeline.
-    Bao gồm cả Binance và VPS trong 1 run — dùng cho end-of-day reconciliation.
+    Flow orchestrator chạy toàn bộ daily pipeline (Binance + TCBS).
     """
     return run_daily_pipeline()
 
@@ -117,13 +111,13 @@ class PrefectETLPipelineConfig:
 
     # Cron schedules
     SCHEDULE_HOURLY_BINANCE = "0 * * * *"          # Mỗi giờ đầu giờ
-    SCHEDULE_VPS_TRADING    = "*/1 9-14 * * 1-5"   # Mỗi 1 phút, giờ giao dịch, Thứ 2–6
+    SCHEDULE_TCBS_TRADING   = "*/1 9-14 * * 1-5"   # Mỗi 1 phút, giờ giao dịch, Thứ 2–6
     SCHEDULE_EOD            = "30 15 * * 1-5"      # 15:30 hàng ngày (sau đóng cửa)
 
     # Deployment names
-    DEPLOY_BRONZE_HOURLY = "binance-bronze-hourly-prod"
-    DEPLOY_VPS_MARKET    = "vps-market-snapshot-prod"
-    DEPLOY_FULL_DAILY    = "binance-full-daily-eod-prod"
+    DEPLOY_BRONZE_HOURLY  = "binance-bronze-hourly-prod"
+    DEPLOY_TCBS_MARKET    = "tcbs-market-snapshot-prod"
+    DEPLOY_FULL_DAILY     = "binance-full-daily-eod-prod"
 
     # Prefect work queue
     WORK_QUEUE = "default"

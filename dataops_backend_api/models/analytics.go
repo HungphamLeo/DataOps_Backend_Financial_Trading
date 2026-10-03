@@ -1,4 +1,4 @@
-// Models cho Crypto và VN Stocks analytics data
+// Models cho Crypto (Binance) và VN Stocks (TCBS) analytics data
 package models
 
 // ─── Crypto (Binance) ─────────────────────────────────────────────
@@ -36,26 +36,6 @@ type VWAPPoint struct {
 	VWAP      float64 `json:"vwap"`
 	Volume    float64 `json:"volume"`
 	Timestamp int64   `json:"ts"`
-}
-
-// ─── VN Stocks (VPS) — DEPRECATED ───────────────────────────────────────────
-// Giữ lại cho backward compatibility với consumer code cũ.
-// Sử dụng TCBSMarketSnapshot cho tất cả code mới.
-
-// VPSMarketSnapshot là snapshot giá cổ phiếu từ VPS
-// Deprecated: dùng TCBSMarketSnapshot thay thế.
-type VPSMarketSnapshot struct {
-	Symbol     string  `json:"symbol"`
-	Exchange   string  `json:"exchange"`    // "HOSE" | "HNX" | "UPCOM"
-	Price      float64 `json:"price"`
-	Volume     float64 `json:"volume"`
-	MatchedVol float64 `json:"matched_vol"`
-	High       float64 `json:"high"`
-	Low        float64 `json:"low"`
-	Open       float64 `json:"open"`
-	Change     float64 `json:"change"`
-	ChangePct  float64 `json:"change_pct"`
-	Timestamp  int64   `json:"ts"`
 }
 
 // ─── VN Stocks (TCBS) ────────────────────────────────────────────────────────

@@ -49,30 +49,6 @@ type LiquidationEvent struct {
 	ProducedMs int64   `json:"producedAtMs"`
 }
 
-// VPSSnapshotEvent maps với vps_market_snapshot.avsc
-// LEARN: Tất cả giá VPS tính bằng nghìn VND (VND thousands)
-//        VNM = 85.3 nghĩa là 85,300 VND / cổ phiếu
-// NOTE: Giữ lại cho backward compatibility — không xóa để không break schema registry.
-type VPSSnapshotEvent struct {
-	Symbol         string  `json:"symbol"`
-	Exchange       string  `json:"exchange"` // "HOSE" | "HNX" | "UPCOM"
-	Price          float64 `json:"price"`
-	Bid            float64 `json:"bid"`
-	Ask            float64 `json:"ask"`
-	Open           float64 `json:"open"`
-	High           float64 `json:"high"`
-	Low            float64 `json:"low"`
-	ReferencePrice float64 `json:"referencePrice"`
-	CeilingPrice   float64 `json:"ceilingPrice"`
-	FloorPrice     float64 `json:"floorPrice"`
-	Volume         float64 `json:"volume"`
-	TotalValue     float64 `json:"totalValue"`
-	ChangePct      float64 `json:"changePct"`
-	SessionState   string  `json:"sessionState"` // "ATO"|"CONTINUOUS"|"ATC"|"BREAK"|"CLOSED"
-	TsMs           int64   `json:"tsMs"`
-	ProducedMs     int64   `json:"producedAtMs"`
-}
-
 // ─── TCBS Events ──────────────────────────────────────────────────────────────
 
 // TCBSMarketEvent maps với tcbs_market_snapshot.avsc

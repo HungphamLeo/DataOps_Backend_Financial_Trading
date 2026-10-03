@@ -34,10 +34,8 @@ type Repository interface {
 	QueryFundingRates(ctx context.Context, instID string, from, to time.Time) ([]models.FundingRate, error)
 	QueryLiquidations(ctx context.Context, instID string, from, to time.Time) ([]models.Liquidation, error)
 
-	// VPS Vietnam Stock queries
-	QueryVPSSnapshot(ctx context.Context, symbol string, from, to time.Time) ([]models.VPSMarketSnapshot, error)
-	QueryVPSOHLCV(ctx context.Context, symbol string, timeframe string, from, to time.Time) ([]models.OHLCV, error)
-	QueryVPSTopMovers(ctx context.Context, exchange string, limit int) ([]models.TopMover, error)
+	// TCBS Vietnam Stock queries
+	QueryTCBSTopMovers(ctx context.Context, exchange string, limit int) ([]models.TopMover, error)
 
 	// Housekeeping
 	WritePoint(ctx context.Context, measurement string, tags map[string]string, fields map[string]interface{}, ts time.Time) error
@@ -301,88 +299,12 @@ from(bucket: "%s")
 	return liqList, result.Err()
 }
 
-// QueryVPSSnapshot lấy market data snapshots của VPS Vietnam
-func (r *influxRepo) QueryVPSSnapshot(ctx context.Context, symbol string, from, to time.Time) ([]models.VPSMarketSnapshot, error) {
+// QueryTCBSTopMovers lấy top cổ phiếu tăng/giảm mạnh nhất từ TCBS measurement.
+func (r *influxRepo) QueryTCBSTopMovers(ctx context.Context, exchange string, limit int) ([]models.TopMover, error) {
 	fluxQuery := fmt.Sprintf(`
 from(bucket: "%s")
-  |> range(start: %s, stop: %s)
-  |> filter(fn: (r) => r._measurement == "vps_market")
-  |> filter(fn: (r) => r.symbol == "%s")
-  |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
-  |> sort(columns: ["_time"])`,
-		r.bucket, from.Format(time.RFC3339), to.Format(time.RFC3339), symbol,
-	)
-
-	result, err := r.queryAPI.Query(ctx, fluxQuery)
-	if err != nil {
-		return nil, fmt.Errorf("influxdb query vps_market: %w", err)
-	}
-	defer result.Close()
-
-	var snapshots []models.VPSMarketSnapshot
-	for result.Next() {
-		record := result.Record()
-		snap := models.VPSMarketSnapshot{
-			Symbol:    symbol,
-			Timestamp: record.Time().UnixMilli(),
-		}
-		if v, ok := record.ValueByKey("price").(float64); ok {
-			snap.Price = v
-		}
-		if v, ok := record.ValueByKey("volume").(float64); ok {
-			snap.Volume = v
-		}
-		if v, ok := record.ValueByKey("change_pct").(float64); ok {
-			snap.ChangePct = v
-		}
-		snapshots = append(snapshots, snap)
-	}
-	return snapshots, result.Err()
-}
-
-// QueryVPSOHLCV lấy OHLCV candles cho cổ phiếu Việt Nam
-func (r *influxRepo) QueryVPSOHLCV(ctx context.Context, symbol string, timeframe string, from, to time.Time) ([]models.OHLCV, error) {
-	fluxDuration := timeframeToDuration(timeframe)
-
-	fluxQuery := fmt.Sprintf(`
-from(bucket: "%s")
-  |> range(start: %s, stop: %s)
-  |> filter(fn: (r) => r._measurement == "vps_market")
-  |> filter(fn: (r) => r.symbol == "%s")
-  |> filter(fn: (r) => r._field == "price")
-  |> aggregateWindow(every: %s, fn: mean, createEmpty: false)`,
-		r.bucket, from.Format(time.RFC3339), to.Format(time.RFC3339), symbol, fluxDuration,
-	)
-
-	result, err := r.queryAPI.Query(ctx, fluxQuery)
-	if err != nil {
-		return nil, fmt.Errorf("influxdb query vps ohlcv: %w", err)
-	}
-	defer result.Close()
-
-	var candles []models.OHLCV
-	for result.Next() {
-		record := result.Record()
-		candle := models.OHLCV{
-			Symbol:    symbol,
-			Interval: timeframe,
-			Timestamp: record.Time().UnixMilli(),
-		}
-		if v, ok := record.Value().(float64); ok {
-			candle.Close = v
-		}
-		candles = append(candles, candle)
-	}
-	return candles, result.Err()
-}
-
-// QueryVPSTopMovers lấy top cổ phiếu tăng/giảm mạnh nhất
-// LEARN: Flux sort + limit = ORDER BY ... LIMIT trong SQL
-func (r *influxRepo) QueryVPSTopMovers(ctx context.Context, exchange string, limit int) ([]models.TopMover, error) {
-	fluxQuery := fmt.Sprintf(`
-from(bucket: "%s")
-  |> range(start: -1d)
-  |> filter(fn: (r) => r._measurement == "vps_market")
+	 |> range(start: -1d)
+	 |> filter(fn: (r) => r._measurement == "tcbs_market")
   |> filter(fn: (r) => r.exchange == "%s")
   |> filter(fn: (r) => r._field == "change_pct")
   |> last()

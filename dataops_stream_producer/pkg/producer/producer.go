@@ -38,9 +38,7 @@ type Producer interface {
 	PublishTrade(ctx context.Context, instID string, event TradeEvent) error
 	PublishOrderBook(ctx context.Context, instID string, event OrderBookEvent) error
 	PublishLiquidation(ctx context.Context, instID string, event LiquidationEvent) error
-	// VPS — deprecated, giữ lại cho backward compat với consumer cũ
-	PublishVPSSnapshot(ctx context.Context, symbol string, event VPSSnapshotEvent) error
-	// TCBS — thay thế VPS cho streaming ingestion mới
+	// TCBS — VN stocks streaming ingestion
 	PublishTCBSMarket(ctx context.Context, symbol string, event TCBSMarketEvent) error
 	PublishTCBSBSA(ctx context.Context, ticker string, event TCBSBSAEvent) error
 	PublishTCBSIntradayTick(ctx context.Context, ticker string, event TCBSIntradayTickEvent) error
@@ -57,7 +55,6 @@ type kafkaProducer struct {
 	tradeSchemaID   int
 	obSchemaID      int
 	liqSchemaID     int
-	vpsSchemaID     int
 	tcbsMarketID    int
 	tcbsBSAID       int
 	tcbsIntradayID  int
@@ -159,11 +156,6 @@ func (p *kafkaProducer) registerSchemas() error {
 			idPtr:    &p.liqSchemaID,
 		},
 		{
-			subject:  constants.TopicVPSMarket + "-value",
-			filePath: "pkg/schemas/vps_market_snapshot.avsc",
-			idPtr:    &p.vpsSchemaID,
-		},
-		{
 			subject:  constants.TopicTCBSMarket + "-value",
 			filePath: "pkg/schemas/tcbs_market_snapshot.avsc",
 			idPtr:    &p.tcbsMarketID,
@@ -254,26 +246,6 @@ func (p *kafkaProducer) PublishLiquidation(ctx context.Context, instID string, e
 	_, _, err = p.producer.SendMessage(msg)
 	if err != nil {
 		return p.sendToDLQ(constants.TopicBinanceLiquidationsDLQ, instID, event, err)
-	}
-	return nil
-}
-
-func (p *kafkaProducer) PublishVPSSnapshot(ctx context.Context, symbol string, event VPSSnapshotEvent) error {
-	payload, err := p.serializeAvro(p.vpsSchemaID, event)
-	if err != nil {
-		return p.sendToDLQ(constants.TopicVPSMarketDLQ, symbol, event, err)
-	}
-
-	msg := &sarama.ProducerMessage{
-		Topic:     constants.TopicVPSMarket,
-		Key:       sarama.StringEncoder(symbol),
-		Value:     sarama.ByteEncoder(payload),
-		Timestamp: time.UnixMilli(event.TsMs),
-	}
-
-	_, _, err = p.producer.SendMessage(msg)
-	if err != nil {
-		return p.sendToDLQ(constants.TopicVPSMarketDLQ, symbol, event, err)
 	}
 	return nil
 }
