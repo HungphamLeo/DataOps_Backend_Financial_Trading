@@ -1,5 +1,3 @@
-version: "3.9"
-
 # ==============================================================================
 # DataOps Backend Financial Trading — Unified Production Infrastructure
 # Reference: docker_production.skill.md (Healthchecks, Secrets, Resource Limits,
@@ -440,16 +438,36 @@ services:
 
   # ─── SPARK MASTER (Processing Cluster) ─────────────────────────────────────
   spark-master:
-    image: bitnami/spark:3.5
+    image: apache/spark:3.5.0
     container_name: dataops-spark-master
     restart: unless-stopped
     networks:
       - dataops-internal-net
-    environment:
-      SPARK_MODE: master
     ports:
       - "8095:8080"
       - "7087:7077"
+    environment:
+      SPARK_MASTER_HOST: spark-master
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+    command:
+      - "/opt/spark/bin/spark-class"
+      - "org.apache.spark.deploy.master.Master"
+      - "--host"
+      - "spark-master"
+      - "--port"
+      - "7077"
+      - "--webui-port"
+      - "8080"
+    volumes:
+      - ./jars:/opt/spark/custom_jars
+      - ./data:/opt/spark/data
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import socket; s=socket.socket(); s.settimeout(2); s.connect((\"spark-master\", 7077)); s.close()' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     deploy:
       resources:
         limits:
@@ -461,18 +479,28 @@ services:
 
   # ─── SPARK WORKER ──────────────────────────────────────────────────────────
   spark-worker:
-    image: bitnami/spark:3.5
+    image: apache/spark:3.5.0
     container_name: dataops-spark-worker
     restart: unless-stopped
     networks:
       - dataops-internal-net
     depends_on:
-      - spark-master
+      spark-master:
+        condition: service_healthy
     environment:
-      SPARK_MODE: worker
-      SPARK_MASTER_URL: spark://spark-master:7077
-      SPARK_WORKER_MEMORY: 2G
       SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: 4g
+    command:
+      - "/opt/spark/bin/spark-class"
+      - "org.apache.spark.deploy.worker.Worker"
+      - "spark://spark-master:7077"
+      - "-c"
+      - "2"
+      - "-m"
+      - "4g"
+    volumes:
+      - ./jars:/opt/spark/custom_jars
+      - ./data:/opt/spark/data
     deploy:
       resources:
         limits:
@@ -491,3 +519,4 @@ volumes:
   redis-data:
   influxdb-data:
   grafana-data:
+
