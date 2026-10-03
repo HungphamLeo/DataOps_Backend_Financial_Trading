@@ -1,5 +1,5 @@
 # ─── Stage 1: Build binary ─────────────────────────────────────────
-FROM golang:1.27-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 WORKDIR /build
 
@@ -9,7 +9,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o okx-analytics-api .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o dataops_backend_api .
 
 # ─── Stage 2: Runtime image (Production Ready & Least Privilege) ──
 FROM alpine:3.19 AS runtime
@@ -23,7 +23,7 @@ RUN apk --no-cache add ca-certificates tzdata curl && \
 
 WORKDIR /app
 
-COPY --from=builder /build/okx-analytics-api /app/okx-analytics-api
+COPY --from=builder /build/dataops_backend_api /app/dataops_backend_api
 
 RUN chown -R appuser:appgroup /app
 
@@ -34,4 +34,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
   CMD curl -f http://localhost:8080/health || exit 1
 
-CMD ["/app/okx-analytics-api"]
+CMD ["/app/dataops_backend_api"]
