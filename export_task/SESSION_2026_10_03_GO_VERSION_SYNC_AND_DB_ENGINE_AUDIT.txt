@@ -1,0 +1,244 @@
+=============================================================================
+SESSION EXPORT — Go Version Sync, Dependency Audit & DB Engine Recheck
+Date: 2026-10-03
+Branch: 25092026_set_up_base_code
+Scope: dataops_backend_api, dataops-stream-producer,
+       infra_dataops_finance_trading/docker-compose.yml
+References:
+  - github/skill/SKILL.md (Project Skill Manifest & Hierarchy of Truth)
+  - export_task/SESSION_2026_10_02_DOCKER_PORT_HARMONIZATION_AND_BUILD_FIXES.txt
+  - allskill/docker_production.skill.md
+=============================================================================
+
+1. TỔNG QUAN SESSION
+-----------------------------------------------------------------------------
+Mục tiêu session:
+1. Review & xác nhận những gì đã hoàn thành từ session trước
+   (port harmonization, Go build fixes).
+2. Phân tích và fix dứt điểm vấn đề Go version mismatch giữa go.mod
+   và Dockerfile builder — unblocking `docker compose up -d --build`.
+3. Audit database engine đang được sử dụng thực tế (MySQL vs PostgreSQL)
+   — làm rõ sự khác biệt giữa các layer.
+
+
+=============================================================================
+2. NHỮNG GÌ ĐÃ HOÀN THÀNH (ACCOMPLISHED)
+=============================================================================
+
+2.1 Review từ session trước — Xác nhận đã ổn
+-----------------------------------------------------------------------------
+- Rà soát & tránh xung đột Port (MinIO: 9010/9011, Spark: 7087/8095): OK
+- Docker build context ../ chuẩn hóa: OK
+- Fix 100% lỗi biên dịch Go dataops_backend_api: OK
+- Java runtime default-jre-headless trong batch Dockerfile: OK
+
+
+2.2 Fix Go Version Mismatch — HOÀN THÀNH
+-----------------------------------------------------------------------------
+Vấn đề phát hiện:
+
+  Service                  | go.mod cũ    | Dockerfile builder cũ | Lỗi
+  -------------------------+--------------+-----------------------+------------------------
+  dataops_backend_api      | go 1.25      | golang:1.21-alpine    | go.mod requires >= 1.25
+  dataops-stream-producer  | go 1.26.0    | golang:1.21-alpine    | go.mod requires >= 1.26
+
+  QUAN TRỌNG: go 1.25 và go 1.26.0 là các version CHƯA TỒN TẠI tại thời điểm
+  commit — đây là giá trị sai được đặt từ trước, không phải future version.
+
+Root cause phân tích qua dependency chain:
+  - github.com/redis/go-redis/v9@v9.22.0  → yêu cầu go >= 1.24
+  - golang.org/x/net@v0.59.0              → yêu cầu go >= 1.26.0
+  → Toàn bộ dependency graph bắt buộc Go runtime tối thiểu là 1.26
+
+Giải pháp áp dụng: Cách B — Nâng image lên golang:1.27-alpine
+  Lý do: Go 1.27.1 là stable release mới nhất, thoả mãn toàn bộ constraint.
+  Không hạ version dependency vì sẽ phá vỡ tính năng.
+
+Files đã thay đổi:
+
+  dataops_backend_api/Dockerfile      FROM golang:1.21-alpine → golang:1.27-alpine
+  dataops_backend_api/go.mod          go 1.25  → go 1.27
+  dataops-stream-producer/Dockerfile  FROM golang:1.21-alpine → golang:1.27-alpine
+  dataops-stream-producer/go.mod      go 1.26.0 → go 1.27
+
+Lưu ý verify:
+  - Local Go runtime là 1.23.1 → `go build` local cố tải toolchain 1.27 → timeout.
+  - Không cần verify local. Build thực tế chạy trong Docker container trên Ubuntu.
+
+
+2.3 Audit Database Engine — LÀM RÕ HOÀN TOÀN
+-----------------------------------------------------------------------------
+Kết quả: Dự án dùng NHIỀU DB engine cho NHIỀU mục đích khác nhau.
+
+Layer 1 — dataops_backend_api (Go REST API): MySQL 8.0
+  Driver:  gorm.io/driver/mysql (repository/repository.go)
+  DSN:     root:123456@tcp(localhost:3306)/binance_analytics?parseTime=true
+  Docker:  image mysql:8.0, database binance_analytics, port 3306:3306
+  Lưu:     User accounts, accounting records, indicator data
+
+Layer 2 — dataops_batch_api (Python Pipeline): KHÔNG dùng MySQL hay PostgreSQL
+  Storage: MinIO Delta Lake (s3a://binance-datalake/) — toàn bộ market data
+  NOTE:    psycopg2-binary + asyncpg trong requirements.txt là TRANSITIVE
+           DEPENDENCY của prefect-sqlalchemy → chỉ dùng cho Prefect
+           workflow metadata. KHÔNG phải DB engine của dự án.
+           Không có mysqlclient hay PyMySQL → batch pipeline không kết nối MySQL.
+
+Layer 3 — InfluxDB 2.7: Time-series market metrics
+  Org:     binance-vps-platform, Bucket: market-data
+  Measurements: tcbs_market, tcbs_bsa, tcbs_intraday, binance_trade, binance_orderbook
+  Dùng bởi: dataops_backend_api REST endpoints + Grafana dashboards
+
+Sơ đồ lưu trữ tổng hợp:
+
+  dataops_backend_api  --> MySQL 8.0 (binance_analytics)
+                           User / Accounting / Indicators via GORM
+
+  dataops_batch_api    --> MinIO Delta Lake (s3a://binance-datalake/)
+                           Bronze/Silver/Gold tables via PySpark
+                       --> PostgreSQL/SQLite (ẩn trong Prefect orchestrator)
+                           Workflow metadata ONLY
+
+  InfluxDB 2.7         --> Time-series: tcbs_market, tcbs_bsa, tcbs_intraday
+                           Dùng bởi backend API + Grafana
+
+
+=============================================================================
+3. TRẠNG THÁI HIỆN TẠI — MATRIX ĐẦY ĐỦ
+=============================================================================
+
+Go Services:
+
+  Service                  | Module name          | go.mod  | Dockerfile        | Status
+  -------------------------+----------------------+---------+-------------------+---------
+  dataops_backend_api      | dataops-backend-api  | go 1.27 | golang:1.27-alpine| READY
+  dataops-stream-producer  | dataops-stream-prod. | go 1.27 | golang:1.27-alpine| READY
+
+Infrastructure (docker-compose.yml tại infra_dataops_finance_trading/):
+
+  Service                  | Image                              | Port (host)  | Status
+  -------------------------+------------------------------------+--------------+--------
+  kafka1/2/3               | confluentinc/cp-kafka:7.6.0        | 9092,9093,94 | OK
+  schema-registry          | confluentinc/cp-schema-registry    | 8081         | OK
+  kafka-ui                 | provectuslabs/kafka-ui:latest      | 8082         | OK
+  minio                    | minio/minio:latest                 | 9010 / 9011  | OK
+  mysql                    | mysql:8.0                          | 3306         | OK
+  redis                    | redis:7-alpine                     | 6379         | OK
+  influxdb                 | influxdb:2.7                       | 8086         | OK
+  grafana                  | grafana/grafana:10.0.0             | 3001         | OK
+  spark-master             | bitnami/spark:3.5                  | 8095 / 7087  | OK
+  spark-worker             | bitnami/spark:3.5                  | --           | OK
+  dataops-stream-producer  | build ../dataops-stream-producer   | --           | READY
+  dataops-backend-api      | build ../dataops_backend_api       | 8080         | READY
+  dataops-batch-api        | build ../dataops_batch_api         | --           | READY
+
+
+=============================================================================
+4. BÀI HỌC KỸ THUẬT (LESSONS LEARNED)
+=============================================================================
+
+[1] Go Dependency Chain Constraint:
+    Khi chỉnh go.mod version, không thể chỉ nhìn module chính — phải kiểm tra
+    toàn bộ indirect dependency graph:
+      go-redis/v9@v9.22.0  → go >= 1.24
+      x/net@v0.59.0        → go >= 1.26
+    Rule: Chạy `go mod tidy` sau khi thay đổi go directive để phát hiện conflict sớm.
+
+[2] Không verify `go build` local khi go.mod > local runtime:
+    Go toolchain tự động cố tải version mới về → timeout trong môi trường hạn chế.
+    Dùng Docker build trực tiếp làm CI gate trong trường hợp này.
+
+[3] PostgreSQL trong requirements.txt KHÔNG phải DB engine của dự án:
+    psycopg2-binary + asyncpg là transitive dependency của Prefect orchestrator.
+    Không nhầm lẫn khi đọc requirements.txt. Market data luôn đi qua MinIO/Delta Lake.
+
+[4] go.mod version phải là version ĐÃ RELEASE thực tế:
+    Khai báo go 1.25 hay go 1.26.0 khi chưa release sẽ gây lỗi build silently.
+    Luôn kiểm tra https://go.dev/dl/ trước khi đặt directive.
+
+
+=============================================================================
+5. NHỮNG VIỆC CẦN LÀM TIẾP THEO (NEXT STEPS)
+=============================================================================
+
+[HIGH — Blocking Production]
+
+  [NEXT-1] Chạy docker compose up -d --build trên Ubuntu (ưu tiên nhất):
+    cd infra_dataops_finance_trading
+    docker compose up -d --build
+    docker compose ps
+    # Kỳ vọng: 14 services healthy/running theo thứ tự:
+    # kafka1/2/3 → schema-registry → mysql/redis/influxdb/minio
+    # → grafana/spark → stream-producer/backend-api/batch-api
+
+  [NEXT-2] TCBS JWT Token Management Strategy:
+    - Implement 401 detection trong pkg/sources/tcbs/client/client.go
+    - Alert + log warning khi token hết hạn
+    - Quyết định: manual OTP refresh hay external cron trigger?
+
+  [NEXT-3] Verify go build ./... trong container:
+    docker compose logs dataops-backend-api
+    docker compose logs dataops-stream-producer
+    # Nếu còn lỗi compile → debug trực tiếp trong container
+
+
+[MEDIUM — Planned Backlog]
+
+  [NEXT-4] Protobuf Codegen Script:
+    Tạo scripts/gen_proto.ps1 hoặc Makefile:
+    - Go stubs output → dataops-stream-producer/ và dataops_backend_api/
+    - Python stubs (_pb2.py, _pb2_grpc.py) output → dataops_batch_api/
+    Targets: analytics, vnstock, market-data, batch-data, data-query, ingestion
+
+  [NEXT-5] Binance REST Client:
+    Triển khai dataops-stream-producer/pkg/sources/binance/rest/ (hiện rỗng):
+    - GET /api/v3/ticker/24hr — Ticker snapshot
+    - GET /api/v3/depth      — OrderBook re-sync sau WebSocket reconnect
+    - WebSocket keepalive ping/pong (300s interval)
+
+  [NEXT-6] Spark Streaming Consumer (TCBS):
+    Implement đọc TCBS Kafka topics → ghi InfluxDB:
+    - tcbs.market.snapshot  → measurement tcbs_market
+    - tcbs.bsa.events       → measurement tcbs_bsa
+    - tcbs.intraday.ticks   → measurement tcbs_intraday
+
+  [NEXT-7] Tạo .env files:
+    dataops-stream-producer/.env:
+      TCBS_BASE_URL=https://openapi.tcbs.com.vn
+      TCBS_API_KEY=<key>
+      TCBS_JWT_TOKEN=<jwt>
+      TCBS_SYMBOLS=VCB,HPG,TCB,VNM,MBB
+      TCBS_INDEXES=HOSE,VN30
+      BINANCE_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT
+
+    dataops_backend_api/.env:
+      TCBS_BASE_URL=https://openapi.tcbs.com.vn
+      TCBS_API_KEY=<key>
+      TCBS_JWT_TOKEN=<jwt>
+
+  [NEXT-8] Grafana Dashboard Update:
+    Update grafana/dashboards/okx-vps-main.json:
+    - Thêm panels cho tcbs_market (price, volume, foreign room)
+    - Thêm panels cho tcbs_bsa (bup/sdp/bsr per investor type)
+
+
+[LOW — Tech Debt]
+
+  [ ] Rename Avro schema files: pkg/schemas/okx_*.avsc → binance_*.avsc
+  [ ] Xóa alias OKX_CONFIG_YAML trong dataops_batch_api/config.py
+  [ ] Unit tests TCBSHandler (mock tcbs.Service interface)
+  [ ] Unit tests tcbsService pagination (GetIntradayTicks)
+
+
+=============================================================================
+6. FILES THAY ĐỔI TRONG SESSION NÀY
+=============================================================================
+
+  dataops_backend_api/Dockerfile     EDITED  golang:1.21-alpine → golang:1.27-alpine
+  dataops_backend_api/go.mod         EDITED  go 1.25 → go 1.27
+  dataops-stream-producer/Dockerfile EDITED  golang:1.21-alpine → golang:1.27-alpine
+  dataops-stream-producer/go.mod     EDITED  go 1.26.0 → go 1.27
+  export_task/SESSION_2026_10_03_GO_VERSION_SYNC_AND_DB_ENGINE_AUDIT.txt  CREATED
+
+=============================================================================
+END OF SESSION EXPORT
+=============================================================================

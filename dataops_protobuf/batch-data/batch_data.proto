@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+// Protobuf schema cho Batch Data & Historical Delta Lake Tables
+// Reference: dataops_batch_api (Bronze/Silver/Gold Delta Lake), dataops_backend_api/repository/delta
+
+package batchdata.v1;
+
+option go_package = "dataops-protobuf/batchdata;batchdatav1";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── BatchData Service ────────────────────────────────────────────────────────
+
+service BatchData {
+  rpc GetOHLCV(BatchOHLCVRequest) returns (BatchOHLCVResponse);
+  rpc GetIndicator(IndicatorRequest) returns (IndicatorResponse);
+  rpc ListAvailableSymbols(ListSymbolsRequest) returns (ListSymbolsResponse);
+  rpc GetDailySummary(DailySummaryBatchRequest) returns (DailySummaryBatchResponse);
+}
+
+// ─── OHLCV Messages ───────────────────────────────────────────────────────────
+
+message BatchOHLCVRequest {
+  string                    symbol   = 1; // "BTCUSDT" hoặc "VCB"
+  string                    exchange = 2; // "binance" | "tcbs" | "vps"
+  string                    interval = 3; // "1m", "5m", "15m", "1h", "1d"
+  google.protobuf.Timestamp from     = 4;
+  google.protobuf.Timestamp to       = 5;
+  int32                     limit    = 6;
+}
+
+message BatchOHLCVBar {
+  string                    symbol       = 1;
+  string                    exchange     = 2;
+  string                    interval     = 3;
+  double                    open         = 4;
+  double                    high         = 5;
+  double                    low          = 6;
+  double                    close        = 7;
+  double                    volume       = 8;
+  double                    quote_volume = 9;  // quote asset volume (e.g. USDT / VND)
+  double                    vwap         = 10; // Volume weighted average price
+  int64                     trade_count  = 11;
+  google.protobuf.Timestamp timestamp    = 12;
+}
+
+message BatchOHLCVResponse {
+  repeated BatchOHLCVBar bars = 1;
+}
+
+// ─── Indicator Messages ───────────────────────────────────────────────────────
+
+message IndicatorRequest {
+  string                    symbol         = 1;
+  string                    exchange       = 2;
+  string                    interval       = 3;
+  string                    indicator_name = 4; // "SMA", "EMA", "ATR", "RSI", "BBANDS", "VWAP", "BSA"
+  google.protobuf.Timestamp from           = 5;
+  google.protobuf.Timestamp to             = 6;
+  int32                     limit          = 7;
+}
+
+message IndicatorPoint {
+  string                    symbol         = 1;
+  string                    exchange       = 2;
+  string                    interval       = 3;
+  string                    indicator_name = 4;
+  double                    value          = 5;
+  string                    meta_json      = 6; // e.g. {"upper": 90.5, "lower": 82.1, "bup": 60.5}
+  google.protobuf.Timestamp timestamp      = 7;
+}
+
+message IndicatorResponse {
+  repeated IndicatorPoint points = 1;
+}
+
+// ─── Symbols List ─────────────────────────────────────────────────────────────
+
+message ListSymbolsRequest {
+  string exchange = 1; // "binance", "tcbs", "vps"
+}
+
+message ListSymbolsResponse {
+  repeated string symbols = 1;
+}
+
+// ─── Daily Summary ────────────────────────────────────────────────────────────
+
+message DailySummaryBatchRequest {
+  string symbol   = 1;
+  string exchange = 2;
+  string date     = 3; // "YYYY-MM-DD"
+}
+
+message DailySummaryBatchResponse {
+  string symbol       = 1;
+  string exchange     = 2;
+  string date         = 3;
+  int64  trade_count  = 4;
+  double price_low    = 5;
+  double price_high   = 6;
+  double price_open   = 7;
+  double price_close  = 8;
+  double volume       = 9;
+  double buy_volume   = 10;
+  double sell_volume  = 11;
+  double vwap         = 12;
+}

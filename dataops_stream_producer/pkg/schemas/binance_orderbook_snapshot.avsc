@@ -1,0 +1,55 @@
+{
+  "type": "record",
+  "name": "BinanceOrderBookSnapshot",
+  "namespace": "com.binance.vps.events",
+  "doc": "Level 2 order book snapshot from Binance. Published on channel <symbol>@depth5 (top 5 levels).",
+  "fields": [
+    {
+      "name": "instId",
+      "type": "string",
+      "doc": "Instrument ID, e.g. BTCUSDT"
+    },
+    {
+      "name": "tsMs",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Orderbook snapshot timestamp from Binance"
+    },
+    {
+      "name": "producedAtMs",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Kafka producer timestamp"
+    },
+    {
+      "name": "bids",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "PriceLevel",
+          "fields": [
+            { "name": "price",    "type": "double", "doc": "Price level" },
+            { "name": "quantity", "type": "double", "doc": "Total quantity at this level" },
+            { "name": "numOrders","type": "int",    "doc": "Number of orders at this level (0 if unknown)" }
+          ]
+        }
+      },
+      "doc": "Bid side (buyers): sorted descending by price. Best bid = bids[0]"
+    },
+    {
+      "name": "asks",
+      "type": {
+        "type": "array",
+        "items": "PriceLevel"
+      },
+      "doc": "Ask side (sellers): sorted ascending by price. Best ask = asks[0]"
+    },
+    {
+      "name": "checksum",
+      "type": ["null", "int"],
+      "default": null,
+      "doc": "Binance last update ID for orderbook integrity verification (optional)"
+    }
+  ]
+}

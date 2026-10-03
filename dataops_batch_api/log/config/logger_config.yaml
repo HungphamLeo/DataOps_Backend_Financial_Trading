@@ -1,0 +1,185 @@
+# logger_config.yaml — Logger Routing Configuration cho dataops_batch_api
+#
+# Được load bởi log/logger_setup.py::LoggerManager.configure() một lần duy nhất.
+#
+# Pattern: logger name = __name__ của module → Python tự route theo hierarchy.
+#   cli.flows.serving.bronze_flow         → khớp prefix "cli"              → cli_file
+#   cli.ingestion.sources.binance_client  → khớp prefix "cli"              → cli_file
+#   cli.ingestion.sources.tcbs_client     → khớp prefix "cli.ingestion.sources.tcbs" → tcbs_file + cli_file
+#   platforms.processing.delta_utils      → khớp prefix "platforms.processing" → processing_file
+#   platforms.processing.spark_stack.*    → khớp prefix "platforms.processing.spark_stack" → spark_file
+#   platforms.prefect_orchestra.*         → khớp prefix "platforms.prefect_orchestra" → orchestration_file
+#
+# Thay đổi routing / level / handler → chỉ sửa file này, không đụng vào module nào.
+# Tất cả loggers có propagate: false để tránh double-logging lên root.
+
+version: 1
+disable_existing_loggers: false
+
+# ─── Formatters ────────────────────────────────────────────────────────────────
+formatters:
+  console:
+    format: "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
+    datefmt: "%Y-%m-%dT%H:%M:%S"
+
+  json:
+    # JsonFormatter được định nghĩa trong log/logger_setup.py
+    # Serialize thành JSON cho ELK / Loki / Grafana log aggregation
+    (): log.logger_setup.JsonFormatter
+    datefmt: "%Y-%m-%dT%H:%M:%SZ"
+
+# ─── Handlers ──────────────────────────────────────────────────────────────────
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: console
+    stream: ext://sys.stdout
+
+  # application.log — tất cả events từ toàn bộ pipeline (DEBUG+)
+  application_file:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: json
+    filename: log/log_storage/application.log   # patched → absolute bởi LoggerManager
+    maxBytes: 10485760   # 10 MB
+    backupCount: 5
+    encoding: utf-8
+
+  # error.log — chỉ ERROR+ để alert / postmortem
+  error_file:
+    class: logging.handlers.RotatingFileHandler
+    level: ERROR
+    formatter: json
+    filename: log/log_storage/error.log
+    maxBytes: 10485760   # 10 MB
+    backupCount: 3
+    encoding: utf-8
+
+  # cli.log — tất cả ingestion flows, sources, indicators
+  cli_file:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: json
+    filename: log/log_storage/cli.log
+    maxBytes: 10485760
+    backupCount: 5
+    encoding: utf-8
+
+  # platforms.log — tất cả platform services
+  platform_file:
+    class: logging.handlers.RotatingFileHandler
+    level: INFO
+    formatter: json
+    filename: log/log_storage/platforms.log
+    maxBytes: 10485760
+    backupCount: 5
+    encoding: utf-8
+
+  # processing.log — delta_utils, spark config, data transform
+  processing_file:
+    class: logging.handlers.RotatingFileHandler
+    level: INFO
+    formatter: json
+    filename: log/log_storage/processing.log
+    maxBytes: 10485760
+    backupCount: 5
+    encoding: utf-8
+
+  # spark.log — SparkSession, streaming queries
+  spark_file:
+    class: logging.handlers.RotatingFileHandler
+    level: INFO
+    formatter: json
+    filename: log/log_storage/spark.log
+    maxBytes: 10485760
+    backupCount: 5
+    encoding: utf-8
+
+  # orchestration.log — Prefect flows, daily pipeline
+  orchestration_file:
+    class: logging.handlers.RotatingFileHandler
+    level: INFO
+    formatter: json
+    filename: log/log_storage/orchestration.log
+    maxBytes: 10485760
+    backupCount: 5
+    encoding: utf-8
+
+  # tcbs.log — dedicated log cho TCBS client, constants, và TCBS bronze flows
+  # Tách riêng để dễ debug khi có vấn đề với TCBS API (auth, rate-limit, schema thay đổi)
+  tcbs_file:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: json
+    filename: log/log_storage/tcbs.log
+    maxBytes: 10485760
+    backupCount: 5
+    encoding: utf-8
+
+# ─── Loggers (route theo __name__ prefix hierarchy) ───────────────────────────
+loggers:
+
+  # ── TCBS sub-layer: tcbs_client + tcbs_constants ─────────────────────────────
+  # Khớp: cli.ingestion.sources.tcbs_client (và bất kỳ module TCBS tương lai)
+  # Override cli để ghi thêm vào tcbs_file — dễ isolate debug TCBS issues
+  cli.ingestion.sources.tcbs_client:
+    level: DEBUG
+    handlers: [console, tcbs_file, cli_file, error_file]
+    propagate: false
+
+  # ── CLI layer: tất cả flows + ingestion sources + indicators ─────────────────
+  # Khớp: cli.flows.serving.*, cli.ingestion.sources.*, cli.ingestion.indicators.*
+  cli:
+    level: DEBUG
+    handlers: [console, cli_file, error_file]
+    propagate: false
+
+  # ── Platforms layer: tất cả platform services ────────────────────────────────
+  # Khớp: platforms.* (root cho mọi sub-namespace của platforms)
+  platforms:
+    level: INFO
+    handlers: [console, platform_file, error_file]
+    propagate: false
+
+  # ── Processing sub-layer: delta_utils, spark config ──────────────────────────
+  # Khớp: platforms.processing.* — override platforms để ghi processing_file riêng
+  platforms.processing:
+    level: INFO
+    handlers: [console, processing_file, error_file]
+    propagate: false
+
+  # ── Spark sub-layer: SparkSession + streaming queries ────────────────────────
+  # Khớp: platforms.processing.spark_stack.*
+  platforms.processing.spark_stack:
+    level: INFO
+    handlers: [console, spark_file, error_file]
+    propagate: false
+
+  # ── Prefect orchestration ─────────────────────────────────────────────────────
+  # Khớp: platforms.prefect_orchestra.*
+  platforms.prefect_orchestra:
+    level: INFO
+    handlers: [console, orchestration_file, error_file]
+    propagate: false
+
+  # ── Config module ─────────────────────────────────────────────────────────────
+  # Khớp: config (__name__ của config.py ở root package)
+  config:
+    level: INFO
+    handlers: [console, application_file]
+    propagate: false
+
+  # ── logger_setup self-logging ─────────────────────────────────────────────────
+  # Khớp: log.logger_setup
+  log.logger_setup:
+    level: DEBUG
+    handlers: [console]
+    propagate: false
+
+# ─── Root Logger ────────────────────────────────────────────────────────────────
+# Nhận WARNING+ từ thư viện bên ngoài không khớp logger nào ở trên:
+#   pyspark, requests, tenacity, deltalake, pyarrow, prefect, urllib3…
+root:
+  level: WARNING
+  handlers: [console, application_file, error_file]

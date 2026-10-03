@@ -1,0 +1,16 @@
+{
+  "type": "record",
+  "name": "TCBSBSAEvent",
+  "namespace": "com.tcbs.market.events",
+  "doc": "Buy/Sell Analysis event từ TCBS Nyx service — tỷ lệ cung/cầu theo nhà đầu tư. Reference: openapi-v1.0.0.json /nyx/v1/intraday/{ticker}/bsa",
+  "fields": [
+    { "name": "ticker",       "type": "string", "doc": "Mã cổ phiếu, e.g. TCB, VCB" },
+    { "name": "investorType", "type": "string", "doc": "Loại nhà đầu tư: sheep | wolf | shark | all" },
+    { "name": "bup",          "type": "double", "doc": "Buy Up Percent — % giao dịch mua chủ động (0–100)", "default": 0.0 },
+    { "name": "sdp",          "type": "double", "doc": "Sell Down Percent — % giao dịch bán chủ động (0–100)", "default": 0.0 },
+    { "name": "bsr",          "type": "double", "doc": "Buy/Sell Ratio — tỷ lệ mua/bán (>1 = mua > bán)", "default": 0.0 },
+    { "name": "eventTime",    "type": "string", "doc": "Thời gian giao dịch từ API, e.g. 09:15:00",       "default": "" },
+    { "name": "tsMs",         "type": "long",   "doc": "Unix timestamp milliseconds lúc snapshot" },
+    { "name": "producedAtMs", "type": "long",   "doc": "Unix timestamp milliseconds khi producer gửi lên Kafka" }
+  ]
+}

@@ -1,0 +1,501 @@
+=============================================================================
+SESSION EXPORT — VPS Securities → TCBS iFlash Open API Migration
+Date: 2026 (branch: 25092026_set_up_base_code)
+Branch: 25092026_set_up_base_code
+Scope: dataops_batch_api (Python), dataops-stream-producer (Go),
+       dataops_backend_api (Go REST API)
+Reference: openapi-v1.0.0.json — TCBS iFlash Open API v1.0.0
+=============================================================================
+
+1. TỔNG QUAN SESSION
+-----------------------------------------------------------------------------
+Mục tiêu: Thay thế hoàn toàn data source VPS Securities bằng TCBS iFlash
+Open API (openapi-v1.0.0.json) trên cả 3 modules backend.
+
+Nguyên tắc thực thi:
+- Zero hardcode: tất cả enums/constants trong file dedicated (YAML cho Python,
+  typed Go constants cho Go). Không scatter giá trị trực tiếp vào code.
+- Try/except + logging chuẩn: dùng logger của project (LoggerManager /
+  logging.Logger), không fmt.Printf / print().
+- Tất cả batch functions hoàn chỉnh theo openapi spec kèm error handling.
+- VPS code được GIỮ LẠI (không xoá): build-ignore tag trong Go, file giữ
+  nguyên trong Python — backward compat với schema registry + existing consumers.
+
+
+=============================================================================
+2. KHÁM PHÁ KỸ THUẬT — TCBS iFlash API
+=============================================================================
+
+2.1 Auth Flow
+-------------
+  POST /gaia/v1/oauth2/openapi/token
+  Body: { "apiKey": "<key>", "otp": "<Smart OTP từ TCInvest app>" }
+  Response: { "access_token": "<JWT>", "token_type": "Bearer" }
+
+  - Token là JWT Bearer, long-lived.
+  - OTP là one-time (~30s TTL từ TCInvest app) — KHÔNG lưu OTP, chỉ lưu JWT.
+  - Retry strategy: 4xx → NO retry (bad OTP/apiKey), 5xx → retry với backoff.
+
+2.2 Key Endpoints Được Tích Hợp
+---------------------------------
+  GET /tartarus/v1/tickerCommons
+      Full orderbook 3 cấp + OHLC + foreign room
+      Params: ?tickers=CSV hoặc ?index=<code>  (mutually exclusive)
+
+  GET /tartarus/v1/tickerSnaps
+      Foreign room + lightweight snapshot
+      Params: ?tickers=CSV
+
+  GET /nyx/v1/intraday/{ticker}/bsa
+      Buy/Sell Analysis (TCBS-exclusive: sheep/wolf/shark/all)
+      Params: ?type=sheep|wolf|shark|all
+
+  GET /nyx/v1/intraday/{ticker}/his/paging
+      Tick-by-tick intraday history
+      Params: ?page=&size=
+
+  GET /tartarus/v1/derivatives
+      VN30F derivative market board
+
+  POST /gaia/v1/oauth2/openapi/token
+      Auth token refresh
+
+2.3 TCBS vs VPS — Sự khác biệt quan trọng
+------------------------------------------
+  Protocol   : VPS = JSON-RPC POST (session)     | TCBS = REST GET (JWT Bearer)
+  Auth       : VPS = session cookie               | TCBS = JWT Bearer token
+  Batch limit: VPS = ~200 symbols/batch           | TCBS = conservative 50/batch (undocumented)
+  BSA        : VPS = Không có                     | TCBS = Sheep/Wolf/Shark/All (TCBS-exclusive)
+  Field name : VPS = matchQty, bidQty01           | TCBS = matchQtty, bidQtty01 (double-t!)
+  Change     : VPS = changePct                    | TCBS = changePercent
+
+2.4 TCBS Index Basket Codes
+----------------------------
+  HOSE=1, VN30=2, HNX=3, HNX30=4, UPCOM=5
+  Midcap=10, VN100=11, VNAllShare=12, VNSmallCap=13, VNXAllShare=14, VN50=15, VNSI=16
+
+  QUAN TRỌNG: ?tickers= và ?index= là mutually exclusive —
+  không truyền cả hai cùng lúc trong /tartarus/v1/tickerCommons.
+
+
+=============================================================================
+3. THAY ĐỔI CHI TIẾT — dataops_batch_api (Python)
+=============================================================================
+
+3.1 Files Created
+-----------------
+  cli/ingestion/sources/tcbs_constants.yaml [NEW]
+    - 13 section constants: base_url, endpoints, index_codes, exchange_names,
+      price_types, exec_types, investor_types, session_states, batch, timeouts,
+      retry, redis_cache, delta_tables.
+    - Single source of truth — TCBSConstants class load YAML này.
+
+  cli/ingestion/sources/tcbs_client.py [NEW]
+    - TCBSConstants: YAML loader singleton — gọi TCBSConstants.get().
+    - TCBSRestClient: JWT auth, retry loop (4xx no-retry, 5xx retry max 3).
+    - 8 methods: authenticate(), get_ticker_commons(), get_ticker_snaps(),
+      get_bsa(), get_intraday_history(), get_derivatives(),
+      get_batch_ticker_commons(), get_all_index_snapshots().
+    - Batch helper tự chia tickers thành nhóm <= 50.
+
+3.2 Files Edited
+----------------
+  cli/flows/config/exchange_config.yaml
+    - Section vps: → tcbs: (base_url, indexes, bsa_tickers, bsa_investor_type,
+      intraday_max_pages).
+    - Delta paths: thêm tcbs_market, tcbs_bsa, tcbs_intraday.
+
+  cli/ingestion/schema/models.py
+    - Added: TCBSMarketRecord (33 fields), TCBSTickerSnapRecord,
+      TCBSBSARecord (validated investor_type), TCBSIntradayTickRecord.
+    - VPSCandleRecord kept for backward compat.
+
+  platforms/processing/config/delta_utils.py
+    - Added: write_tcbs_market(), write_tcbs_bsa(), write_tcbs_intraday().
+    - Partition strategies: market → trading_date, bsa/intraday → ticker+date.
+
+  cli/flows/serving/bronze_flow.py
+    - Replaced run_vps_bronze() với 3 flows:
+      run_tcbs_market_bronze(), run_tcbs_bsa_bronze(), run_tcbs_intraday_bronze().
+
+  cli/flows/serving/metadata.py
+    - get_vps_cfg() → get_tcbs_cfg().
+
+  cli/flows/serving/daily_pipeline.py
+    - 3 steps → 5 steps (Binance SPOT, FUTURES + TCBS market, BSA, intraday).
+
+  config.py
+    - delta_bronze_vps() → delta_bronze_tcbs_market(), delta_bronze_tcbs_bsa(),
+      delta_bronze_tcbs_intraday().
+
+  log/config/logger_config.yaml
+    - Added: tcbs_file handler + cli.ingestion.sources.tcbs_client logger routing.
+
+3.3 Validation Python
+---------------------
+  py_compile cli/ingestion/sources/tcbs_client.py         OK
+  TCBSConstants.get() load YAML                           OK
+  Pydantic TCBSMarketRecord / TCBSBSARecord validation    OK
+  get_tcbs_cfg() từ exchange_config.yaml                  OK
+
+
+=============================================================================
+4. THAY ĐỔI CHI TIẾT — dataops-stream-producer (Go)
+=============================================================================
+
+4.1 Files Created
+-----------------
+  pkg/sources/tcbs/constants/constants.go [NEW]
+    - Types: TCBSEndpoint, TCBSIndexCode, TCBSPriceType, TCBSExecType,
+      TCBSInvestorType, TCBSSessionState.
+    - Map: IndexNameToCode (tên basket → numeric code).
+
+  pkg/sources/tcbs/client/types.go [NEW]
+    - Structs mapping JSON responses: TickerCommonsResponse, TickerCommonItem
+      (tất cả orderbook fields: matchQtty, bidQtty01..03, offerQtty01..03),
+      BSAResponse, IntradayHistoryResponse, DerivativesResponse.
+
+  pkg/sources/tcbs/client/client.go [NEW]
+    - TCBSClient: JWT auth, thread-safe sync.RWMutex.
+    - Retry: 4xx → no retry, 5xx → retry 3 lần với exponential backoff.
+    - Methods: GetTickerCommons(), GetTickerSnaps(), GetBSA(),
+      GetIntradayHistory(), GetDerivatives(), GetBatchTickerCommons().
+
+  pkg/sources/tcbs/market_data/poller.go [NEW]
+    - TCBSPoller với cron scheduler:
+      Morning:  */1 9-11 * * 1-5   (HOSE morning session)
+      Afternoon: */1 13-14 * * 1-5 (HOSE afternoon session)
+      EOD:      5 15 * * 1-5       (BSA + intraday sau đóng cửa 15:05)
+    - Publish: PublishTCBSMarket(), PublishTCBSBSA(), PublishTCBSIntradayTick().
+
+  pkg/schemas/tcbs_market_snapshot.avsc [NEW]
+    - 34 fields, namespace: com.tcbs.market.events
+
+  pkg/schemas/tcbs_bsa_event.avsc [NEW]
+    - BSA fields: bup / sdp / bsr / investorType
+
+  pkg/schemas/tcbs_intraday_tick_event.avsc [NEW]
+    - Tick fields: price / volume / action / highlight
+
+4.2 Files Edited
+----------------
+  pkg/producer/types.go
+    - Added: TCBSMarketEvent, TCBSBSAEvent, TCBSIntradayTickEvent.
+    - VPSSnapshotEvent kept với deprecation comment.
+
+  pkg/producer/producer.go
+    - Interface: added PublishTCBSMarket(), PublishTCBSBSA(), PublishTCBSIntradayTick().
+    - Schema registration startup: 3 TCBS schemas thêm vào.
+
+  constants/topics.go
+    - Added: TopicTCBSMarketSnapshot, TopicTCBSBSA, TopicTCBSIntradayTicks,
+      TopicAlertTCBSBSAAnomaly, DLQ topics TCBS.
+    - VPS topics kept as DEPRECATED aliases.
+
+  pkg/configuration/configuration.go
+    - Struct VPS → TCBS (BaseURL, APIKey, JWTToken, Symbols, Indexes,
+      BSAInvestorType, IntradayMaxPages).
+    - Env vars: TCBS_BASE_URL, TCBS_API_KEY, TCBS_JWT_TOKEN, TCBS_SYMBOLS,
+      TCBS_INDEXES, TCBS_BSA_INVESTOR_TYPE, TCBS_INTRADAY_MAX_PAGES.
+
+  app/server.go
+    - Import tcbs/market_data, wiring TCBSPoller thay VPSPoller.
+
+  pkg/sources/vps/market_data/poller.go
+    - Added //go:build ignore — excluded khỏi build, giữ làm reference.
+
+4.3 Validation Go (stream-producer)
+------------------------------------
+  go build ./...                              EXIT 0   OK
+  go vet ./...                                EXIT 0   OK
+  TestBinancePartitioner (3 cases)            PASS     OK
+
+
+=============================================================================
+5. THAY ĐỔI CHI TIẾT — dataops_backend_api (Go REST API)
+=============================================================================
+
+5.1 Files Created
+-----------------
+  constants/tcbs.go [NEW]
+    - Types: TCBSExchange (HOSE/HNX/UPCOM/DERIV), TCBSIndexCode (12 indices),
+      TCBSInvestorType (sheep/wolf/shark/all), TCBSSessionState (ATO/ATC/…).
+    - Map: TCBSIndexNameToCode.
+    - Validators: IsValidTCBSIndex(), IsValidTCBSInvestorType(),
+      IsValidTCBSSymbol(), IsValidTCBSStockSymbol(), IsTCBSMarketIndex().
+    - InfluxDB constants: InfluxMeasurementTCBSMarket/BSA/Intraday/OHLCV.
+    - Defaults: DefaultTCBSInvestorType, DefaultTCBSIntradayPageSize, MaxTCBSIntradayPages.
+    - Symbol registry: 30 HOSE symbols (VN30 bluechips + mid-cap) + 3 indices.
+
+  services/tcbs/tcbs.go [NEW]
+    - Service interface — 7 methods:
+      GetMarketSnapshot, GetOrderBook, GetOHLCV, GetTopMovers,
+      GetMarketSummary, GetBSA, GetIntradayTicks.
+    - tcbsService (InfluxDB implementation):
+      * GetOrderBook: reuse GetMarketSnapshot, không double-query.
+      * GetMarketSummary: VNINDEX + VN30 + VN100, skip lỗi per-index.
+      * GetIntradayTicks: pagination (page × size offset), sort asc by ts.
+      * GetBSA: query 24h range theo measurement tcbs_bsa.
+    - NewService(cfg, logger) → inject InfluxDB client từ config.
+
+  api/rest/tcbs.go [NEW]
+    - TCBSHandler với 7 GET endpoints (JWT-protected):
+
+      /tcbs/market         symbol (required)               stocks + indices
+      /tcbs/orderbook      symbol (required)               stocks only (indices rejected)
+      /tcbs/ohlcv          symbol, interval, from, to      lookback 90 ngày mặc định
+      /tcbs/top-movers     limit (max 50)                  HOSE only
+      /tcbs/market-summary —                               VNINDEX + VN30 + VN100
+      /tcbs/bsa            ticker, investor_type           sheep/wolf/shark/all
+      /tcbs/intraday-ticks ticker, page, size (max 1000)   0-based pagination
+
+5.2 Files Edited
+----------------
+  constants/constants.go
+    - Added TCBS_STOCK và TCBS_FUTURE vào EXCHANGE type.
+
+  models/analytics.go
+    - Added: TCBSMarketSnapshot (33 fields), TCBSOrderBook, TCBSPriceLevel,
+      TCBSBSASnapshot, TCBSIntradayTick, TCBSMarketSummary.
+    - VPSMarketSnapshot kept với deprecation comment.
+    - Alert.Source updated thêm "tcbs".
+
+  services/services.go
+    - Import services/tcbs.
+    - Added TCBSSvc tcbs.Service vào struct Services.
+    - Khởi tạo tcbs.NewService(cfg, logger) trong NewServices().
+
+  api/rest/rest.go
+    - Đăng ký TCBSHandler tại /api/v1/tcbs/* trong protected group.
+
+  configuration/configuration.go
+    - Added struct TCBS với 3 fields: BaseURL, APIKey, JWTToken.
+    - Env vars: TCBS_BASE_URL, TCBS_API_KEY, TCBS_JWT_TOKEN.
+
+5.3 Validation Go (backend-api)
+---------------------------------
+  go build dataops-backend-api/constants        EXIT 0   OK
+  go build dataops-backend-api/configuration    EXIT 0   OK
+  go build dataops-backend-api/services/tcbs    EXIT 0   OK
+
+  NOTE: go build ./... toàn module vẫn fail vì pre-existing errors:
+    repository/indicators_accounting.go: undefined: gorm
+    repository/repository.go: undefined: utils.GetTimeNow
+    middlewares/auth_tiers.go: UserSession field name mismatch (Status/RoleID/UserID)
+    middlewares/jwt_auth.go: "time" imported and not used
+  → Các lỗi này tồn tại TRƯỚC session này, không do task TCBS migration tạo ra.
+
+
+=============================================================================
+6. DATA FLOW SAU MIGRATION
+=============================================================================
+
+TCBS iFlash API (openapi.tcbs.com.vn)
+    |
+    +-- Smart OTP (TCInvest app) → JWT Token (long-lived)
+    |
+    └── TCBSPoller (dataops-stream-producer)
+            +-- 09:00-11:59 & 13:00-14:59 T2-T6: tickerCommons mỗi 1 phút
+            └── 15:05 EOD: BSA + intraday ticks
+                |
+                v
+        Kafka Topics (IBM/sarama SyncProducer)
+            +-- tcbs.market.snapshot  (Avro 34 fields)
+            +-- tcbs.bsa.events       (Avro: bup/sdp/bsr/investorType)
+            └── tcbs.intraday.ticks   (Avro: price/volume/action/highlight)
+                |
+                +-- DLQ: tcbs.market.snapshot.dlq
+                         tcbs.bsa.events.dlq
+                         tcbs.intraday.ticks.dlq
+                v
+        Spark Streaming → InfluxDB (binance-vps-platform org, market-data bucket)
+            +-- Measurement: tcbs_market    (tag: symbol, exchange)
+            +-- Measurement: tcbs_bsa       (tag: ticker, investor_type)
+            └── Measurement: tcbs_intraday  (tag: ticker)
+                |
+                v
+        dataops_backend_api REST Endpoints (JWT-protected)
+            GET /api/v1/tcbs/market
+            GET /api/v1/tcbs/orderbook
+            GET /api/v1/tcbs/ohlcv
+            GET /api/v1/tcbs/top-movers
+            GET /api/v1/tcbs/market-summary
+            GET /api/v1/tcbs/bsa            ← TCBS-exclusive
+            GET /api/v1/tcbs/intraday-ticks
+
+(Song song) dataops_batch_api — Delta Lake Bronze (MinIO)
+    run_tcbs_market_bronze()   → s3a://binance-datalake/tcbs_market/
+    run_tcbs_bsa_bronze()      → s3a://binance-datalake/tcbs_bsa/
+    run_tcbs_intraday_bronze() → s3a://binance-datalake/tcbs_intraday/
+
+
+=============================================================================
+7. ENV VARS MỚI CẦN THÊM
+=============================================================================
+
+dataops-stream-producer (.env):
+  TCBS_BASE_URL=https://openapi.tcbs.com.vn
+  TCBS_API_KEY=<your_tcbs_api_key>
+  TCBS_JWT_TOKEN=<jwt_from_tcbs_auth>
+  TCBS_SYMBOLS=VCB,HPG,TCB,VNM,MBB
+  TCBS_INDEXES=HOSE,VN30
+  TCBS_BSA_INVESTOR_TYPE=all
+  TCBS_INTRADAY_MAX_PAGES=5
+
+dataops_backend_api (.env):
+  TCBS_BASE_URL=https://openapi.tcbs.com.vn
+  TCBS_API_KEY=<your_tcbs_api_key>
+  TCBS_JWT_TOKEN=<jwt_from_tcbs_auth>
+
+dataops_batch_api:
+  TCBSRestClient đọc base_url từ tcbs_constants.yaml.
+  TCBS_API_KEY=<your_tcbs_api_key>
+  TCBS_JWT_TOKEN=<jwt_from_tcbs_auth>
+
+
+=============================================================================
+8. LESSON LEARNED & GOTCHAS
+=============================================================================
+
+8.1 TCBS API Gotchas
+----------------------
+[1] Field naming khác VPS — QUAN TRỌNG:
+    - matchQtty (double-t, KHÔNG phải matchQty)
+    - bidQtty01, bidQtty02, bidQtty03 (KHÔNG phải bidQty01)
+    - changePercent (KHÔNG phải changePct)
+    - totalVol / totalVal (KHÔNG phải volume / value)
+    → Sai field name → silent zero values trong InfluxDB — rất khó debug.
+
+[2] Mutually exclusive params:
+    ?tickers= và ?index= không dùng cùng lúc trong /tartarus/v1/tickerCommons.
+    → Sai → 400 hoặc empty response từ TCBS.
+
+[3] Batch size conservative = 50:
+    Undocumented limit. get_batch_ticker_commons() và GetBatchTickerCommons()
+    tự chia nhóm <= 50. Không test với 200+ symbols một lần.
+
+[4] OTP TTL ~30s — không thể auto-refresh:
+    Auth flow cần human interaction (TCInvest app) để lấy OTP mới.
+    → Khuyến nghị: JWT TTL dài + monitoring alert khi 401.
+    → KHÔNG thể implement fully automated token refresh.
+
+[5] BSA = TCBS-exclusive:
+    Không có endpoint tương đương ở VPS hay Binance.
+    Đây là differentiator chính của TCBS — cần highlight trong docs/UI.
+
+[6] Index basket codes là INTEGER:
+    ?index=2 (VN30), KHÔNG phải ?index=VN30.
+    Mapping: IndexNameToCode / TCBSIndexNameToCode.
+
+8.2 Architecture Decisions
+----------------------------
+[1] VPS code không bị xoá:
+    //go:build ignore trong Go, files giữ nguyên trong Python.
+    Lý do: backward compat với Kafka schema registry + existing consumers.
+
+[2] GetOrderBook reuses GetMarketSnapshot:
+    Orderbook 3 cấp embedded trong market snapshot → reuse, không double-query.
+
+[3] TCBSPoller dùng cron (không WebSocket):
+    TCBS không cung cấp WebSocket public → poll interval 1 phút cho intraday.
+    EOD BSA poll sau 15:05 để có đủ dữ liệu cuối ngày.
+
+[4] Avro namespace: com.tcbs.market.events
+    Tách biệt với com.binance.vps.events → không conflict trong Schema Registry.
+
+[5] GetMarketSummary skip lỗi per-index:
+    Nếu 1 index (VNINDEX/VN30/VN100) không có data → skip, không fail toàn request.
+    Trả partial result + log warning.
+
+8.3 Pre-existing Issues (không thuộc scope session này)
+--------------------------------------------------------
+  - repository/indicators_accounting.go: undefined: gorm
+  - repository/repository.go: undefined: utils.GetTimeNow
+  - middlewares/auth_tiers.go: UserSession field name mismatch
+  - middlewares/jwt_auth.go: "time" imported and not used
+  - go.mod module name: okx-analytics-api (cần rename task riêng)
+
+
+=============================================================================
+9. TODO CÒN LẠI SAU SESSION NÀY
+=============================================================================
+
+[HIGH — blocking production]
+  [ ] Fix pre-existing build errors trong repository/ và middlewares/
+      → go build ./... phải EXIT 0 trước khi deploy.
+  [ ] TCBS JWT token management strategy:
+      - Implement 401 detection → alert + log warning
+      - Quyết định: manual OTP refresh hay external cron trigger?
+  [ ] Test thực tế với TCBS API key thật:
+      - Verify field names (matchQtty etc.) khớp với struct tags trong code
+      - Verify batch size 50 không bị rate limit
+  [ ] Verify Avro schema compatibility với Schema Registry trước deploy.
+
+[MEDIUM]
+  [ ] Spark Streaming consumer: implement đọc từ TCBS Kafka topics →
+      ghi vào InfluxDB measurements (tcbs_market, tcbs_bsa, tcbs_intraday).
+  [ ] Test run_tcbs_*_bronze() với TCBS API thực tế.
+  [ ] Tạo .env files: dataops-stream-producer/.env, dataops_backend_api/.env
+      với các TCBS_* env vars.
+  [ ] Update Grafana dashboard grafana/dashboards/okx-vps-main.json
+      → thêm panels cho TCBS measurements.
+  [ ] Mở rộng tcbsHOSESymbols map khi thêm mã mới.
+
+[LOW]
+  [ ] Rename go.mod: okx-analytics-api → dataops-backend-api.
+  [ ] Rename Avro schema files: pkg/schemas/okx_*.avsc → binance_*.avsc.
+  [ ] Xoá alias OKX_CONFIG_YAML trong dataops_batch_api/config.py.
+  [ ] Unit tests cho TCBSHandler (mock tcbs.Service interface).
+  [ ] Unit tests cho tcbsService pagination logic (GetIntradayTicks).
+
+
+=============================================================================
+10. FILES THAY ĐỔI TỔNG HỢP
+=============================================================================
+
+dataops_batch_api (Python)
+  cli/ingestion/sources/tcbs_constants.yaml         CREATED
+  cli/ingestion/sources/tcbs_client.py              CREATED
+  cli/ingestion/sources/vps_client.py               unchanged (kept for compat)
+  cli/flows/config/exchange_config.yaml             EDITED (vps→tcbs section)
+  cli/ingestion/schema/models.py                    EDITED (TCBS models)
+  platforms/processing/config/delta_utils.py        EDITED (write_tcbs_* added)
+  cli/flows/serving/bronze_flow.py                  EDITED (TCBS flows)
+  cli/flows/serving/metadata.py                     EDITED (get_tcbs_cfg)
+  cli/flows/serving/daily_pipeline.py               EDITED (5 steps)
+  config.py                                         EDITED (TCBS delta paths)
+  log/config/logger_config.yaml                     EDITED (tcbs_file handler)
+
+dataops-stream-producer (Go)
+  pkg/sources/tcbs/constants/constants.go           CREATED
+  pkg/sources/tcbs/client/types.go                  CREATED
+  pkg/sources/tcbs/client/client.go                 CREATED
+  pkg/sources/tcbs/market_data/poller.go            CREATED
+  pkg/schemas/tcbs_market_snapshot.avsc             CREATED
+  pkg/schemas/tcbs_bsa_event.avsc                   CREATED
+  pkg/schemas/tcbs_intraday_tick_event.avsc         CREATED
+  pkg/schemas/vps_market_snapshot.avsc              unchanged (kept)
+  pkg/producer/types.go                             EDITED (TCBSMarketEvent etc.)
+  pkg/producer/producer.go                          EDITED (PublishTCBS* methods)
+  constants/topics.go                               EDITED (TCBS topics)
+  pkg/configuration/configuration.go               EDITED (VPS struct → TCBS)
+  app/server.go                                     EDITED (TCBSPoller wiring)
+  pkg/sources/vps/market_data/poller.go             EDITED (//go:build ignore)
+
+dataops_backend_api (Go REST API)
+  constants/tcbs.go                                 CREATED
+  constants/constants.go                            EDITED (TCBS_STOCK, TCBS_FUTURE)
+  models/analytics.go                              EDITED (TCBSMarketSnapshot etc.)
+  services/tcbs/tcbs.go                             CREATED
+  services/services.go                             EDITED (TCBSSvc added)
+  api/rest/tcbs.go                                  CREATED
+  api/rest/rest.go                                  EDITED (/tcbs route registered)
+  configuration/configuration.go                   EDITED (TCBS struct)
+  go.mod                                            unchanged (module: okx-analytics-api)
+
+Reference (read-only)
+  openapi-v1.0.0.json                               READ (TCBS API spec source of truth)
+
+=============================================================================
+END OF SESSION EXPORT
+=============================================================================

@@ -1,0 +1,19 @@
+{
+  "type": "record",
+  "name": "TCBSIntradayTickEvent",
+  "namespace": "com.tcbs.market.events",
+  "doc": "Tick-by-tick khớp lệnh intraday từ TCBS Nyx service. Reference: openapi-v1.0.0.json /nyx/v1/intraday/{ticker}/his/paging",
+  "fields": [
+    { "name": "ticker",       "type": "string",  "doc": "Mã cổ phiếu, e.g. VCB, TCB" },
+    { "name": "price",        "type": "double",  "doc": "Giá khớp lệnh (p)",                          "default": 0.0 },
+    { "name": "volume",       "type": "double",  "doc": "Khối lượng khớp (v)",                         "default": 0.0 },
+    { "name": "priceChange",  "type": "double",  "doc": "Thay đổi giá so với tham chiếu (cp)",         "default": 0.0 },
+    { "name": "action",       "type": "string",  "doc": "Hướng lệnh: Buy Up | Sell Down (a)",          "default": "" },
+    { "name": "buyAcc",       "type": "double",  "doc": "Lũy kế mua chủ động (ba)",                   "default": 0.0 },
+    { "name": "sellAcc",      "type": "double",  "doc": "Lũy kế bán chủ động (sa)",                   "default": 0.0 },
+    { "name": "highlight",    "type": "boolean", "doc": "true nếu giá trị giao dịch > 200M VND (hl)", "default": false },
+    { "name": "eventTime",    "type": "string",  "doc": "Thời gian khớp lệnh từ sàn (t)",              "default": "" },
+    { "name": "tsMs",         "type": "long",    "doc": "Unix timestamp milliseconds lúc snapshot" },
+    { "name": "producedAtMs", "type": "long",    "doc": "Unix timestamp milliseconds khi producer gửi lên Kafka" }
+  ]
+}

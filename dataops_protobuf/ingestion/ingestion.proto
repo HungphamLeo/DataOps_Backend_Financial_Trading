@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+// Protobuf schema cho Batch & Stream Ingestion Pipeline
+// Reference: dataops-stream-producer & dataops_batch_api ingestion flows
+
+package ingestion.v1;
+
+option go_package = "dataops-protobuf/ingestion;ingestionv1";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── Ingestion Pipeline Service ───────────────────────────────────────────────
+
+service IngestionService {
+  rpc TriggerBatchIngestion(BatchIngestionRequest) returns (BatchIngestionResponse);
+  rpc GetIngestionStatus(IngestionStatusRequest) returns (IngestionStatusResponse);
+  rpc IngestRawTicks(stream RawTickPayload) returns (IngestAck);
+}
+
+// ─── Batch Ingestion Trigger ──────────────────────────────────────────────────
+
+enum IngestionSource {
+  SOURCE_UNSPECIFIED = 0;
+  BINANCE_SPOT       = 1;
+  BINANCE_FUTURES    = 2;
+  TCBS_HOSE          = 3;
+  TCBS_HNX           = 4;
+  TCBS_UPCOM         = 5;
+  TCBS_DERIV         = 6;
+}
+
+message BatchIngestionRequest {
+  IngestionSource           source        = 1;
+  repeated string           symbols       = 2;
+  string                    interval      = 3; // "1m", "1h", "1d"
+  google.protobuf.Timestamp start_time    = 4;
+  google.protobuf.Timestamp end_time      = 5;
+  string                    target_bucket = 6; // e.g. "binance-datalake"
+}
+
+message BatchIngestionResponse {
+  string                    job_id     = 1;
+  string                    status     = 2; // "SUBMITTED", "RUNNING"
+  google.protobuf.Timestamp created_at = 3;
+}
+
+message IngestionStatusRequest {
+  string job_id = 1;
+}
+
+message IngestionStatusResponse {
+  string                    job_id          = 1;
+  string                    status          = 2; // "PENDING", "RUNNING", "COMPLETED", "FAILED"
+  int64                     records_written = 3;
+  string                    error_message   = 4;
+  google.protobuf.Timestamp started_at      = 5;
+  google.protobuf.Timestamp finished_at     = 6;
+}
+
+// ─── Stream Ingest Payload ────────────────────────────────────────────────────
+
+message RawTickPayload {
+  string                    source       = 1; // "binance", "tcbs"
+  string                    symbol       = 2;
+  bytes                     payload_data = 3; // Avro or JSON encoded bytes
+  google.protobuf.Timestamp ingest_ts    = 4;
+}
+
+message IngestAck {
+  bool   success = 1;
+  int64  offset  = 2;
+  string message = 3;
+}

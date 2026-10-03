@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+// Protobuf schema cho Real-time Market Data Stream (Binance Crypto & TCBS VN Stocks)
+// Reference: docs/openapi-v1.0.0.json, dataops_backend_api/models/analytics.go, dataops-stream-producer
+
+package marketdata.v1;
+
+option go_package = "dataops-protobuf/marketdata;marketdatav1";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── Market Data Stream Service ───────────────────────────────────────────────
+
+service MarketDataStream {
+  // Unary data queries
+  rpc GetTicker(TickerRequest) returns (TickerResponse);
+  rpc GetOrderBook(OrderBookRequest) returns (OrderBookResponse);
+  rpc GetKline(KlineRequest) returns (KlineResponse);
+
+  // Streaming real-time data
+  rpc StreamTicker(TickerRequest) returns (stream TickerResponse);
+  rpc StreamOrderBook(OrderBookRequest) returns (stream OrderBookResponse);
+  rpc StreamTrades(TradeStreamRequest) returns (stream MarketTrade);
+}
+
+// ─── Requests ─────────────────────────────────────────────────────────────────
+
+message TickerRequest {
+  string symbol   = 1; // "BTCUSDT" hoặc "VCB"
+  string exchange = 2; // "binance", "tcbs", "vps"
+}
+
+message OrderBookRequest {
+  string symbol   = 1;
+  string exchange = 2;
+  int32  depth    = 3; // e.g. 3, 5, 10, 20
+}
+
+message KlineRequest {
+  string                    symbol   = 1;
+  string                    exchange = 2;
+  string                    interval = 3; // "1m", "5m", "15m", "1h", "1d"
+  google.protobuf.Timestamp from     = 4;
+  google.protobuf.Timestamp to       = 5;
+  int32                     limit    = 6;
+}
+
+message TradeStreamRequest {
+  repeated string symbols  = 1;
+  string          exchange = 2;
+}
+
+// ─── Response Messages ────────────────────────────────────────────────────────
+
+message TickerResponse {
+  string                    symbol         = 1;
+  string                    exchange       = 2;
+  double                    price          = 3;
+  double                    volume         = 4;
+  double                    bid            = 5;
+  double                    ask            = 6;
+  double                    high_24h       = 7;
+  double                    low_24h        = 8;
+  double                    change_pct_24h = 9;
+  google.protobuf.Timestamp timestamp      = 10;
+}
+
+message OrderBookEntry {
+  double price    = 1;
+  double quantity = 2;
+  int32  orders   = 3; // Số lượng lệnh (nếu có, ví dụ Binance depth5/TCBS)
+}
+
+message OrderBookResponse {
+  string                    symbol    = 1;
+  string                    exchange  = 2;
+  repeated OrderBookEntry   bids      = 3;
+  repeated OrderBookEntry   asks      = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+message Kline {
+  string                    symbol    = 1;
+  string                    exchange  = 2;
+  string                    interval  = 3;
+  double                    open      = 4;
+  double                    high      = 5;
+  double                    low       = 6;
+  double                    close     = 7;
+  double                    volume    = 8;
+  double                    quote_vol = 9; // Quote asset volume (Binance quoteVolume / TCBS totalVal)
+  google.protobuf.Timestamp timestamp = 10;
+}
+
+message KlineResponse {
+  repeated Kline klines = 1;
+}
+
+message MarketTrade {
+  string                    symbol       = 1;
+  string                    exchange     = 2;
+  string                    trade_id     = 3;
+  double                    price        = 4;
+  double                    quantity     = 5;
+  string                    side         = 6; // "buy" | "sell"
+  bool                      is_buyer_maker = 7;
+  google.protobuf.Timestamp timestamp    = 8;
+}
