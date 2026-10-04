@@ -310,8 +310,8 @@ services:
           cpus: "0.50"
           memory: "512M"
 
-  # ─── STREAM PRODUCER (Go WebSocket/Poller to Kafka) ────────────────────────
-  dataops-stream-producer:
+  # dataops-stream-producer disabled — Kafka broker format issue in Go code
+  # dataops-stream-producer:
     build:
       context: ../dataops_stream_producer
       dockerfile: Dockerfile
