@@ -31,6 +31,8 @@ ENV JAVA_HOME=/usr/lib/jvm/default-java
 ENV PATH="$JAVA_HOME/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+# Cho phép absolute imports từ project root (cli.flows.serving.*, platforms.*, v.v.)
+ENV PYTHONPATH=/app
 
 # Copy installed packages từ builder
 COPY --from=builder /install /usr/local

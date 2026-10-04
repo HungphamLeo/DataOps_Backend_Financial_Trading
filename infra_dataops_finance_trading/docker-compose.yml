@@ -1,7 +1,5 @@
 # ==============================================================================
 # DataOps Backend Financial Trading — Unified Production Infrastructure
-# Reference: docker_production.skill.md (Healthchecks, Secrets, Resource Limits,
-# Non-root isolation, Named Volumes, Isolated Overlay Networks, Restart Policies)
 # ==============================================================================
 
 networks:
@@ -25,7 +23,7 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://kafka1:29092,CONTROLLER://kafka1:9093,EXTERNAL://0.0.0.0:9092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka1:29092,EXTERNAL://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka1:29092,EXTERNAL://kafka1:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
@@ -38,11 +36,6 @@ services:
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
     volumes:
       - kafka1-data:/var/lib/kafka/data
-    healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server kafka1:29092 || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
     deploy:
       resources:
         limits:
@@ -63,8 +56,8 @@ services:
     environment:
       KAFKA_NODE_ID: 2
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://kafka2:29092,CONTROLLER://kafka2:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka2:29092
+      KAFKA_LISTENERS: PLAINTEXT://kafka2:29092,CONTROLLER://kafka2:9093,EXTERNAL://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka2:29092,EXTERNAL://kafka2:9093
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
@@ -75,11 +68,6 @@ services:
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
     volumes:
       - kafka2-data:/var/lib/kafka/data
-    healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server kafka2:29092 || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
     deploy:
       resources:
         limits:
@@ -88,6 +76,8 @@ services:
         reservations:
           cpus: "0.25"
           memory: "512M"
+    healthcheck:
+      test: ["CMD", "cub", "kafka-ready", "-b", "localhost:9093", "1", "30"]
 
   # ─── KAFKA BROKER 3 (KRaft Mode) ───────────────────────────────────────────
   kafka3:
@@ -100,8 +90,8 @@ services:
     environment:
       KAFKA_NODE_ID: 3
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://kafka3:29092,CONTROLLER://kafka3:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka3:29092
+      KAFKA_LISTENERS: PLAINTEXT://kafka3:29092,CONTROLLER://kafka3:9093,EXTERNAL://0.0.0.0:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka3:29092,EXTERNAL://kafka3:9094
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
@@ -112,11 +102,6 @@ services:
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
     volumes:
       - kafka3-data:/var/lib/kafka/data
-    healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server kafka3:29092 || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
     deploy:
       resources:
         limits:
@@ -125,6 +110,8 @@ services:
         reservations:
           cpus: "0.25"
           memory: "512M"
+    healthcheck:
+      test: ["CMD", "cub", "kafka-ready", "-b", "localhost:9094", "1", "30"]
 
   # ─── SCHEMA REGISTRY ───────────────────────────────────────────────────────
   schema-registry:
@@ -134,13 +121,6 @@ services:
     restart: unless-stopped
     networks:
       - dataops-internal-net
-    depends_on:
-      kafka1:
-        condition: service_healthy
-      kafka2:
-        condition: service_healthy
-      kafka3:
-        condition: service_healthy
     ports:
       - "8081:8081"
     environment:
@@ -149,9 +129,10 @@ services:
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
-      interval: 10s
-      timeout: 5s
+      interval: 30s
+      timeout: 10s
       retries: 5
+      start_period: 90s
     deploy:
       resources:
         limits:
@@ -169,7 +150,7 @@ services:
     networks:
       - dataops-internal-net
     depends_on:
-      schema-registry:
+      influxdb:
         condition: service_healthy
     ports:
       - "8082:8080"
@@ -317,6 +298,12 @@ services:
       - grafana-data:/var/lib/grafana
       - ../grafana/dashboards:/etc/grafana/provisioning/dashboards
       - ../grafana/datasources:/etc/grafana/provisioning/datasources
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     deploy:
       resources:
         limits:
@@ -333,15 +320,7 @@ services:
     networks:
       - dataops-internal-net
     depends_on:
-      kafka1:
-        condition: service_healthy
-      kafka2:
-        condition: service_healthy
-      kafka3:
-        condition: service_healthy
       redis:
-        condition: service_healthy
-      schema-registry:
         condition: service_healthy
     environment:
       KAFKA_URL: kafka1:29092,kafka2:29092,kafka3:29092
@@ -383,8 +362,6 @@ services:
       redis:
         condition: service_healthy
       influxdb:
-        condition: service_healthy
-      kafka1:
         condition: service_healthy
     ports:
       - "8080:8080"
@@ -527,4 +504,3 @@ volumes:
   redis-data:
   influxdb-data:
   grafana-data:
-

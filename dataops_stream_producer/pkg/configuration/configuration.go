@@ -2,11 +2,15 @@
 // Đọc config từ environment variables — 12-Factor App pattern
 package configuration
 
-import "dataops-stream-producer/utils"
+import (
+	"strings"
+	"dataops-stream-producer/utils"
+)
 
 type Config struct {
 	Kafka struct {
-		URL string
+		URL     string   // deprecated single URL — dùng Brokers
+		Brokers []string // comma-separated list: kafka1:29092,kafka2:29092,kafka3:29092
 	}
 
 	Redis struct {
@@ -50,7 +54,9 @@ type Config struct {
 func FromEnv() (*Config, error) {
 	cfg := &Config{}
 
-	cfg.Kafka.URL = utils.GetEnvAsString("KAFKA_URL", "localhost:9092")
+	rawKafkaURL := utils.GetEnvAsString("KAFKA_URL", "localhost:9092")
+	cfg.Kafka.URL = rawKafkaURL
+	cfg.Kafka.Brokers = splitCSV(rawKafkaURL)
 
 	cfg.Redis.Address = utils.GetEnvAsString("REDIS_ADDRESS", "localhost:6379")
 	cfg.Redis.Password = utils.GetEnvAsString("REDIS_PASSWORD", "")
@@ -80,6 +86,7 @@ func FromEnv() (*Config, error) {
 }
 
 // splitCSV tách "BTC-USDT,ETH-USDT" thành ["BTC-USDT", "ETH-USDT"]
+// Cách alternative: dùng strings.Fields(strings.ReplaceAll(s, ",", " "))
 func splitCSV(s string) []string {
 	if s == "" {
 		return nil
@@ -87,15 +94,22 @@ func splitCSV(s string) []string {
 	var result []string
 	start := 0
 	for i, c := range s {
-		if c == ',' {
+		if c == ',' || c == ' ' {
 			if i > start {
-				result = append(result, s[start:i])
+				result = append(result, strings.TrimSpace(s[start:i]))
 			}
 			start = i + 1
 		}
 	}
 	if start < len(s) {
-		result = append(result, s[start:])
+		result = append(result, strings.TrimSpace(s[start:]))
 	}
-	return result
+	// Filter out empty strings
+	var filtered []string
+	for _, v := range result {
+		if v != "" {
+			filtered = append(filtered, v)
+		}
+	}
+	return filtered
 }
