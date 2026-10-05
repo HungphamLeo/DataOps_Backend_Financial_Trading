@@ -987,6 +987,14 @@ class TCBSRestClient:
             TCBS_TIMEOUT:     Request timeout seconds (default: 15)
             TCBS_RETRY:       Retry attempts (default: 3)
 
+        Auth note:
+            TCBS Access Token có TTL = 8 giờ (28800s).
+            token_refresh_threshold_sec = 7200s → cảnh báo/refresh khi còn < 2h.
+            Khớp với Go client: tcbsconst.TokenRefreshThreshold = 3600s.
+            Workflow: có TCBS_API_KEY thì set vào client; có TCBS_JWT_TOKEN thì
+            dùng luôn (manual flow). Không có TCBS_JWT_TOKEN → phải gọi
+            client.authenticate(otp) với Smart OTP từ TCInvest app.
+
         Returns:
             Configured TCBSRestClient instance.
         """
@@ -995,6 +1003,9 @@ class TCBSRestClient:
             api_key=os.getenv("TCBS_API_KEY", ""),
             request_timeout=int(os.getenv("TCBS_TIMEOUT", "15")),
             retry_attempts=int(os.getenv("TCBS_RETRY", "3")),
+            # TCBS token TTL = 8h (28800s). Refresh threshold = 7200s (2h trước khi hết).
+            # Default cũ là 300s — quá ngắn, sẽ coi token injected từ env là expired sau 5 phút.
+            token_refresh_threshold_sec=int(os.getenv("TCBS_TOKEN_THRESHOLD_SEC", "7200")),
         )
 
         # Nếu token đã được set sẵn qua env (e.g. CI/CD pipeline)
