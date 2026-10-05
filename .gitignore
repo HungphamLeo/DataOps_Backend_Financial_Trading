@@ -1,11 +1,15 @@
+# =============================================================================
+# SECRETS & SENSITIVE CONFIG — KHÔNG BAO GIỜ COMMIT
+# =============================================================================
 .env
-.env.example
-.venv
-docker-compose.yml
-data_ops_fin_trading/
+.env.*
+!.env.example
+
+# Docker Compose production file chứa credentials → không commit
+infra_dataops_finance_trading/docker-compose.yml
 
 # =============================================================================
-# Python bytecode
+# Python bytecode & virtual environments
 # =============================================================================
 *.pyc
 *.pyo
@@ -14,6 +18,8 @@ __pycache__/
 dist/
 build/
 .eggs/
+.venv/
+venv/
 
 # =============================================================================
 # Logs (runtime output — không cần track)
@@ -22,16 +28,39 @@ build/
 logs/**/*.log
 logs/**/*.log.*
 
-
-
+# =============================================================================
+# Go build artifacts
+# =============================================================================
+*.exe
+*.test
+*.out
 
 # =============================================================================
-# KHÔNG ignore các loại file quan trọng sau:
-*.yaml
-*.yml
-# *.csv
-# *.ipynb
-# *.txt          -> requirements.txt
-# *.json         -> package.json, schemas, fixtures
-# *.md           -> docs, export_task reports
+# IDE & OS artifacts
+# =============================================================================
+.idea/
+.vscode/
+*.DS_Store
+Thumbs.db
+
+# =============================================================================
+# Data & large binary files
+# =============================================================================
+*.parquet
+*.delta
+*.avro
+*.pb
+*.bin
+data/
+
+# =============================================================================
+# KHÔNG ignore các loại file quan trọng sau (tracked trong git):
+# *.yaml, *.yml   → docker-compose templates, k8s manifests, CI configs
+# *.csv           → fixtures, test data nhỏ
+# *.ipynb         → notebooks
+# *.txt           → requirements.txt, session exports
+# *.json          → package.json, schemas, fixtures
+# *.md            → docs, export_task reports
+# *.proto         → protobuf schema definitions
+# .env.example    → template hướng dẫn setup (không chứa secret thật)
 # =============================================================================
