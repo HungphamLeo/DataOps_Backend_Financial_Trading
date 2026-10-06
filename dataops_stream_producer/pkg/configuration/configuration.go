@@ -2,11 +2,15 @@
 // Đọc config từ environment variables — 12-Factor App pattern
 package configuration
 
-import "dataops-stream-producer/utils"
+import (
+	"strings"
+
+	"dataops-stream-producer/utils"
+)
 
 type Config struct {
 	Kafka struct {
-		URL string
+		Brokers []string
 	}
 
 	Redis struct {
@@ -50,7 +54,7 @@ type Config struct {
 func FromEnv() (*Config, error) {
 	cfg := &Config{}
 
-	cfg.Kafka.URL = utils.GetEnvAsString("KAFKA_URL", "localhost:9092")
+	cfg.Kafka.Brokers = splitCSV(utils.GetEnvAsString("KAFKA_URL", "localhost:9092"))
 
 	cfg.Redis.Address = utils.GetEnvAsString("REDIS_ADDRESS", "localhost:6379")
 	cfg.Redis.Password = utils.GetEnvAsString("REDIS_PASSWORD", "")
@@ -89,13 +93,17 @@ func splitCSV(s string) []string {
 	for i, c := range s {
 		if c == ',' {
 			if i > start {
-				result = append(result, s[start:i])
+				if value := strings.TrimSpace(s[start:i]); value != "" {
+					result = append(result, value)
+				}
 			}
 			start = i + 1
 		}
 	}
 	if start < len(s) {
-		result = append(result, s[start:])
+		if value := strings.TrimSpace(s[start:]); value != "" {
+			result = append(result, value)
+		}
 	}
 	return result
 }

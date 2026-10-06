@@ -2,7 +2,7 @@
 .env.example
 .venv
 *md
-*docker-compose.yml
+infra_dataops_finance_trading/docker-compose.yml
 data_ops_fin_trading/
 
 # =============================================================================

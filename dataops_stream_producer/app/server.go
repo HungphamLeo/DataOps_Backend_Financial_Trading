@@ -32,8 +32,10 @@ func NewServer() error {
 	}
 
 	// 3. Kafka Enterprise Producer (acks=all, idempotence=true, BinancePartitioner, DLQ, Schema Registry)
-	brokers := []string{cfg.Kafka.URL}
-	kafkaProd, err := producer.NewProducer(brokers, cfg.SchemaRegistry.URL)
+	if len(cfg.Kafka.Brokers) == 0 {
+		return fmt.Errorf("[Config] KAFKA_URL must contain at least one broker address")
+	}
+	kafkaProd, err := producer.NewProducer(cfg.Kafka.Brokers, cfg.SchemaRegistry.URL)
 	if err != nil {
 		return fmt.Errorf("[Kafka Producer] %w", err)
 	}
