@@ -4,13 +4,13 @@ package configuration
 
 import (
 	"strings"
+
 	"dataops-stream-producer/utils"
 )
 
 type Config struct {
 	Kafka struct {
-		URL     string   // deprecated single URL — dùng Brokers
-		Brokers []string // comma-separated list: kafka1:29092,kafka2:29092,kafka3:29092
+		Brokers []string
 	}
 
 	Redis struct {
@@ -29,17 +29,17 @@ type Config struct {
 	// TCBS thay thế VPS cho market data streaming
 	// Reference: openapi-v1.0.0.json — TCBS iFlash Open API v1.0.0
 	TCBS struct {
-		BaseURL  string   // https://openapi.tcbs.com.vn
-		APIKey   string   // API Key từ TCInvest app (dùng để authenticate lấy JWT)
-		JWTToken string   // Pre-obtained JWT token — dùng khi không muốn gọi authenticate()
+		BaseURL  string // https://openapi.tcbs.com.vn
+		APIKey   string // API Key từ TCInvest app (dùng để authenticate lấy JWT)
+		JWTToken string // Pre-obtained JWT token — dùng khi không muốn gọi authenticate()
 		// Mã CK cần poll BSA + Intraday (danh sách quan trọng)
-		Symbols         []string // ["VCB","VHM","TCB","VIC","HPG"]
+		Symbols []string // ["VCB","VHM","TCB","VIC","HPG"]
 		// Index baskets cần poll tickerCommons (market snapshot)
-		Indexes         []string // ["HOSE","VN30","HNX"]
+		Indexes []string // ["HOSE","VN30","HNX"]
 		// Loại nhà đầu tư cho BSA poll — xem tcbs_constants TCBSInvestorType
-		BSAInvestorType string   // "sheep"|"wolf"|"shark"|"all" (default: "all")
+		BSAInvestorType string // "sheep"|"wolf"|"shark"|"all" (default: "all")
 		// Số trang tối đa khi lấy intraday tick history mỗi ticker
-		IntradayMaxPages int     // default: 5
+		IntradayMaxPages int // default: 5
 	}
 
 	SchemaRegistry struct {
@@ -54,9 +54,7 @@ type Config struct {
 func FromEnv() (*Config, error) {
 	cfg := &Config{}
 
-	rawKafkaURL := utils.GetEnvAsString("KAFKA_URL", "localhost:9092")
-	cfg.Kafka.URL = rawKafkaURL
-	cfg.Kafka.Brokers = splitCSV(rawKafkaURL)
+	cfg.Kafka.Brokers = splitCSV(utils.GetEnvAsString("KAFKA_URL", "localhost:9092"))
 
 	cfg.Redis.Address = utils.GetEnvAsString("REDIS_ADDRESS", "localhost:6379")
 	cfg.Redis.Password = utils.GetEnvAsString("REDIS_PASSWORD", "")
@@ -67,13 +65,13 @@ func FromEnv() (*Config, error) {
 	cfg.Binance.Symbols = splitCSV(utils.GetEnvAsString("BINANCE_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT"))
 
 	// TCBS config
-	cfg.TCBS.BaseURL   = utils.GetEnvAsString("TCBS_BASE_URL", "https://openapi.tcbs.com.vn")
-	cfg.TCBS.APIKey    = utils.GetEnvAsString("TCBS_API_KEY", "")
-	cfg.TCBS.JWTToken  = utils.GetEnvAsString("TCBS_JWT_TOKEN", "")
+	cfg.TCBS.BaseURL = utils.GetEnvAsString("TCBS_BASE_URL", "https://openapi.tcbs.com.vn")
+	cfg.TCBS.APIKey = utils.GetEnvAsString("TCBS_API_KEY", "")
+	cfg.TCBS.JWTToken = utils.GetEnvAsString("TCBS_JWT_TOKEN", "")
 	// Symbols cho BSA + Intraday ticks — quan trọng nhất
-	cfg.TCBS.Symbols   = splitCSV(utils.GetEnvAsString("TCBS_SYMBOLS", "VCB,VHM,TCB,VIC,HPG,MSN,VNM,MBB,CTG,BID"))
+	cfg.TCBS.Symbols = splitCSV(utils.GetEnvAsString("TCBS_SYMBOLS", "VCB,VHM,TCB,VIC,HPG,MSN,VNM,MBB,CTG,BID"))
 	// Index baskets cho market snapshot (tickerCommons)
-	cfg.TCBS.Indexes   = splitCSV(utils.GetEnvAsString("TCBS_INDEXES", "HOSE,VN30,HNX"))
+	cfg.TCBS.Indexes = splitCSV(utils.GetEnvAsString("TCBS_INDEXES", "HOSE,VN30,HNX"))
 	cfg.TCBS.BSAInvestorType = utils.GetEnvAsString("TCBS_BSA_INVESTOR_TYPE", "all")
 	intradayMaxPages, _ := utils.GetEnvAsInt("TCBS_INTRADAY_MAX_PAGES", 5)
 	cfg.TCBS.IntradayMaxPages = intradayMaxPages
@@ -86,7 +84,6 @@ func FromEnv() (*Config, error) {
 }
 
 // splitCSV tách "BTC-USDT,ETH-USDT" thành ["BTC-USDT", "ETH-USDT"]
-// Cách alternative: dùng strings.Fields(strings.ReplaceAll(s, ",", " "))
 func splitCSV(s string) []string {
 	if s == "" {
 		return nil
@@ -94,22 +91,19 @@ func splitCSV(s string) []string {
 	var result []string
 	start := 0
 	for i, c := range s {
-		if c == ',' || c == ' ' {
+		if c == ',' {
 			if i > start {
-				result = append(result, strings.TrimSpace(s[start:i]))
+				if value := strings.TrimSpace(s[start:i]); value != "" {
+					result = append(result, value)
+				}
 			}
 			start = i + 1
 		}
 	}
 	if start < len(s) {
-		result = append(result, strings.TrimSpace(s[start:]))
-	}
-	// Filter out empty strings
-	var filtered []string
-	for _, v := range result {
-		if v != "" {
-			filtered = append(filtered, v)
+		if value := strings.TrimSpace(s[start:]); value != "" {
+			result = append(result, value)
 		}
 	}
-	return filtered
+	return result
 }

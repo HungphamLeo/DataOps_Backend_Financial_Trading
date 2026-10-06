@@ -1,6 +1,10 @@
 # ─── Stage 1: Build binary ─────────────────────────────────────────
 FROM golang:1.27-alpine AS builder
 
+# ARG cho phép override GOPROXY lúc build: --build-arg GOPROXY=direct
+ARG GOPROXY=https://proxy.golang.org,https://goproxy.io,direct
+ENV GOPROXY=${GOPROXY}
+
 WORKDIR /build
 
 RUN apk add --no-cache git ca-certificates tzdata

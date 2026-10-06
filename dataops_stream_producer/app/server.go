@@ -32,8 +32,9 @@ func NewServer() error {
 	}
 
 	// 3. Kafka Enterprise Producer (acks=all, idempotence=true, BinancePartitioner, DLQ, Schema Registry)
-	// cfg.Kafka.Brokers đã được split từ KAFKA_URL (có thể là CSV: "kafka1:29092,kafka2:29092,kafka3:29092")
-	fmt.Printf("[DEBUG] cfg.Kafka.URL=%s, cfg.Kafka.Brokers=%v\n", cfg.Kafka.URL, cfg.Kafka.Brokers)
+	if len(cfg.Kafka.Brokers) == 0 {
+		return fmt.Errorf("[Config] KAFKA_URL must contain at least one broker address")
+	}
 	kafkaProd, err := producer.NewProducer(cfg.Kafka.Brokers, cfg.SchemaRegistry.URL)
 	if err != nil {
 		return fmt.Errorf("[Kafka Producer] %w", err)
