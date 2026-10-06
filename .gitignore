@@ -4,7 +4,7 @@
 .env
 .env.*
 !.env.example
-data_ops_finance_trading/
+data_ops_fin_trading/
 # Docker Compose production file chứa credentials → không commit
 infra_dataops_finance_trading/docker-compose.yml
 
