@@ -30,6 +30,7 @@ func NewServer() error {
 	if !redisDB0.Ping() {
 		return fmt.Errorf("[Redis] connection was down")
 	}
+	defer redisDB0.Close()
 
 	// 3. Kafka Enterprise Producer (acks=all, idempotence=true, BinancePartitioner, DLQ, Schema Registry)
 	if len(cfg.Kafka.Brokers) == 0 {

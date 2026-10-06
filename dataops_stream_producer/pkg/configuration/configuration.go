@@ -3,6 +3,7 @@
 package configuration
 
 import (
+	"fmt"
 	"strings"
 
 	"dataops-stream-producer/utils"
@@ -21,7 +22,7 @@ type Config struct {
 
 	Binance struct {
 		// WebSocket public URL — không cần API key cho market data
-		WSURL string // wss://stream.binance.com:9443/ws
+		WSURL string // wss://stream.binance.com:9443
 		// Trading pairs cần stream
 		Symbols []string // ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 	}
@@ -58,9 +59,13 @@ func FromEnv() (*Config, error) {
 
 	cfg.Redis.Address = utils.GetEnvAsString("REDIS_ADDRESS", "localhost:6379")
 	cfg.Redis.Password = utils.GetEnvAsString("REDIS_PASSWORD", "")
-	cfg.Redis.DB_0, _ = utils.GetEnvAsInt("REDIS_DB_0", 0)
+	redisDB0, err := utils.GetEnvAsInt("REDIS_DB_0", 0)
+	if err != nil {
+		return nil, fmt.Errorf("invalid REDIS_DB_0: %w", err)
+	}
+	cfg.Redis.DB_0 = redisDB0
 
-	cfg.Binance.WSURL = utils.GetEnvAsString("BINANCE_WS_URL", "wss://stream.binance.com:9443/ws")
+	cfg.Binance.WSURL = utils.GetEnvAsString("BINANCE_WS_URL", "wss://stream.binance.com:9443")
 	// Symbols từ env: "BTCUSDT,ETHUSDT,SOLUSDT"
 	cfg.Binance.Symbols = splitCSV(utils.GetEnvAsString("BINANCE_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT"))
 
@@ -73,7 +78,10 @@ func FromEnv() (*Config, error) {
 	// Index baskets cho market snapshot (tickerCommons)
 	cfg.TCBS.Indexes   = splitCSV(utils.GetEnvAsString("TCBS_INDEXES", "HOSE,VN30,HNX"))
 	cfg.TCBS.BSAInvestorType = utils.GetEnvAsString("TCBS_BSA_INVESTOR_TYPE", "all")
-	intradayMaxPages, _ := utils.GetEnvAsInt("TCBS_INTRADAY_MAX_PAGES", 5)
+	intradayMaxPages, err := utils.GetEnvAsInt("TCBS_INTRADAY_MAX_PAGES", 5)
+	if err != nil {
+		return nil, fmt.Errorf("invalid TCBS_INTRADAY_MAX_PAGES: %w", err)
+	}
 	cfg.TCBS.IntradayMaxPages = intradayMaxPages
 
 	cfg.SchemaRegistry.URL = utils.GetEnvAsString("SCHEMA_REGISTRY_URL", "http://localhost:8081")
