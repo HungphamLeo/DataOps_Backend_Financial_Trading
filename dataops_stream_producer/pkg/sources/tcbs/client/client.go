@@ -167,7 +167,9 @@ func (c *Client) GetTickerCommons(tickers []string, indexCode tcbsconst.TCBSInde
 		params.Set("index", strconv.Itoa(int(indexCode)))
 	}
 
-	respBytes, err := c.doGetWithRetry(string(tcbsconst.EndpointTickerCommons), params, false)
+	// tickerCommons yêu cầu bearerAuth theo global security scheme trong openapi-v1.0.0.json.
+	// Không có operation-level security override → dùng requireAuth: true.
+	respBytes, err := c.doGetWithRetry(string(tcbsconst.EndpointTickerCommons), params, true)
 	if err != nil {
 		return nil, fmt.Errorf("GetTickerCommons: %w", err)
 	}
@@ -191,7 +193,7 @@ func (c *Client) GetTickerSnaps(indexCode tcbsconst.TCBSIndexCode) (*TickerSnaps
 		params.Set("index", strconv.Itoa(int(indexCode)))
 	}
 
-	respBytes, err := c.doGetWithRetry(string(tcbsconst.EndpointTickerSnaps), params, false)
+	respBytes, err := c.doGetWithRetry(string(tcbsconst.EndpointTickerSnaps), params, true)
 	if err != nil {
 		return nil, fmt.Errorf("GetTickerSnaps: %w", err)
 	}
@@ -208,7 +210,7 @@ func (c *Client) GetTickerSnaps(indexCode tcbsconst.TCBSIndexCode) (*TickerSnaps
 
 // GetDerivatives lấy bảng giá thị trường phái sinh (VN30F).
 func (c *Client) GetDerivatives() (*DerivativesResponse, error) {
-	respBytes, err := c.doGetWithRetry(string(tcbsconst.EndpointDerivatives), nil, false)
+	respBytes, err := c.doGetWithRetry(string(tcbsconst.EndpointDerivatives), nil, true)
 	if err != nil {
 		return nil, fmt.Errorf("GetDerivatives: %w", err)
 	}

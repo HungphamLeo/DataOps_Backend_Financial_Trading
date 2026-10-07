@@ -87,6 +87,21 @@ func (p *BinanceProducer) connectAndStream(ctx context.Context, symbol string) e
 	}
 	defer conn.Close()
 
+	// Binance gửi Ping frame mỗi ~3 phút và yêu cầu Pong trong vòng 10 phút.
+	// Gorilla WebSocket KHÔNG tự trả Pong — phải set PingHandler tường minh.
+	// Thiếu handler này dẫn đến close 1008 (policy violation: Pong timeout).
+	conn.SetPingHandler(func(data string) error {
+		// Phải set WriteDeadline trước khi ghi để tránh block vô hạn
+		if err := conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			return err
+		}
+		return conn.WriteMessage(websocket.PongMessage, []byte(data))
+	})
+
+	// ReadDeadline reset sau mỗi message để phát hiện kết nối chết.
+	// 5 phút > interval Ping của Binance (3 phút) → không false-positive.
+	const readDeadline = 5 * time.Minute
+
 	fmt.Printf("%s [BinanceProducer] [%s] connected to Binance WebSocket\n", utils.GetTimeNow(), symbol)
 
 	// Read loop
@@ -95,6 +110,9 @@ func (p *BinanceProducer) connectAndStream(ctx context.Context, symbol string) e
 		case <-ctx.Done():
 			return nil
 		default:
+			if err := conn.SetReadDeadline(time.Now().Add(readDeadline)); err != nil {
+				return fmt.Errorf("set read deadline: %w", err)
+			}
 			_, msgBytes, err := conn.ReadMessage()
 			if err != nil {
 				return fmt.Errorf("read error: %w", err)

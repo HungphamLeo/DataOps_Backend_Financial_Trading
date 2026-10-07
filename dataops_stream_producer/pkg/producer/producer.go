@@ -72,9 +72,18 @@ func NewProducer(brokers []string, schemaRegistryURL string) (Producer, error) {
 	// LEARN: Acks options: NoResponse(0) < WaitForLocal(1) < WaitForAll(-1)
 	config.Producer.RequiredAcks = sarama.WaitForAll
 
-	// Retry tự động khi gặp temporary failures
-	config.Producer.Retry.Max = 5
-	config.Producer.Retry.Backoff = 100 * time.Millisecond
+	// Retry: 10 lần với backoff 500ms = tổng tối đa 5s chờ leader election.
+	// Trước đây: Retry.Max=5, Backoff=100ms → tổng 500ms — quá ngắn khi Kafka
+	// đang elect partition leader mới, dẫn đến NotLeaderForPartition vào DLQ.
+	config.Producer.Retry.Max = 10
+	config.Producer.Retry.Backoff = 500 * time.Millisecond
+
+	// Metadata refresh: Sarama tự refresh khi gặp NotLeaderForPartition.
+	// RefreshFrequency = 0 (default) chỉ refresh khi bị force — tăng lên 30s
+	// để producer luôn có metadata mới sau broker restart/leader election.
+	config.Metadata.RefreshFrequency = 30 * time.Second
+	// Full=true: refresh tất cả topics cùng lúc thay vì chỉ topic gặp lỗi
+	config.Metadata.Full = true
 
 	// Bật return (channel) để SyncProducer biết kết quả
 	config.Producer.Return.Successes = true

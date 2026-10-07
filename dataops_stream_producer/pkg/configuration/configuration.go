@@ -27,20 +27,49 @@ type Config struct {
 		Symbols []string // ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 	}
 
-	// TCBS thay thế VPS cho market data streaming
+	// TCBS iFlash Open API — Vietnam Stock Market streaming & analytics
 	// Reference: openapi-v1.0.0.json — TCBS iFlash Open API v1.0.0
+	//
+	// Hai loại data source tách biệt hoàn toàn:
+	//
+	//  WSS symbols  → /api/v1/derivatives/contracts (WebSocket, real-time push)
+	//                 Chỉ dành cho phái sinh VN30F, e.g. VN30F2410,VN30F2411
+	//                 Chạy trong TCBSWSSConsumer (goroutine liên tục như Binance)
+	//
+	//  REST symbols → /nyx/v1/intraday/{ticker}/bsa  (poll EOD sau 15:05)
+	//                 /nyx/v1/intraday/{ticker}/his/paging (poll EOD sau 15:05)
+	//                 Danh sách mã CK cơ sở quan trọng cần BSA + tick history
+	//
+	//  Indexes      → /tartarus/v1/tickerCommons (poll mỗi 1 phút giờ giao dịch)
+	//                 Toàn bộ index basket, không cần liệt kê từng mã
 	TCBS struct {
-		BaseURL  string   // https://openapi.tcbs.com.vn
-		APIKey   string   // API Key từ TCInvest app (dùng để authenticate lấy JWT)
-		JWTToken string   // Pre-obtained JWT token — dùng khi không muốn gọi authenticate()
-		// Mã CK cần poll BSA + Intraday (danh sách quan trọng)
-		Symbols         []string // ["VCB","VHM","TCB","VIC","HPG"]
-		// Index baskets cần poll tickerCommons (market snapshot)
-		Indexes         []string // ["HOSE","VN30","HNX"]
-		// Loại nhà đầu tư cho BSA poll — xem tcbs_constants TCBSInvestorType
-		BSAInvestorType string   // "sheep"|"wolf"|"shark"|"all" (default: "all")
-		// Số trang tối đa khi lấy intraday tick history mỗi ticker
-		IntradayMaxPages int     // default: 5
+		BaseURL  string // https://openapi.tcbs.com.vn
+		APIKey   string // API Key từ TCInvest app
+		JWTToken string // Pre-obtained JWT Bearer token
+
+		// WssSymbols: mã phái sinh cho WebSocket real-time stream
+		// Endpoint: GET /api/v1/derivatives/contracts (WSS)
+		// Chỉ dùng contract phái sinh: VN30F + tháng đáo hạn, e.g. VN30F2410
+		// Env: TCBS_WSS_SYMBOLS
+		WssSymbols []string
+
+		// RestSymbols: mã CK cơ sở cho BSA + Intraday tick history (REST, EOD)
+		// Endpoint: /nyx/v1/intraday/{ticker}/bsa, /nyx/v1/intraday/{ticker}/his/paging
+		// Env: TCBS_REST_SYMBOLS
+		RestSymbols []string
+
+		// Indexes: index basket cho market snapshot (tickerCommons, REST poll mỗi 1 phút)
+		// Endpoint: /tartarus/v1/tickerCommons?index=X
+		// Env: TCBS_INDEXES
+		Indexes []string
+
+		// BSAInvestorType: loại nhà đầu tư cho BSA — "sheep"|"wolf"|"shark"|"all"
+		// Env: TCBS_BSA_INVESTOR_TYPE
+		BSAInvestorType string
+
+		// IntradayMaxPages: số trang tối đa khi paginate intraday tick history
+		// Env: TCBS_INTRADAY_MAX_PAGES (default: 5)
+		IntradayMaxPages int
 	}
 
 	SchemaRegistry struct {
@@ -70,13 +99,21 @@ func FromEnv() (*Config, error) {
 	cfg.Binance.Symbols = splitCSV(utils.GetEnvAsString("BINANCE_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT"))
 
 	// TCBS config
-	cfg.TCBS.BaseURL   = utils.GetEnvAsString("TCBS_BASE_URL", "https://openapi.tcbs.com.vn")
-	cfg.TCBS.APIKey    = utils.GetEnvAsString("TCBS_API_KEY", "")
-	cfg.TCBS.JWTToken  = utils.GetEnvAsString("TCBS_JWT_TOKEN", "")
-	// Symbols cho BSA + Intraday ticks — quan trọng nhất
-	cfg.TCBS.Symbols   = splitCSV(utils.GetEnvAsString("TCBS_SYMBOLS", "VCB,VHM,TCB,VIC,HPG,MSN,VNM,MBB,CTG,BID"))
-	// Index baskets cho market snapshot (tickerCommons)
-	cfg.TCBS.Indexes   = splitCSV(utils.GetEnvAsString("TCBS_INDEXES", "HOSE,VN30,HNX"))
+	cfg.TCBS.BaseURL  = utils.GetEnvAsString("TCBS_BASE_URL", "https://openapi.tcbs.com.vn")
+	cfg.TCBS.APIKey   = utils.GetEnvAsString("TCBS_API_KEY", "")
+	cfg.TCBS.JWTToken = utils.GetEnvAsString("TCBS_JWT_TOKEN", "")
+
+	// WSS symbols — phái sinh VN30F (WebSocket real-time)
+	// Default rỗng: WSS consumer chỉ start khi có symbols được cấu hình
+	cfg.TCBS.WssSymbols = splitCSV(utils.GetEnvAsString("TCBS_WSS_SYMBOLS", ""))
+
+	// REST symbols — cổ phiếu cơ sở cho BSA + intraday tick history (EOD poll)
+	cfg.TCBS.RestSymbols = splitCSV(utils.GetEnvAsString("TCBS_REST_SYMBOLS",
+		"VCB,VHM,TCB,VIC,HPG,MSN,VNM,MBB,CTG,BID,FPT,SSI,VPB,GMD,ACB,CTG,GAS,MWG,SAB,HDB"))
+
+	// Index baskets cho market snapshot (tickerCommons — poll mỗi 1 phút)
+	cfg.TCBS.Indexes = splitCSV(utils.GetEnvAsString("TCBS_INDEXES", "HOSE,VN30,HNX"))
+
 	cfg.TCBS.BSAInvestorType = utils.GetEnvAsString("TCBS_BSA_INVESTOR_TYPE", "all")
 	intradayMaxPages, err := utils.GetEnvAsInt("TCBS_INTRADAY_MAX_PAGES", 5)
 	if err != nil {
