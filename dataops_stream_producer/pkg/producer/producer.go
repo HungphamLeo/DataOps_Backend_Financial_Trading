@@ -42,6 +42,8 @@ type Producer interface {
 	PublishTCBSMarket(ctx context.Context, symbol string, event TCBSMarketEvent) error
 	PublishTCBSBSA(ctx context.Context, ticker string, event TCBSBSAEvent) error
 	PublishTCBSIntradayTick(ctx context.Context, ticker string, event TCBSIntradayTickEvent) error
+	// TCBS — WSS derivatives real-time (VN30F)
+	PublishTCBSDerivative(ctx context.Context, symbol string, event TCBSDerivativeEvent) error
 	Close() error
 }
 
@@ -52,12 +54,13 @@ type kafkaProducer struct {
 	dlqProducer  sarama.SyncProducer // Dead Letter Queue producer
 
 	// Schema IDs: đăng ký 1 lần khi khởi động, cache lại để reuse
-	tradeSchemaID   int
-	obSchemaID      int
-	liqSchemaID     int
-	tcbsMarketID    int
-	tcbsBSAID       int
-	tcbsIntradayID  int
+	tradeSchemaID      int
+	obSchemaID         int
+	liqSchemaID        int
+	tcbsMarketID       int
+	tcbsBSAID          int
+	tcbsIntradayID     int
+	tcbsDerivativeID   int
 
 	mu sync.RWMutex // bảo vệ schema IDs khi nhiều goroutines đọc/ghi
 }
@@ -178,6 +181,11 @@ func (p *kafkaProducer) registerSchemas() error {
 			subject:  constants.TopicTCBSIntradayTicks + "-value",
 			filePath: "pkg/schemas/tcbs_intraday_tick_event.avsc",
 			idPtr:    &p.tcbsIntradayID,
+		},
+		{
+			subject:  constants.TopicTCBSDerivContracts + "-value",
+			filePath: "pkg/schemas/tcbs_derivative_event.avsc",
+			idPtr:    &p.tcbsDerivativeID,
 		},
 	}
 
@@ -324,6 +332,30 @@ func (p *kafkaProducer) PublishTCBSIntradayTick(ctx context.Context, ticker stri
 	if err != nil {
 		log.Printf("[Producer] SendMessage TCBSIntraday %s error: %v — routing to DLQ", ticker, err)
 		return p.sendToDLQ(constants.TopicTCBSIntradayDLQ, ticker, event, err)
+	}
+	return nil
+}
+
+// PublishTCBSDerivative publish TCBS real-time derivative event lên Kafka.
+// Chỉ được gọi từ TCBSWSSConsumer — goroutine nhận push từ /api/v1/derivatives/contracts WSS.
+// Key = symbol để đảm bảo ordering per contract.
+func (p *kafkaProducer) PublishTCBSDerivative(ctx context.Context, symbol string, event TCBSDerivativeEvent) error {
+	payload, err := p.serializeAvro(p.tcbsDerivativeID, event)
+	if err != nil {
+		return p.sendToDLQ(constants.TopicTCBSDerivContractsDLQ, symbol, event, err)
+	}
+
+	msg := &sarama.ProducerMessage{
+		Topic:     constants.TopicTCBSDerivContracts,
+		Key:       sarama.StringEncoder(symbol),
+		Value:     sarama.ByteEncoder(payload),
+		Timestamp: time.UnixMilli(event.TsMs),
+	}
+
+	_, _, err = p.producer.SendMessage(msg)
+	if err != nil {
+		log.Printf("[Producer] SendMessage TCBSDerivative %s error: %v — routing to DLQ", symbol, err)
+		return p.sendToDLQ(constants.TopicTCBSDerivContractsDLQ, symbol, event, err)
 	}
 	return nil
 }

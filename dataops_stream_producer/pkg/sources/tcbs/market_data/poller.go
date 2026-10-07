@@ -28,6 +28,7 @@ import (
 	"dataops-stream-producer/pkg/producer"
 	tcbsclient "dataops-stream-producer/pkg/sources/tcbs/client"
 	tcbsconst "dataops-stream-producer/pkg/sources/tcbs/constants"
+	tcbswss "dataops-stream-producer/pkg/sources/tcbs/websocket"
 	"dataops-stream-producer/redis"
 	"dataops-stream-producer/utils"
 )
@@ -78,9 +79,15 @@ func (p *TCBSPoller) Start(ctx context.Context) error {
 	fmt.Printf("%s [TCBSPoller] Starting — indexes=%v, rest_symbols=%v\n",
 		utils.GetTimeNow(), p.cfg.TCBS.Indexes, p.cfg.TCBS.RestSymbols)
 
+	// Chỉ start WSS consumer nếu có symbols cần real-time.
+	// Cổ phiếu cơ sở (VCB, HPG...) KHÔNG có WSS — chỉ phái sinh VN30F mới có.
 	if len(p.cfg.TCBS.WssSymbols) > 0 {
-		// WSS consumer chưa implement — cần TCBSWSSConsumer riêng (goroutine như Binance)
-		log.Printf("[TCBSPoller] INFO: TCBS_WSS_SYMBOLS=%v configured but WSS consumer not yet implemented — skipping", p.cfg.TCBS.WssSymbols)
+		wssConsumer := tcbswss.NewConsumer(p.cfg, p.producer, p.redis)
+		go wssConsumer.Start(ctx)
+		log.Printf("[TCBSPoller] TCBSWSSConsumer started for %d derivative symbols: %v",
+			len(p.cfg.TCBS.WssSymbols), p.cfg.TCBS.WssSymbols)
+	} else {
+		log.Printf("[TCBSPoller] TCBS_WSS_SYMBOLS empty — WSS consumer not started (no derivatives configured)")
 	}
 
 	if p.cfg.TCBS.JWTToken == "" && p.cfg.TCBS.APIKey == "" {
@@ -186,9 +193,27 @@ func (p *TCBSPoller) pollMarketSnapshot() {
 			}
 			publishedCount++
 
-			// Cache để monitor latency — REUSE pattern từ VPSPoller
+			// Cache latest ticker data — dùng cho real-time dashboard / API query nhanh.
+			// Pattern đối xứng với binance_{sym}_ticker (TTL 120s = interval poll 1 phút + buffer).
 			cacheKey := fmt.Sprintf("tcbs_%s_ticker", item.Symbol)
-			p.redis.Set(cacheKey, map[string]interface{}{"ts": nowMs, "index": indexName}, 120*time.Second)
+			p.redis.Set(cacheKey, map[string]interface{}{
+				"symbol":      item.Symbol,
+				"index":       indexName,
+				"match_price": item.MatchPrice,
+				"match_qty":   item.MatchQtty,
+				"total_vol":   item.TotalVol,
+				"total_val":   item.TotalVal,
+				"change":      item.Change,
+				"change_pct":  item.ChangePercent,
+				"bid_price1":  item.BidPrice01,
+				"bid_qty1":    item.BidQtty01,
+				"ask_price1":  item.OfferPrice01,
+				"ask_qty1":    item.OfferQtty01,
+				"ref_price":   item.RefPrice,
+				"high":        item.High,
+				"low":         item.Low,
+				"ts":          nowMs,
+			}, 120*time.Second)
 		}
 
 		log.Printf("[TCBSPoller] pollMarketSnapshot index=%s — published %d/%d tickers",

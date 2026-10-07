@@ -129,9 +129,9 @@ func (p *BinanceProducer) handleMessage(symbol string, raw []byte) {
 		return
 	}
 
-	// Cache timestamp vào Redis để monitor slow provider
-	cacheKey := fmt.Sprintf("binance_%s_%s", strings.ToLower(symbol), envelope.Stream)
-	p.redis.Set(cacheKey, map[string]interface{}{
+	// Cache timestamp monitor (latency tracking) — TTL 60s
+	monitorKey := fmt.Sprintf("binance_%s_%s", strings.ToLower(symbol), envelope.Stream)
+	p.redis.Set(monitorKey, map[string]interface{}{
 		"ts": time.Now().UnixMilli(),
 	}, 60*time.Second)
 
@@ -151,6 +151,40 @@ func (p *BinanceProducer) handleMessage(symbol string, raw []byte) {
 		if rawTrade.IsBuyerMaker {
 			side = "sell" // Buyer is maker => Seller is taker (aggressive)
 		}
+
+		// Cache latest trade tick — dùng cho real-time dashboard / API query nhanh
+		// Key: binance_{SYMBOL}_ticker, TTL 10s (refresh mỗi trade)
+		// buyVol/sellVol: tích lũy trong window TTL — reset khi key expire
+		symLower := strings.ToLower(symbol)
+		tickerKey := fmt.Sprintf("binance_%s_ticker", symLower)
+		existing := p.redis.Get(tickerKey)
+		var buyVol, sellVol float64
+		if existing != "" {
+			var prev map[string]interface{}
+			if err := json.Unmarshal([]byte(existing), &prev); err == nil {
+				if v, ok := prev["buy_vol"].(float64); ok {
+					buyVol = v
+				}
+				if v, ok := prev["sell_vol"].(float64); ok {
+					sellVol = v
+				}
+			}
+		}
+		if side == "buy" {
+			buyVol += size
+		} else {
+			sellVol += size
+		}
+		p.redis.Set(tickerKey, map[string]interface{}{
+			"symbol":   symbol,
+			"price":    price,
+			"size":     size,
+			"side":     side,
+			"buy_vol":  buyVol,
+			"sell_vol": sellVol,
+			"trade_id": rawTrade.TradeID,
+			"ts":       rawTrade.TradeTime,
+		}, 10*time.Second)
 
 		tradeEvent := producer.TradeEvent{
 			InstID:     symbol,
