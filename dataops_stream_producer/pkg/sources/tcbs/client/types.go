@@ -74,7 +74,9 @@ type TickerCommonItem struct {
 	// Nhà đầu tư nước ngoài
 	BuyForeignQtty  float64 `json:"buyForeignQtty"`
 	SellForeignQtty float64 `json:"sellForeignQtty"`
-	Room            string  `json:"room"`
+	// Room: foreign room (số CP còn được phép mua bởi NĐT nước ngoài).
+	// Spec ghi là string nhưng API thực tế trả về number → dùng float64.
+	Room float64 `json:"room"`
 
 	IndexNumber float64 `json:"indexNumber"`
 }
@@ -102,7 +104,8 @@ type TickerSnapItem struct {
 	TotalValue      float64 `json:"totalValue"`
 	BuyForeignQtty  float64 `json:"buyForeignQtty"`
 	SellForeignQtty float64 `json:"sellForeignQtty"`
-	Room            string  `json:"room"`
+	// Room: cùng vấn đề với TickerCommonItem — API trả number, không phải string.
+	Room float64 `json:"room"`
 }
 
 // ─── Intraday Analytics — BSA ─────────────────────────────────────────────────

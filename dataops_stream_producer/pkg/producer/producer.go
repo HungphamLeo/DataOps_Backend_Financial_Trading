@@ -42,6 +42,8 @@ type Producer interface {
 	PublishTCBSMarket(ctx context.Context, symbol string, event TCBSMarketEvent) error
 	PublishTCBSBSA(ctx context.Context, ticker string, event TCBSBSAEvent) error
 	PublishTCBSIntradayTick(ctx context.Context, ticker string, event TCBSIntradayTickEvent) error
+	// TCBS — WSS derivatives real-time (VN30F)
+	PublishTCBSDerivative(ctx context.Context, symbol string, event TCBSDerivativeEvent) error
 	Close() error
 }
 
@@ -52,12 +54,13 @@ type kafkaProducer struct {
 	dlqProducer  sarama.SyncProducer // Dead Letter Queue producer
 
 	// Schema IDs: đăng ký 1 lần khi khởi động, cache lại để reuse
-	tradeSchemaID   int
-	obSchemaID      int
-	liqSchemaID     int
-	tcbsMarketID    int
-	tcbsBSAID       int
-	tcbsIntradayID  int
+	tradeSchemaID      int
+	obSchemaID         int
+	liqSchemaID        int
+	tcbsMarketID       int
+	tcbsBSAID          int
+	tcbsIntradayID     int
+	tcbsDerivativeID   int
 
 	mu sync.RWMutex // bảo vệ schema IDs khi nhiều goroutines đọc/ghi
 }
@@ -72,9 +75,18 @@ func NewProducer(brokers []string, schemaRegistryURL string) (Producer, error) {
 	// LEARN: Acks options: NoResponse(0) < WaitForLocal(1) < WaitForAll(-1)
 	config.Producer.RequiredAcks = sarama.WaitForAll
 
-	// Retry tự động khi gặp temporary failures
-	config.Producer.Retry.Max = 5
-	config.Producer.Retry.Backoff = 100 * time.Millisecond
+	// Retry: 10 lần với backoff 500ms = tổng tối đa 5s chờ leader election.
+	// Trước đây: Retry.Max=5, Backoff=100ms → tổng 500ms — quá ngắn khi Kafka
+	// đang elect partition leader mới, dẫn đến NotLeaderForPartition vào DLQ.
+	config.Producer.Retry.Max = 10
+	config.Producer.Retry.Backoff = 500 * time.Millisecond
+
+	// Metadata refresh: Sarama tự refresh khi gặp NotLeaderForPartition.
+	// RefreshFrequency = 0 (default) chỉ refresh khi bị force — tăng lên 30s
+	// để producer luôn có metadata mới sau broker restart/leader election.
+	config.Metadata.RefreshFrequency = 30 * time.Second
+	// Full=true: refresh tất cả topics cùng lúc thay vì chỉ topic gặp lỗi
+	config.Metadata.Full = true
 
 	// Bật return (channel) để SyncProducer biết kết quả
 	config.Producer.Return.Successes = true
@@ -169,6 +181,11 @@ func (p *kafkaProducer) registerSchemas() error {
 			subject:  constants.TopicTCBSIntradayTicks + "-value",
 			filePath: "pkg/schemas/tcbs_intraday_tick_event.avsc",
 			idPtr:    &p.tcbsIntradayID,
+		},
+		{
+			subject:  constants.TopicTCBSDerivContracts + "-value",
+			filePath: "pkg/schemas/tcbs_derivative_event.avsc",
+			idPtr:    &p.tcbsDerivativeID,
 		},
 	}
 
@@ -315,6 +332,30 @@ func (p *kafkaProducer) PublishTCBSIntradayTick(ctx context.Context, ticker stri
 	if err != nil {
 		log.Printf("[Producer] SendMessage TCBSIntraday %s error: %v — routing to DLQ", ticker, err)
 		return p.sendToDLQ(constants.TopicTCBSIntradayDLQ, ticker, event, err)
+	}
+	return nil
+}
+
+// PublishTCBSDerivative publish TCBS real-time derivative event lên Kafka.
+// Chỉ được gọi từ TCBSWSSConsumer — goroutine nhận push từ /api/v1/derivatives/contracts WSS.
+// Key = symbol để đảm bảo ordering per contract.
+func (p *kafkaProducer) PublishTCBSDerivative(ctx context.Context, symbol string, event TCBSDerivativeEvent) error {
+	payload, err := p.serializeAvro(p.tcbsDerivativeID, event)
+	if err != nil {
+		return p.sendToDLQ(constants.TopicTCBSDerivContractsDLQ, symbol, event, err)
+	}
+
+	msg := &sarama.ProducerMessage{
+		Topic:     constants.TopicTCBSDerivContracts,
+		Key:       sarama.StringEncoder(symbol),
+		Value:     sarama.ByteEncoder(payload),
+		Timestamp: time.UnixMilli(event.TsMs),
+	}
+
+	_, _, err = p.producer.SendMessage(msg)
+	if err != nil {
+		log.Printf("[Producer] SendMessage TCBSDerivative %s error: %v — routing to DLQ", symbol, err)
+		return p.sendToDLQ(constants.TopicTCBSDerivContractsDLQ, symbol, event, err)
 	}
 	return nil
 }

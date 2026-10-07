@@ -81,7 +81,8 @@ type TCBSMarketEvent struct {
 	TotalVal        float64 `json:"totalVal"`
 	BuyForeignQty   float64 `json:"buyForeignQty"`
 	SellForeignQty  float64 `json:"sellForeignQty"`
-	Room            string  `json:"room"`
+	// Room: foreign room — API trả number (float64), không phải string như spec ghi.
+	Room            float64 `json:"room"`
 	Change          float64 `json:"change"`
 	ChangePct       float64 `json:"changePct"`
 	TradingDate     string  `json:"tradingDate"`    // dd/MM/yyyy từ API
@@ -116,4 +117,25 @@ type TCBSIntradayTickEvent struct {
 	EventTime   string  `json:"eventTime"`
 	TsMs        int64   `json:"tsMs"`
 	ProducedMs  int64   `json:"producedAtMs"`
+}
+
+// TCBSDerivativeEvent là real-time price update từ TCBS WSS /api/v1/derivatives/contracts.
+// Fields mirror DerivativeItem từ /tartarus/v1/derivatives REST endpoint —
+// TCBS WSS gửi cùng cấu trúc JSON qua WebSocket push.
+type TCBSDerivativeEvent struct {
+	Symbol        string  `json:"symbol"`        // e.g. "VN30F2410"
+	CeilPrice     float64 `json:"ceilPrice"`
+	FloorPrice    float64 `json:"floorPrice"`
+	RefPrice      float64 `json:"refPrice"`
+	MatchPrice    float64 `json:"matchPrice"`
+	MatchQty      float64 `json:"matchQty"`
+	BidPrice01    float64 `json:"bidPrice01"`
+	BidQty01      float64 `json:"bidQty01"`
+	AskPrice01    float64 `json:"askPrice01"`    // offerPrice01 alias cho derivatives
+	AskQty01      float64 `json:"askQty01"`
+	Change        float64 `json:"change"`
+	ChangePct     float64 `json:"changePct"`
+	TotalVol      float64 `json:"totalVol"`
+	TsMs          int64   `json:"tsMs"`
+	ProducedMs    int64   `json:"producedAtMs"`
 }

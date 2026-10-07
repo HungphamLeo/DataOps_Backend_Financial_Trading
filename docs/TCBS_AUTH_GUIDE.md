@@ -35,7 +35,6 @@
 └────┴─────┘        └─────┴─────┘        └────────┴────────┘
 ```
 ---
-
 **Điểm quan trọng:**
 - TCBS chỉ dùng **1 API Key duy nhất** — không có `secret_key`, không có HMAC signing.
 - Token lấy qua `apiKey + Smart OTP` (iOTP từ TCInvest app).
@@ -59,7 +58,6 @@ TCBS_API_KEY=<api_key_nhận_từ_TCInvest>
 TCBS_JWT_TOKEN=                           # để trống, sẽ điền sau khi lấy token
 ```
 ---
-
 ## 3. Lấy JWT Token — Step by step
 
 ### Bước 1 — Mở Smart OTP trên TCInvest app
@@ -85,7 +83,6 @@ curl -s -X POST https://openapi.tcbs.com.vn/gaia/v1/oauth2/openapi/token \
 
 ```
 ---
-
 #### Từ PowerShell (Windows)
 
 ---
@@ -103,7 +100,6 @@ $resp = Invoke-RestMethod `
 Write-Host "Token: $($resp.token)"
 ```
 ---
-
 #### Kết quả mong đợi (thành công)
 
 ---
@@ -113,7 +109,6 @@ Write-Host "Token: $($resp.token)"
 }
 ```
 ---
-
 #### Các lỗi thường gặp
 
 | HTTP Status | Lỗi | Nguyên nhân | Cách xử lý |
@@ -134,7 +129,6 @@ TCBS_API_KEY=<api_key_của_bạn>
 TCBS_JWT_TOKEN=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0...
 ```
 ---
-
 > Lưu ý: paste **toàn bộ chuỗi JWT** — thường dài 500-1000 ký tự, không bị ngắt dòng.
 
 ### Bước 4 — Restart services
@@ -148,7 +142,6 @@ docker compose --env-file ../.env up -d --force-recreate \
   dataops-batch-api
 ```
 ---
-
 ### Bước 5 — Verify token đã nhận
 
 ---
@@ -157,8 +150,8 @@ docker compose --env-file ../.env up -d --force-recreate \
 docker logs dataops-stream-producer --tail=20
 ```
 ---
-
 **Log bình thường khi token hợp lệ:**
+---
 ---
 ```
 [TCBSPoller] Starting — indexes=[HOSE VN30 HNX]
@@ -166,15 +159,14 @@ docker logs dataops-stream-producer --tail=20
 # KHÔNG thấy dòng: WARNING: cả TCBS_JWT_TOKEN và TCBS_API_KEY đều rỗng
 ```
 ---
-
 ---
 ```bash
 # batch-api: TCBS steps không còn error
 docker logs dataops-batch-api --tail=30
 ```
 ---
-
 **Log bình thường:**
+---
 ---
 ```
 [daily_pipeline] Step 3/5 — Bronze TCBS Market (all configured indexes)
@@ -182,7 +174,6 @@ docker logs dataops-batch-api --tail=30
 [bronze_flow:tcbs] Wrote N TCBS market records
 ```
 ---
-
 ## 4. Refresh Token (sau mỗi ~7 giờ)
 
 Token hết hạn sau **8 giờ**. Quy trình refresh:
@@ -211,7 +202,6 @@ else
 fi
 ```
 ---
-
 Sau khi cập nhật `.env`:
 
 ---
@@ -222,7 +212,6 @@ docker compose --env-file ../.env up -d --force-recreate \
   dataops-batch-api
 ```
 ---
-
 ## 5. Kiểm tra token còn hiệu lực không
 
 ---
@@ -250,7 +239,6 @@ else:
 "
 ```
 ---
-
 ## 6. Tóm tắt env vars liên quan TCBS
 
 | Env Var | Bắt buộc | Mô tả |

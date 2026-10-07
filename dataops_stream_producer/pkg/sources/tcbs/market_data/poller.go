@@ -28,9 +28,25 @@ import (
 	"dataops-stream-producer/pkg/producer"
 	tcbsclient "dataops-stream-producer/pkg/sources/tcbs/client"
 	tcbsconst "dataops-stream-producer/pkg/sources/tcbs/constants"
+	tcbswss "dataops-stream-producer/pkg/sources/tcbs/websocket"
 	"dataops-stream-producer/redis"
 	"dataops-stream-producer/utils"
 )
+
+// vietnamLocation là timezone Asia/Ho_Chi_Minh — dùng cho tất cả cron schedule TCBS.
+// HOSE giờ giao dịch: 09:00–11:30 và 13:00–14:45 ICT (UTC+7).
+// robfig/cron mặc định dùng UTC nên BẮT BUỘC inject location này.
+var vietnamLocation = mustLoadLocation("Asia/Ho_Chi_Minh")
+
+func mustLoadLocation(name string) *time.Location {
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		// Fallback: UTC+7 fixed offset nếu tzdata không có trong image
+		log.Printf("[TCBSPoller] WARNING: cannot load timezone %q (%v) — falling back to UTC+7 fixed offset", name, err)
+		return time.FixedZone("ICT", 7*60*60)
+	}
+	return loc
+}
 
 // TCBSPoller quản lý TCBS polling định kỳ trong giờ giao dịch
 type TCBSPoller struct {
@@ -60,14 +76,28 @@ func NewPoller(cfg *configuration.Config, prod producer.Producer, redisSvc redis
 // Start khởi động poller với cron schedule.
 // Block cho đến khi ctx bị cancel (graceful shutdown).
 func (p *TCBSPoller) Start(ctx context.Context) error {
-	fmt.Printf("%s [TCBSPoller] Starting — indexes=%v, bsa_tickers=%v\n",
-		utils.GetTimeNow(), p.cfg.TCBS.Indexes, p.cfg.TCBS.Symbols)
+	fmt.Printf("%s [TCBSPoller] Starting — indexes=%v, rest_symbols=%v\n",
+		utils.GetTimeNow(), p.cfg.TCBS.Indexes, p.cfg.TCBS.RestSymbols)
+
+	// Chỉ start WSS consumer nếu có symbols cần real-time.
+	// Cổ phiếu cơ sở (VCB, HPG...) KHÔNG có WSS — chỉ phái sinh VN30F mới có.
+	if len(p.cfg.TCBS.WssSymbols) > 0 {
+		wssConsumer := tcbswss.NewConsumer(p.cfg, p.producer, p.redis)
+		go wssConsumer.Start(ctx)
+		log.Printf("[TCBSPoller] TCBSWSSConsumer started for %d derivative symbols: %v",
+			len(p.cfg.TCBS.WssSymbols), p.cfg.TCBS.WssSymbols)
+	} else {
+		log.Printf("[TCBSPoller] TCBS_WSS_SYMBOLS empty — WSS consumer not started (no derivatives configured)")
+	}
 
 	if p.cfg.TCBS.JWTToken == "" && p.cfg.TCBS.APIKey == "" {
 		log.Printf("[TCBSPoller] WARNING: cả TCBS_JWT_TOKEN và TCBS_API_KEY đều rỗng. Public endpoints sẽ work nhưng private endpoints sẽ fail.")
 	}
 
-	c := cron.New()
+	// BẮT BUỘC inject timezone ICT (UTC+7) vào cron scheduler.
+	// Container chạy UTC — nếu không set location, cron "9-11" sẽ fire lúc 09:00 UTC = 16:00 ICT,
+	// tức là ngoài giờ giao dịch HOSE hoàn toàn.
+	c := cron.New(cron.WithLocation(vietnamLocation))
 
 	// Poll market snapshot mỗi 1 phút trong giờ giao dịch sáng (9:00–11:59 T2-T6)
 	if _, err := c.AddFunc("*/1 9-11 * * 1-5", func() { p.pollMarketSnapshot() }); err != nil {
@@ -163,9 +193,27 @@ func (p *TCBSPoller) pollMarketSnapshot() {
 			}
 			publishedCount++
 
-			// Cache để monitor latency — REUSE pattern từ VPSPoller
+			// Cache latest ticker data — dùng cho real-time dashboard / API query nhanh.
+			// Pattern đối xứng với binance_{sym}_ticker (TTL 120s = interval poll 1 phút + buffer).
 			cacheKey := fmt.Sprintf("tcbs_%s_ticker", item.Symbol)
-			p.redis.Set(cacheKey, map[string]interface{}{"ts": nowMs, "index": indexName}, 120*time.Second)
+			p.redis.Set(cacheKey, map[string]interface{}{
+				"symbol":      item.Symbol,
+				"index":       indexName,
+				"match_price": item.MatchPrice,
+				"match_qty":   item.MatchQtty,
+				"total_vol":   item.TotalVol,
+				"total_val":   item.TotalVal,
+				"change":      item.Change,
+				"change_pct":  item.ChangePercent,
+				"bid_price1":  item.BidPrice01,
+				"bid_qty1":    item.BidQtty01,
+				"ask_price1":  item.OfferPrice01,
+				"ask_qty1":    item.OfferQtty01,
+				"ref_price":   item.RefPrice,
+				"high":        item.High,
+				"low":         item.Low,
+				"ts":          nowMs,
+			}, 120*time.Second)
 		}
 
 		log.Printf("[TCBSPoller] pollMarketSnapshot index=%s — published %d/%d tickers",
@@ -173,7 +221,7 @@ func (p *TCBSPoller) pollMarketSnapshot() {
 	}
 }
 
-// pollBSA lấy Buy/Sell Analysis cho tất cả configured symbols và publish lên Kafka.
+// pollBSA lấy Buy/Sell Analysis cho tất cả RestSymbols và publish lên Kafka.
 // Chạy 1 lần/ngày sau đóng cửa để có full-day BSA.
 func (p *TCBSPoller) pollBSA() {
 	nowMs := time.Now().UnixMilli()
@@ -183,9 +231,9 @@ func (p *TCBSPoller) pollBSA() {
 	}
 
 	log.Printf("[TCBSPoller] pollBSA — %d tickers, investorType=%s",
-		len(p.cfg.TCBS.Symbols), investorType)
+		len(p.cfg.TCBS.RestSymbols), investorType)
 
-	for _, ticker := range p.cfg.TCBS.Symbols {
+	for _, ticker := range p.cfg.TCBS.RestSymbols {
 		result, err := p.client.GetIntradayBSA(ticker, tcbsconst.TCBSInvestorType(investorType))
 		if err != nil {
 			log.Printf("[TCBSPoller] GetIntradayBSA ticker=%s: %v", ticker, err)
@@ -217,7 +265,7 @@ func (p *TCBSPoller) pollBSA() {
 	}
 }
 
-// pollIntradayTicks lấy intraday tick history cho tất cả configured symbols.
+// pollIntradayTicks lấy intraday tick history cho tất cả RestSymbols.
 // Chạy 1 lần/ngày sau đóng cửa. maxPages từ cfg để kiểm soát volume.
 func (p *TCBSPoller) pollIntradayTicks() {
 	nowMs := time.Now().UnixMilli()
@@ -227,9 +275,9 @@ func (p *TCBSPoller) pollIntradayTicks() {
 	}
 
 	log.Printf("[TCBSPoller] pollIntradayTicks — %d tickers, maxPages=%d",
-		len(p.cfg.TCBS.Symbols), maxPages)
+		len(p.cfg.TCBS.RestSymbols), maxPages)
 
-	for _, ticker := range p.cfg.TCBS.Symbols {
+	for _, ticker := range p.cfg.TCBS.RestSymbols {
 		ticks, err := p.client.GetIntradayHistoryAllPages(ticker, maxPages)
 		if err != nil {
 			log.Printf("[TCBSPoller] GetIntradayHistoryAllPages ticker=%s: %v", ticker, err)

@@ -15,9 +15,10 @@ const (
 	TopicBinanceLiquidations = TopicBinanceLiquidation
 
 	// TCBS topics — thay thế VPS cho streaming ingestion
-	TopicTCBSMarketSnapshot  = "tcbs.market.snapshot"  // tickerCommons full snapshot
-	TopicTCBSBSA             = "tcbs.bsa.events"        // Buy/Sell Analysis per ticker
-	TopicTCBSIntradayTicks   = "tcbs.intraday.ticks"    // tick-by-tick intraday history
+	TopicTCBSMarketSnapshot    = "tcbs.market.snapshot"     // tickerCommons full snapshot
+	TopicTCBSBSA               = "tcbs.bsa.events"          // Buy/Sell Analysis per ticker
+	TopicTCBSIntradayTicks     = "tcbs.intraday.ticks"      // tick-by-tick intraday history
+	TopicTCBSDerivContracts    = "tcbs.derivative.contracts" // WSS real-time phái sinh VN30F
 
 	// Aliases cho producer.go
 	TopicTCBSMarket   = TopicTCBSMarketSnapshot
@@ -36,6 +37,7 @@ const (
 	TopicTCBSMarketDLQ          = "tcbs.market.snapshot.dlq"
 	TopicTCBSBSADLQ             = "tcbs.bsa.events.dlq"
 	TopicTCBSIntradayDLQ        = "tcbs.intraday.ticks.dlq"
+	TopicTCBSDerivContractsDLQ  = "tcbs.derivative.contracts.dlq"
 
 	// Consumer group IDs
 	GroupSparkStreaming = "spark-streaming-group"
