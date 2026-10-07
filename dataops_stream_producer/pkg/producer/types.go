@@ -81,7 +81,8 @@ type TCBSMarketEvent struct {
 	TotalVal        float64 `json:"totalVal"`
 	BuyForeignQty   float64 `json:"buyForeignQty"`
 	SellForeignQty  float64 `json:"sellForeignQty"`
-	Room            string  `json:"room"`
+	// Room: foreign room — API trả number (float64), không phải string như spec ghi.
+	Room            float64 `json:"room"`
 	Change          float64 `json:"change"`
 	ChangePct       float64 `json:"changePct"`
 	TradingDate     string  `json:"tradingDate"`    // dd/MM/yyyy từ API

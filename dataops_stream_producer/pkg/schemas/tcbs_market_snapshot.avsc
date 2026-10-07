@@ -31,7 +31,7 @@
     { "name": "totalVal",      "type": "double",          "doc": "Tổng giá trị giao dịch (VND)",        "default": 0.0 },
     { "name": "buyForeignQty", "type": "double",          "doc": "Khối lượng nước ngoài mua",           "default": 0.0 },
     { "name": "sellForeignQty","type": "double",          "doc": "Khối lượng nước ngoài bán",           "default": 0.0 },
-    { "name": "room",          "type": "string",          "doc": "Room nước ngoài còn lại",             "default": "" },
+    { "name": "room",          "type": "double",          "doc": "Room nước ngoài còn lại (số CP). API trả number, không phải string.", "default": 0.0 },
     { "name": "change",        "type": "double",          "doc": "Thay đổi giá tuyệt đối vs tham chiếu","default": 0.0 },
     { "name": "changePct",     "type": "double",          "doc": "Thay đổi giá phần trăm",             "default": 0.0 },
     { "name": "tradingDate",   "type": "string",          "doc": "Ngày giao dịch dd/MM/yyyy",           "default": "" },
