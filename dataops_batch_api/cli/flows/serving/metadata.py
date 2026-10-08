@@ -64,8 +64,8 @@ def setup_logging() -> None:
     Delegate hoàn toàn sang log.logger_setup.setup_pipeline_logging() —
     đây là single source of truth cho logging configuration.
 
-    Gọi 1 lần tại entrypoint (daily_pipeline.py, prefect_main.py,
-    hoặc backfill_flow.py khi chạy __main__) trước khi dùng logger.
+    Gọi 1 lần tại entrypoint (daily_pipeline.py hoặc backfill_flow.py khi chạy __main__)
+    trước khi dùng logger.
     """
     from log.logger_setup import setup_pipeline_logging
     setup_pipeline_logging()

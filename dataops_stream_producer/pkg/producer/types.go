@@ -1,8 +1,27 @@
-// LEARN: Types cho Kafka Producer messages
-// Đây là Go structs mapping 1:1 với Avro schemas trong pkg/schemas/
+// types.go — Go structs cho Kafka Producer messages (Go mirror của CDM).
+//
+// ⚠️  SOURCE OF TRUTH là dataops_protobuf/market-data/market_data.proto
+//     File này là MANUAL MIRROR cho Go runtime.
+//     Khi thêm/sửa enum/type:
+//       1. Sửa market_data.proto TRƯỚC
+//       2. Cập nhật file này để mirror đúng
+//       3. Cập nhật dataops_batch_api/cli/ingestion/schema/canonical.py (Python mirror)
+//
+//     Khi có protoc codegen → file này sẽ được replace bằng generated code.
 //
 // Convention: structs dùng json tags để Marshal/Unmarshal
-// Avro field names (snake_case) → Go field names (CamelCase) qua json tags
+// Field names phải khớp với Avro schemas trong pkg/schemas/
+//
+// Canonical Side values (mirror từ .proto Side enum):
+//   SIDE_BUY   → string "buy"
+//   SIDE_SELL  → string "sell"
+//   SIDE_LONG  → string "long"
+//   SIDE_SHORT → string "short"
+//
+// Canonical InstrumentType values (mirror từ .proto InstrumentType enum):
+//   INSTRUMENT_TYPE_SPOT       → string "SPOT"
+//   INSTRUMENT_TYPE_FUTURES    → string "FUTURES"
+//   INSTRUMENT_TYPE_DERIVATIVE → string "DERIVATIVE"
 
 package producer
 
