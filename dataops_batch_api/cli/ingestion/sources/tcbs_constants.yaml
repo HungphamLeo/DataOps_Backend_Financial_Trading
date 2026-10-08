@@ -1,16 +1,51 @@
 # tcbs_constants.yaml — TCBS iFlash Open API Constants
 #
-# Single source of truth cho tất cả enums, codes, endpoint paths của TCBS.
-# Không được hardcode bất kỳ giá trị nào trong đây vào source code.
+# Single source of truth cho tất cả enums, codes, endpoint paths,
+# field specs và response mapping của TCBS.
+# Không được hardcode bất kỳ giá trị nào trong source code.
 #
 # Reference: openapi-v1.0.0.json — TCBS iFlash Open API v1.0.0
 # Contact:   openapi@tcbs.com.vn
-# Base URL:  https://openapi.tcbs.com.vn
+#
+# Auth pattern:
+#   POST /gaia/v1/oauth2/openapi/token  body: {apiKey, otp}  → {token: <jwt>}
+#   Subsequent requests: Header: Authorization: Bearer <jwt>
+#   WSS: wss://...?token=<jwt>  (query param, không phải Authorization header)
+#   JWT TTL: ~8h (undocumented) — cần auto-refresh khi còn < 1h
 #
 # Pattern sử dụng:
 #   from cli.ingestion.sources.tcbs_client import TCBSConstants
 #   idx = TCBSConstants.index_code("HOSE")   # → 1
 #   TCBSConstants.validate_price_type("LO")  # → raises nếu invalid
+
+# ─── Base URLs ────────────────────────────────────────────────────────────────
+base_urls:
+  production: "https://openapi.tcbs.com.vn"
+  websocket:  "wss://openapi.tcbs.com.vn"
+
+# ─── WebSocket URLs ───────────────────────────────────────────────────────────
+# QUAN TRỌNG: TCBS WSS nhận JWT qua query param, không phải Authorization header.
+# Chỉ có 1 WSS endpoint — phái sinh VN30F.
+# Cổ phiếu cơ sở (VCB, HPG...) KHÔNG có WSS — chỉ REST poll mỗi 1 phút.
+websocket_urls:
+  derivative_contracts: "wss://openapi.tcbs.com.vn/api/v1/derivatives/contracts?token={jwt}"
+
+# ─── Rate Limits ──────────────────────────────────────────────────────────────
+rate_limits:
+  ticker_commons_batch_size:    50      # symbols per tickerCommons request (undocumented limit)
+  recommended_interval_sec:     0.2     # 200ms giữa các request (conservative)
+  request_timeout_sec:          15
+  retry_attempts:               3
+  retry_max_wait_sec:           15
+  token_ttl_hours:              8       # JWT TTL xấp xỉ (không document chính thức)
+  token_refresh_threshold_sec:  3600    # Cảnh báo refresh khi token > 1h tuổi
+
+# ─── HTTP Headers ─────────────────────────────────────────────────────────────
+headers:
+  authorization: "Authorization"
+  bearer_prefix: "Bearer "
+  content_type:  "Content-Type"
+  accept:        "Accept"
 
 # ─── API Endpoints (paths từ openapi spec) ────────────────────────────────────
 endpoints:
@@ -79,18 +114,123 @@ endpoints:
 # ─── Stock Index / Basket Codes ───────────────────────────────────────────────
 # Dùng cho param ?index= trong tickerCommons và tickerSnaps
 index_codes:
-  HOSE:         1
-  VN30:         2
-  HNX:          3
-  HNX30:        4
-  UPCOM:        5
-  MIDCAP:       10
-  VN100:        11
-  VN_ALL_SHARE: 12
-  VN_SMALL_CAP: 13
+  HOSE:          1
+  VN30:          2
+  HNX:           3
+  HNX30:         4
+  UPCOM:         5
+  MIDCAP:        10
+  VN100:         11
+  VN_ALL_SHARE:  12
+  VN_SMALL_CAP:  13
   VNX_ALL_SHARE: 14
-  VN50:         15
-  VNSI:         16
+  VN50:          15
+  VNSI:          16
+
+# ─── Exchange / Market Names ──────────────────────────────────────────────────
+exchanges:
+  HOSE:  "Sở Giao dịch Chứng khoán TP.HCM"
+  HNX:   "Sở Giao dịch Chứng khoán Hà Nội"
+  UPCOM: "Thị trường UPCoM"
+  DERIV: "Thị trường Phái sinh (VSD)"
+
+# ─── Symbol Format ────────────────────────────────────────────────────────────
+symbol_format:
+  stock:      "VCB"          # uppercase, 3–4 chars (VN stock code)
+  derivative: "VN30F2411"    # VN30F + YYMM expiry
+  # REST tickerCommons: ?tickers=VCB,HPG (comma-separated, uppercase)
+  # WSS derivative: symbol truyền qua connection URL — không có stream suffix
+
+# ─── Response Field Mappings ──────────────────────────────────────────────────
+# Canonical snake_case → TCBS raw camelCase field names trong API response.
+# Dùng để parse response dict mà không hardcode string trong source code.
+
+# tickerCommons — GET /tartarus/v1/tickerCommons
+# Response: {"data": [...], "tradingDate": "dd/MM/yyyy"}
+ticker_commons_fields:
+  symbol:           "symbol"           # string — mã cổ phiếu, e.g. "VCB"
+  ceil_price:       "ceilPrice"        # float — giá trần
+  floor_price:      "floorPrice"       # float — giá sàn
+  ref_price:        "refPrice"         # float — giá tham chiếu
+  bid_price_01:     "bidPrice01"       # float — bid price 1
+  bid_price_02:     "bidPrice02"
+  bid_price_03:     "bidPrice03"
+  bid_qty_01:       "bidQtty01"        # float — bid volume 1  (chú ý: "Qtty" không phải "Qty")
+  bid_qty_02:       "bidQtty02"
+  bid_qty_03:       "bidQtty03"
+  offer_price_01:   "offerPrice01"
+  offer_price_02:   "offerPrice02"
+  offer_price_03:   "offerPrice03"
+  offer_qty_01:     "offerQtty01"      # float — ask volume 1
+  offer_qty_02:     "offerQtty02"
+  offer_qty_03:     "offerQtty03"
+  match_price:      "matchPrice"       # float — giá khớp hiện tại
+  match_qty:        "matchQtty"        # float — KL khớp lệnh
+  open:             "open"
+  high:             "high"
+  low:              "low"
+  avg:              "avg"              # float — giá bình quân
+  total_vol:        "totalVol"
+  total_val:        "totalVal"
+  change:           "change"
+  change_pct:       "changePercent"    # float — thay đổi phần trăm
+  index_number:     "indexNumber"      # float — số thứ tự trong rổ (nullable)
+  buy_foreign_qty:  "buyForeignQtty"   # float — KL NN mua
+  sell_foreign_qty: "sellForeignQtty"  # float — KL NN bán
+  room:             "room"             # string — room NN còn lại
+  trading_date:     "tradingDate"      # string — ngày GD, e.g. "28/10/2026"
+
+# derivatives — GET /tartarus/v1/derivatives
+# Response: {"data": [...]}
+derivatives_fields:
+  symbol:           "symbol"
+  ceil_price:       "ceilPrice"
+  floor_price:      "floorPrice"
+  ref_price:        "refPrice"
+  bid_price_01:     "bidPrice01"
+  bid_qty_01:       "bidQtty01"
+  offer_price_01:   "offerPrice01"
+  offer_qty_01:     "offerQtty01"
+  match_price:      "matchPrice"
+  match_qty:        "matchQtty"
+  change:           "change"
+  change_pct:       "changePercent"
+  total_vol:        "totalVol"
+  open_vol:         "openVol"          # float — open interest (số hợp đồng đang mở)
+  expiry_date:      "expiryDate"       # string — ngày đáo hạn
+
+# intraday tick history — GET /nyx/v1/intraday/{ticker}/his/paging
+# Response: {page, size, headIndex, numberOfItems, total, ticker, data:[...]}
+# QUAN TRỌNG: field names là single chars để tiết kiệm bandwidth
+intraday_tick_fields:
+  price:            "p"    # float — giá khớp
+  volume:           "v"    # float — KL khớp
+  price_change:     "cp"   # float — thay đổi giá so với ref
+  action:           "a"    # string — "Buy Up" | "Sell Down"
+  buy_acc:          "ba"   # float — lũy kế mua chủ động
+  sell_acc:         "sa"   # float — lũy kế bán chủ động
+  highlight:        "hl"   # bool — true nếu giá trị > 200M VND
+  event_time:       "t"    # string — giờ khớp, e.g. "09:15:42"
+
+# BSA (Buy/Sell Analysis) — GET /nyx/v1/intraday/{ticker}/bsa
+bsa_fields:
+  buy_up_pct:       "bup"  # float — % mua chủ động (0–100)
+  sell_down_pct:    "sdp"  # float — % bán chủ động (0–100)
+  buy_sell_ratio:   "bsr"  # float — tỷ lệ mua/bán
+  event_time:       "t"    # string — thời gian
+
+# ─── Kline / Interval Codes ───────────────────────────────────────────────────
+# TCBS không cung cấp OHLCV klines trực tiếp — intraday ticks được aggregate nội bộ.
+# Dùng khi ghi Delta Bronze sau khi aggregate ticks → OHLCV.
+# KHÔNG có interval param trong TCBS API — đây là internal canonical labels.
+kline_intervals:
+  "1m":  "1 minute"
+  "5m":  "5 minutes"
+  "15m": "15 minutes"
+  "30m": "30 minutes"
+  "1h":  "1 hour"
+  "1d":  "1 day"
+  # KHÔNG có: 1s, 3m, 2h, 3d, 1w, 1M — TCBS không hỗ trợ
 
 # ─── Price Types (lệnh cổ phiếu cơ sở) ──────────────────────────────────────
 # Dùng cho field priceType trong /akhlys/v1/accounts/{accountNo}/orders
@@ -107,30 +247,86 @@ price_types:
 # ─── Order Direction (cổ phiếu cơ sở) ────────────────────────────────────────
 # Dùng cho field execType trong /akhlys/v1/accounts/{accountNo}/orders
 exec_types:
-  NB: "Normal Buy — mua thông thường"
-  NS: "Normal Sell — bán thông thường"
+  NB: "Normal Buy"
+  NS: "Normal Sell"
 
-# ─── Order Side (phái sinh) ───────────────────────────────────────────────────
-# Dùng cho field side trong /khronos/v1/order/place
+# ─── Order Side & Position Side (phái sinh) ──────────────────────────────────
+# QUAN TRỌNG: 2 field khác nhau dùng ký hiệu khác nhau — không được nhầm lẫn.
+# Khi đặt lệnh (/khronos/v1/order/place) — field side:
 order_sides_deriv:
-  B: "Buy — mua phái sinh"
-  S: "Sell — bán phái sinh"
+  B: "Buy (Long entry)"
+  S: "Sell (Short entry)"
+# Khi xem vị thế (/khronos/v1/account/portfolio/status) — field side:
+position_sides_deriv:
+  L: "Long position"
+  S: "Short position"
 
 # ─── Derivative Order Types ───────────────────────────────────────────────────
-# Dùng cho field orderType trong /khronos/v1/order/place
+# Dùng cho field orderType trong /khronos/v1/order/place (lệnh thông thường)
 deriv_order_types:
-  "0":      "Regular order — lệnh thông thường"
-  "SLP":    "Stop Loss/Take Profit — SL=1.0,0.8 format"
-  "ABI":    "Arbitrage — ABI=contract format"
+  "0":   "Regular order — lệnh thông thường"
+  "SLP": "Stop Loss/Take Profit — SL=1.0,0.8 format"
+  "ABI": "Arbitrage — ABI=contract format"
+
+# Dùng cho field orderType trong /khronos/v1/order/condition/place (lệnh điều kiện)
+condition_order_types:
+  SOL: "Market price >= soPrice (Stop Loss trigger)"
+  SOU: "Market price <= soPrice (Stop Limit trigger)"
+  TSO: "Trailing Stop Order"
+
+# Dùng cho field notes trong /khronos/v1/order/condition/detail (label hiển thị)
+condition_order_notes:
+  "SL/TP":      "Stop Loss / Take Profit"
+  "Stop order": "Stop order"
+  "Arbitrage":  "Arbitrage order"
 
 # ─── BSA Investor Types ───────────────────────────────────────────────────────
 # Dùng cho param ?type= trong /nyx/v1/intraday/{ticker}/bsa
-# Phân loại nhà đầu tư theo quy mô giao dịch
 bsa_investor_types:
-  sheep: "Nhà đầu tư nhỏ lẻ (small retail) — khối lượng < ngưỡng nhỏ"
-  wolf:  "Tổ chức vừa (medium institutional) — khối lượng trung bình"
-  shark: "Tổ chức lớn (large institutional) — khối lượng lớn"
+  sheep: "Nhà đầu tư nhỏ lẻ (small retail)"
+  wolf:  "Tổ chức vừa (medium institutional)"
+  shark: "Tổ chức lớn (large institutional)"
   all:   "Tất cả loại nhà đầu tư (default)"
+
+# ─── Intraday Action → Canonical Side mapping ────────────────────────────────
+# field "a" trong intraday tick: raw string → canonical side
+intraday_action_map:
+  "Buy Up":    "BUY"   # Mua chủ động (taker buy)
+  "Sell Down": "SELL"  # Bán chủ động (taker sell)
+
+# ─── Order Status Codes ───────────────────────────────────────────────────────
+# QUAN TRỌNG: Mỗi service dùng field và convention khác nhau — không đồng nhất.
+
+# Cổ phiếu cơ sở — /aion/v1/accounts/{acct}/orders/{orderID}[].orStatus
+# (list endpoint không có orStatus — chỉ có detail endpoint)
+order_status_codes:
+  "0":  "REJECTED"    # Từ chối
+  "2":  "SENT"        # Đã gửi sàn
+  "3":  "CANCELLED"   # Đã hủy (→ canonical CANCELLED, không phải CANCELED)
+  "4":  "FILLED"      # Đã khớp
+  "5":  "EXPIRED"     # Hết hạn
+  "8":  "PENDING"     # Chờ xử lý
+  "10": "MODIFIED"    # Đã sửa
+  "11": "SENDING"     # Đang gửi
+  "12": "FILLED"      # Đã khớp hết (treat as FILLED)
+  "A":  "MODIFYING"   # Đang sửa
+  "C":  "CANCELLING"  # Đang hủy
+  "S":  "FILLED"      # Hoàn tất (treat as FILLED)
+
+# Phái sinh conditional — /khronos/v1/order/condition/detail[].status
+deriv_condition_status_codes:
+  "0": "PENDING"    # Chờ kích hoạt
+  "1": "ACTIVATED"  # Đã kích hoạt
+  "2": "CANCELLED"  # Đã hủy
+  "3": "REJECTED"   # Bị từ chối
+
+# ─── Error / Result Codes ─────────────────────────────────────────────────────
+# QUAN TRỌNG: Mỗi service dùng field name khác nhau cho success/error.
+result_codes:
+  akhlys_success:  "0"   # /akhlys cancel-orders, place orders — field "error": "0" = success
+  khronos_success: "1"   # /khronos order endpoints — field "rc": "1" = success
+  generic_success: "200" # /physis stock transfer — field "code": "200" = success
+  # Phái sinh rc < 0 = error; rc = "1" = success
 
 # ─── Session States ───────────────────────────────────────────────────────────
 # Trạng thái phiên giao dịch HOSE/HNX — dùng cho market snapshot records
@@ -142,33 +338,11 @@ session_states:
   HALT:       "Tạm ngưng giao dịch"
   UNKNOWN:    "Không xác định"
 
-# ─── Exchange Names ───────────────────────────────────────────────────────────
-exchanges:
-  HOSE:   "Sở Giao dịch Chứng khoán TP.HCM"
-  HNX:    "Sở Giao dịch Chứng khoán Hà Nội"
-  UPCOM:  "Thị trường UPCoM"
-  DERIV:  "Thị trường Phái sinh (VSD)"
-
-# ─── HTTP Headers ─────────────────────────────────────────────────────────────
-headers:
-  authorization: "Authorization"
-  bearer_prefix: "Bearer "
-  content_type:  "Content-Type"
-  accept:        "Accept"
-
-# ─── Error / Result Codes ─────────────────────────────────────────────────────
-# Response codes từ các endpoints khác nhau
-result_codes:
-  # Cổ phiếu cơ sở (/akhlys): error field
-  stock_order_success: "0"
-  # Phái sinh (/khronos): rc field
-  deriv_order_success: "1"
-
-# ─── Intraday History Pagination ─────────────────────────────────────────────
+# ─── Intraday History Pagination ──────────────────────────────────────────────
 intraday_history:
-  default_page: 0
-  default_size: 100
-  max_size:     100
+  default_page:       0
+  default_size:       100
+  max_size:           100
   default_head_index: -1   # -1 = lấy từ đầu (mới nhất)
 
 # ─── Securities Filter Fields ─────────────────────────────────────────────────
@@ -176,6 +350,6 @@ intraday_history:
 securities_filter_fields:
   - "symbol"
   - "exchange"
-  - "type"         # STOCK | BOND | FUND | DERIVATIVE
+  - "type"      # STOCK | BOND | FUND | DERIVATIVE
   - "industry"
-  - "status"       # LISTED | DELISTED | SUSPENDED
+  - "status"    # LISTED | DELISTED | SUSPENDED

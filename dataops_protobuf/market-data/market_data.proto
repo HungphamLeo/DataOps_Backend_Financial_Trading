@@ -1,60 +1,311 @@
 syntax = "proto3";
 
-// Protobuf schema cho Real-time Market Data Stream (Binance Crypto & TCBS VN Stocks)
-// Reference: docs/openapi-v1.0.0.json, dataops_backend_api/models/analytics.go, dataops-stream-producer
+// market_data.proto — Canonical Data Model (CDM) cho DataOps Platform
+//
+// ═══════════════════════════════════════════════════════════════════════════
+// ĐÂY LÀ SOURCE OF TRUTH DUY NHẤT cho tất cả enums và message types.
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Mọi module đều phải follow definitions tại đây:
+//   Go (dataops_stream_producer):  pkg/producer/types.go — PHẢI mirror enums này
+//   Python (dataops_batch_api):    cli/ingestion/schema/canonical.py — PHẢI mirror enums này
+//   Python (dataops_processing):   dùng generated Python class từ protoc
+//
+// Codegen commands:
+//   Go:     protoc --go_out=. --go-grpc_out=. market-data/market_data.proto
+//   Python: protoc --python_out=. --grpc_python_out=. market-data/market_data.proto
+//
+// Khi thêm enum value mới:
+//   1. Thêm vào .proto file (file này)
+//   2. Cập nhật canonical.py (Python manual mirror)
+//   3. Cập nhật types.go (Go manual mirror)
+//   4. Chạy lại protoc để regenerate
+//
+// Reference:
+//   Binance API: https://binance-docs.github.io/apidocs/spot/en/
+//   TCBS iFlash: docs/openapi-v1.0.0.json
+//   Session:     export_task/SESSION_2026_10_07_TCBS_REDIS_CACHE_AND_WSS_CONSUMER.md
 
 package marketdata.v1;
 
-option go_package = "dataops-protobuf/marketdata;marketdatav1";
+option go_package     = "dataops-protobuf/marketdata;marketdatav1";
+option java_package   = "com.dataops.marketdata.v1";
+option python_package = "dataops_protobuf.market_data.v1";
 
 import "google/protobuf/timestamp.proto";
 
-// ─── Market Data Stream Service ───────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 1 — CANONICAL ENUMS
+// Đây là "bảng từ điển" chung. Tất cả source map về đây.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Interval — Canonical timeframe cho OHLCV candles.
+//
+// Vấn đề giải quyết:
+//   Binance REST: "1m", "5m", "1h", "1d"
+//   TCBS internal (aggregate ticks): "1 minute", "5 minutes"
+//   InfluxDB query: "1m", "5m"
+//   Delta Lake partition label: "1min", "5min"
+//
+// Canonical form = Binance-style short codes (phổ biến nhất).
+// Mọi source đều map về enum này — không để string tự do.
+//
+// Mirror tại:
+//   canonical.py: class CanonicalInterval(str, Enum)
+//   (Go types.go không có interval enum vì producer không cần interval)
+enum Interval {
+  INTERVAL_UNSPECIFIED = 0;  // Unknown / unset — không dùng trong production
+  INTERVAL_1S          = 1;  // 1 second    — "1s"  (Binance Spot only)
+  INTERVAL_1M          = 2;  // 1 minute    — "1m"  (Binance + TCBS aggregate)
+  INTERVAL_3M          = 3;  // 3 minutes   — "3m"  (Binance only)
+  INTERVAL_5M          = 4;  // 5 minutes   — "5m"
+  INTERVAL_15M         = 5;  // 15 minutes  — "15m"
+  INTERVAL_30M         = 6;  // 30 minutes  — "30m"
+  INTERVAL_1H          = 7;  // 1 hour      — "1h"
+  INTERVAL_2H          = 8;  // 2 hours     — "2h"  (Binance only)
+  INTERVAL_4H          = 9;  // 4 hours     — "4h"
+  INTERVAL_6H          = 10; // 6 hours     — "6h"  (Binance only)
+  INTERVAL_8H          = 11; // 8 hours     — "8h"  (Binance only)
+  INTERVAL_12H         = 12; // 12 hours    — "12h" (Binance only)
+  INTERVAL_1D          = 13; // 1 day       — "1d"
+  INTERVAL_3D          = 14; // 3 days      — "3d"  (Binance only)
+  INTERVAL_1W          = 15; // 1 week      — "1w"  (Binance only)
+  INTERVAL_1MONTH      = 16; // 1 month     — "1M"  (Binance only)
+}
+
+// Side — Canonical trade/order direction.
+//
+// Vấn đề giải quyết:
+//   Binance @trade:    m=false → BUY, m=true → SELL
+//   Binance order API: side="BUY" | "SELL"
+//   TCBS stock:        execType="NB" → BUY, "NS" → SELL
+//   TCBS deriv order:  side="B" → BUY, "S" → SELL
+//   TCBS deriv posit.: side="L" → LONG, "S" → SHORT
+//   TCBS intraday:     "Buy Up" → BUY, "Sell Down" → SELL
+//
+// Mirror tại:
+//   canonical.py: class CanonicalSide(str, Enum)
+//   types.go:     field `side string` — dùng "buy" | "sell" | "long" | "short"
+enum Side {
+  SIDE_UNSPECIFIED = 0;  // Unknown / unset
+  SIDE_BUY         = 1;  // Taker buy / buy order / long entry
+  SIDE_SELL        = 2;  // Taker sell / sell order / short entry
+  SIDE_LONG        = 3;  // Derivative long position (TCBS: "L")
+  SIDE_SHORT       = 4;  // Derivative short position (TCBS: "S")
+}
+
+// OrderStatus — Canonical order state machine.
+//
+// Vấn đề giải quyết:
+//   Binance: "NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED" (1 L!), "REJECTED", ...
+//   TCBS orStatus: "0"=REJECTED, "2"=SENT, "3"=CANCELLED, "4"=FILLED, "8"=PENDING,
+//                  "C"=CANCELLING, "A"=MODIFYING, "12"=FILLED_ALL, ...
+//   TCBS deriv condition: "0"=PENDING, "1"=ACTIVATED, "2"=CANCELLED, "3"=REJECTED
+//
+// QUAN TRỌNG: Canonical dùng CANCELLED (2 L) — không phải CANCELED (Binance-style).
+// Lý do: Binance là exception; chuẩn quốc tế (ISO, FIX Protocol) dùng CANCELLED.
+//
+// Mirror tại:
+//   canonical.py: class CanonicalOrderStatus(str, Enum)
+//   types.go:     không có — order status chỉ cần ở backend_api và batch_api
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED    = 0;
+  ORDER_STATUS_PENDING        = 1;  // Chờ xử lý (chưa gửi sàn)  — TCBS "8", Binance "NEW"
+  ORDER_STATUS_SENT           = 2;  // Đã gửi tới sàn             — TCBS "2"
+  ORDER_STATUS_SENDING        = 3;  // Đang gửi                   — TCBS "11"
+  ORDER_STATUS_PARTIALLY_FILLED = 4; // Khớp một phần             — Binance "PARTIALLY_FILLED"
+  ORDER_STATUS_FILLED         = 5;  // Khớp hết                   — TCBS "4","12","S", Binance "FILLED"
+  ORDER_STATUS_CANCELLED      = 6;  // Đã hủy                     — TCBS "3", Binance "CANCELED"
+  ORDER_STATUS_CANCELLING     = 7;  // Đang hủy                   — TCBS "C"
+  ORDER_STATUS_REJECTED       = 8;  // Bị từ chối                 — TCBS "0", Binance "REJECTED"
+  ORDER_STATUS_EXPIRED        = 9;  // Hết hạn                    — Binance "EXPIRED"
+  ORDER_STATUS_MODIFIED       = 10; // Đã sửa                     — TCBS "10"
+  ORDER_STATUS_MODIFYING      = 11; // Đang sửa                   — TCBS "A"
+  ORDER_STATUS_ACTIVATED      = 12; // Conditional kích hoạt      — TCBS deriv condition "1"
+  ORDER_STATUS_UNKNOWN        = 99; // Fallback cho code không nhận diện được
+}
+
+// InstrumentType — Canonical instrument category.
+//
+// Vấn đề giải quyết:
+//   Binance: "SPOT" (api domain), "FUTURES" (fapi domain), "COINM" (dapi domain)
+//   TCBS: cổ phiếu cơ sở → SPOT, phái sinh VN30F → DERIVATIVE
+//   Delta Lake: partition by inst_type cần value nhất quán
+//
+// Mirror tại:
+//   canonical.py: class CanonicalInstrumentType(str, Enum)
+//   types.go: field `instType string` — dùng "SPOT" | "FUTURES" | "DERIVATIVE"
+enum InstrumentType {
+  INSTRUMENT_TYPE_UNSPECIFIED = 0;
+  INSTRUMENT_TYPE_SPOT        = 1;  // Cổ phiếu cơ sở — Binance spot, TCBS stock
+  INSTRUMENT_TYPE_FUTURES     = 2;  // Hợp đồng tương lai — Binance USDM (fapi)
+  INSTRUMENT_TYPE_PERPETUAL   = 3;  // Perpetual swap — Binance (nếu cần sau này)
+  INSTRUMENT_TYPE_DERIVATIVE  = 4;  // Phái sinh VN30F — TCBS only
+  INSTRUMENT_TYPE_COINM       = 5;  // Coin-M futures — Binance dapi (nếu cần)
+}
+
+// Exchange — Canonical exchange/market identifier.
+//
+// Dùng để phân biệt nguồn khi lưu Delta Lake và query.
+// Mirror tại:
+//   canonical.py: class CanonicalExchange(str, Enum)
+//   types.go: field `exchange string` — dùng lowercase string "binance" | "tcbs_hose" | ...
+enum Exchange {
+  EXCHANGE_UNSPECIFIED    = 0;
+  EXCHANGE_BINANCE        = 1;  // Binance Spot
+  EXCHANGE_BINANCE_FUTURES= 2;  // Binance USD-M Futures
+  EXCHANGE_TCBS_HOSE      = 3;  // TCBS — Sàn HOSE
+  EXCHANGE_TCBS_HNX       = 4;  // TCBS — Sàn HNX
+  EXCHANGE_TCBS_UPCOM     = 5;  // TCBS — Thị trường UPCoM
+  EXCHANGE_TCBS_DERIV     = 6;  // TCBS — Phái sinh VN30F
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 2 — SERVICE DEFINITION
+// ═══════════════════════════════════════════════════════════════════════════
 
 service MarketDataStream {
-  // Unary data queries
-  rpc GetTicker(TickerRequest) returns (TickerResponse);
+  // Unary queries
+  rpc GetTicker(TickerRequest)       returns (TickerResponse);
   rpc GetOrderBook(OrderBookRequest) returns (OrderBookResponse);
-  rpc GetKline(KlineRequest) returns (KlineResponse);
+  rpc GetKline(KlineRequest)         returns (KlineResponse);
 
-  // Streaming real-time data
-  rpc StreamTicker(TickerRequest) returns (stream TickerResponse);
-  rpc StreamOrderBook(OrderBookRequest) returns (stream OrderBookResponse);
+  // Server-side streaming
+  rpc StreamTicker(TickerRequest)      returns (stream TickerResponse);
+  rpc StreamOrderBook(OrderBookRequest)returns (stream OrderBookResponse);
   rpc StreamTrades(TradeStreamRequest) returns (stream MarketTrade);
 }
 
-// ─── Requests ─────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 3 — REQUEST MESSAGES
+// ═══════════════════════════════════════════════════════════════════════════
 
 message TickerRequest {
-  string symbol   = 1; // "BTCUSDT" hoặc "VCB"
-  string exchange = 2; // "binance", "tcbs", "vps"
+  string   symbol   = 1; // "BTCUSDT" (Binance) hoặc "VCB" (TCBS)
+  Exchange exchange = 2; // Dùng enum — không phải raw string
 }
 
 message OrderBookRequest {
-  string symbol   = 1;
-  string exchange = 2;
-  int32  depth    = 3; // e.g. 3, 5, 10, 20
+  string   symbol   = 1;
+  Exchange exchange = 2;
+  int32    depth    = 3; // 3, 5, 10, 20
 }
 
 message KlineRequest {
   string                    symbol   = 1;
-  string                    exchange = 2;
-  string                    interval = 3; // "1m", "5m", "15m", "1h", "1d"
+  Exchange                  exchange = 2;
+  Interval                  interval = 3; // Dùng enum — không phải raw string "1m"
   google.protobuf.Timestamp from     = 4;
   google.protobuf.Timestamp to       = 5;
   int32                     limit    = 6;
 }
 
 message TradeStreamRequest {
-  repeated string symbols  = 1;
-  string          exchange = 2;
+  repeated string  symbols  = 1;
+  Exchange         exchange = 2;
 }
 
-// ─── Response Messages ────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 4 — CANONICAL DATA MESSAGES
+// Tất cả source đều phải map response về các messages này.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// CanonicalOHLCV — Normalized OHLCV candle.
+//
+// Binance source:  from_binance_kline_row() → CanonicalOHLCV
+// TCBS source:     aggregate intraday ticks → CanonicalOHLCV
+//
+// Field notes:
+//   ts_open_ms / ts_close_ms: Unix milliseconds
+//   volume:       Base asset (BTC cho BTCUSDT, số cổ phiếu cho VCB)
+//   quote_volume: Quote asset (USDT) — Binance row[7]; TCBS totalVal (VND)
+//   confirm:      true = candle đã đóng; false = đang live
+//   source:       "binance" | "tcbs" — để trace lineage
+message CanonicalOHLCV {
+  string         symbol       = 1;
+  Exchange       exchange     = 2;
+  InstrumentType inst_type    = 3;
+  Interval       interval     = 4;
+  int64          ts_open_ms   = 5;
+  int64          ts_close_ms  = 6;
+  double         open         = 7;
+  double         high         = 8;
+  double         low          = 9;
+  double         close        = 10;
+  double         volume       = 11;
+  double         quote_volume = 12;
+  int32          num_trades   = 13;
+  bool           confirm      = 14;
+  string         source       = 15;
+}
+
+// CanonicalTrade — Normalized trade tick.
+//
+// Binance source:  from_binance_trade_message() — field "m" (isBuyerMaker) → Side enum
+// TCBS source:     from_tcbs_intraday_tick() — field "a" ("Buy Up"/"Sell Down") → Side enum
+//
+// Field notes:
+//   trade_id: string để tránh int64 overflow (TCBS không có trade_id → empty string)
+//   side:     SIDE_BUY hoặc SIDE_SELL — không dùng SIDE_LONG/SHORT ở đây
+message CanonicalTrade {
+  string                    symbol     = 1;
+  Exchange                  exchange   = 2;
+  string                    trade_id   = 3;
+  double                    price      = 4;
+  double                    quantity   = 5;
+  Side                      side       = 6;
+  int64                     ts_ms      = 7;
+  bool                      is_confirm = 8;
+  string                    source     = 9;
+}
+
+// CanonicalOrder — Normalized order record.
+//
+// Binance: from_binance_order() — status "CANCELED" → ORDER_STATUS_CANCELLED
+// TCBS stock: from_tcbs_stock_order() — orStatus "3" → ORDER_STATUS_CANCELLED
+// TCBS deriv: from_tcbs_deriv_order() — rc + status codes
+message CanonicalOrder {
+  string         order_id       = 1;
+  string         account_no     = 2;
+  Exchange       exchange       = 3;
+  string         symbol         = 4;
+  InstrumentType inst_type      = 5;
+  Side           side           = 6;
+  string         order_type     = 7;  // "LIMIT" | "MARKET" | "STOP_LOSS" | "CONDITION"
+  double         price          = 8;
+  double         quantity       = 9;
+  double         filled_qty     = 10;
+  OrderStatus    status         = 11;
+  int64          ts_placed_ms   = 12;
+  int64          ts_updated_ms  = 13;
+  string         source         = 14;
+}
+
+// CanonicalPosition — Normalized derivative position.
+//
+// TCBS: from_tcbs_deriv_position() — side "L" → SIDE_LONG, "S" → SIDE_SHORT
+// Binance Futures: future implementation
+message CanonicalPosition {
+  string   account_no      = 1;
+  Exchange exchange        = 2;
+  string   symbol          = 3;
+  Side     side            = 4;  // SIDE_LONG hoặc SIDE_SHORT
+  double   net_qty         = 5;
+  double   entry_price     = 6;
+  double   last_price      = 7;
+  double   unrealized_pnl  = 8;
+  double   margin_used     = 9;
+  int64    ts_ms           = 10;
+  string   source          = 11;
+}
+
+// ─── Legacy response messages (backward compat) ───────────────────────────────
+// Các message dưới đây giữ nguyên — dùng cho existing gRPC endpoints.
+// Dần dần migrate sang CanonicalX messages phía trên.
 
 message TickerResponse {
   string                    symbol         = 1;
-  string                    exchange       = 2;
+  Exchange                  exchange       = 2;
   double                    price          = 3;
   double                    volume         = 4;
   double                    bid            = 5;
@@ -68,12 +319,12 @@ message TickerResponse {
 message OrderBookEntry {
   double price    = 1;
   double quantity = 2;
-  int32  orders   = 3; // Số lượng lệnh (nếu có, ví dụ Binance depth5/TCBS)
+  int32  orders   = 3;
 }
 
 message OrderBookResponse {
   string                    symbol    = 1;
-  string                    exchange  = 2;
+  Exchange                  exchange  = 2;
   repeated OrderBookEntry   bids      = 3;
   repeated OrderBookEntry   asks      = 4;
   google.protobuf.Timestamp timestamp = 5;
@@ -81,14 +332,14 @@ message OrderBookResponse {
 
 message Kline {
   string                    symbol    = 1;
-  string                    exchange  = 2;
-  string                    interval  = 3;
+  Exchange                  exchange  = 2;
+  Interval                  interval  = 3;  // đã đổi từ string → Interval enum
   double                    open      = 4;
   double                    high      = 5;
   double                    low       = 6;
   double                    close     = 7;
   double                    volume    = 8;
-  double                    quote_vol = 9; // Quote asset volume (Binance quoteVolume / TCBS totalVal)
+  double                    quote_vol = 9;
   google.protobuf.Timestamp timestamp = 10;
 }
 
@@ -97,12 +348,12 @@ message KlineResponse {
 }
 
 message MarketTrade {
-  string                    symbol       = 1;
-  string                    exchange     = 2;
-  string                    trade_id     = 3;
-  double                    price        = 4;
-  double                    quantity     = 5;
-  string                    side         = 6; // "buy" | "sell"
+  string                    symbol         = 1;
+  Exchange                  exchange       = 2;
+  string                    trade_id       = 3;
+  double                    price          = 4;
+  double                    quantity       = 5;
+  Side                      side           = 6;  // đã đổi từ string → Side enum
   bool                      is_buyer_maker = 7;
-  google.protobuf.Timestamp timestamp    = 8;
+  google.protobuf.Timestamp timestamp      = 8;
 }
