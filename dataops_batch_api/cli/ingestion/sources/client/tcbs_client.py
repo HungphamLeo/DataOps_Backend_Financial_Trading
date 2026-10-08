@@ -15,13 +15,13 @@ Auth flow:
     3. Token tự động refresh khi gần hết hạn (configurable threshold)
 
 Design:
-    - TCBSConstants: load tcbs_constants.yaml — không hardcode bất kỳ giá trị nào.
+    - TCBSConstants: nằm ở tcbs_constants_loader.py — không hardcode giá trị nào.
     - TCBSRestClient: client với retry (tenacity), JWT auto-refresh, session reuse.
-    - Tất cả method đều có try/except rõ ràng + logger đúng chuẩn.
+    - Tất cả method đều có try/except rõ ràng + logger_manager đúng chuẩn.
     - from_env(): factory method để inject từ env vars (12-Factor).
 
 Usage:
-    from cli.ingestion.sources.tcbs_client import TCBSRestClient
+    from cli.ingestion.sources.tcbs_client import TCBSRestClient, TCBSConstants
 
     client = TCBSRestClient.from_env()
     tickers = client.get_ticker_commons(index="HOSE")
@@ -30,159 +30,21 @@ Usage:
 """
 from __future__ import annotations
 
-import logging
 import os
 import time
 import threading
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
-import yaml
 from tenacity import RetryCallState, retry, stop_after_attempt, wait_exponential
 
-logger = logging.getLogger(__name__)
+from log.logger_setup import logger_manager
+from cli.ingestion.sources.tcbs_constants_loader import TCBSConstants  # noqa: F401
 
-# ─── TCBSConstants ────────────────────────────────────────────────────────────
+logger = logger_manager.get_logger(__name__)
 
-class TCBSConstants:
-    """
-    Load và expose tất cả constants từ tcbs_constants.yaml.
-
-    Singleton — YAML được load 1 lần duy nhất lúc import.
-    Cung cấp accessor methods và validation helpers.
-
-    Tuyệt đối không hardcode bất kỳ giá trị enum, code, endpoint nào
-    vào các file khác — luôn đọc qua class này.
-    """
-
-    _data: Dict[str, Any] = {}
-    _loaded: bool = False
-    _YAML_PATH = Path(__file__).parent / "tcbs_constants.yaml"
-
-    @classmethod
-    def _ensure_loaded(cls) -> None:
-        """Load YAML lần đầu — subsequent calls là no-op."""
-        if cls._loaded:
-            return
-        if not cls._YAML_PATH.exists():
-            raise FileNotFoundError(
-                f"tcbs_constants.yaml not found at {cls._YAML_PATH}. "
-                "File này là required — không thể chạy TCBS pipeline."
-            )
-        try:
-            with open(cls._YAML_PATH, "r", encoding="utf-8") as fh:
-                cls._data = yaml.safe_load(fh) or {}
-            cls._loaded = True
-            logger.debug("TCBSConstants loaded from %s", cls._YAML_PATH)
-        except yaml.YAMLError as exc:
-            raise RuntimeError(f"Malformed tcbs_constants.yaml: {exc}") from exc
-
-    # ── Endpoints ─────────────────────────────────────────────────────────────
-
-    @classmethod
-    def endpoint(cls, name: str) -> str:
-        """
-        Trả về API path cho endpoint name.
-
-        Args:
-            name: key trong section endpoints, e.g. "ticker_commons"
-
-        Returns:
-            Path string, e.g. "/tartarus/v1/tickerCommons"
-
-        Raises:
-            KeyError: nếu endpoint name không tồn tại trong YAML.
-        """
-        cls._ensure_loaded()
-        endpoints = cls._data.get("endpoints", {})
-        if name not in endpoints:
-            raise KeyError(
-                f"Unknown TCBS endpoint '{name}'. "
-                f"Available: {list(endpoints.keys())}"
-            )
-        return endpoints[name]
-
-    # ── Index Codes ───────────────────────────────────────────────────────────
-
-    @classmethod
-    def index_code(cls, index_name: str) -> int:
-        """
-        Trả về numeric code cho stock index basket.
-
-        Args:
-            index_name: e.g. "HOSE", "VN30", "HNX"
-
-        Returns:
-            int code để truyền vào ?index= param
-
-        Raises:
-            KeyError: index_name không hợp lệ.
-        """
-        cls._ensure_loaded()
-        codes = cls._data.get("index_codes", {})
-        upper = index_name.upper()
-        if upper not in codes:
-            raise KeyError(
-                f"Unknown index '{index_name}'. "
-                f"Available: {list(codes.keys())}"
-            )
-        return codes[upper]
-
-    # ── Validation helpers ────────────────────────────────────────────────────
-
-    @classmethod
-    def validate_price_type(cls, price_type: str) -> str:
-        """Validate và trả về price_type cho lệnh cổ phiếu. Raises ValueError nếu invalid."""
-        cls._ensure_loaded()
-        valid = cls._data.get("price_types", {})
-        if price_type not in valid:
-            raise ValueError(
-                f"Invalid price_type '{price_type}'. "
-                f"Valid values: {list(valid.keys())}"
-            )
-        return price_type
-
-    @classmethod
-    def validate_exec_type(cls, exec_type: str) -> str:
-        """Validate execType (NB/NS) cho lệnh cổ phiếu."""
-        cls._ensure_loaded()
-        valid = cls._data.get("exec_types", {})
-        if exec_type not in valid:
-            raise ValueError(
-                f"Invalid exec_type '{exec_type}'. Valid: {list(valid.keys())}"
-            )
-        return exec_type
-
-    @classmethod
-    def validate_bsa_investor_type(cls, investor_type: str) -> str:
-        """Validate BSA investor type (sheep/wolf/shark/all)."""
-        cls._ensure_loaded()
-        valid = cls._data.get("bsa_investor_types", {})
-        if investor_type not in valid:
-            raise ValueError(
-                f"Invalid BSA investor_type '{investor_type}'. "
-                f"Valid: {list(valid.keys())}"
-            )
-        return investor_type
-
-    @classmethod
-    def valid_session_states(cls) -> List[str]:
-        """Trả về danh sách session states hợp lệ."""
-        cls._ensure_loaded()
-        return list(cls._data.get("session_states", {}).keys())
-
-    @classmethod
-    def intraday_history_config(cls) -> Dict[str, Any]:
-        """Trả về config pagination cho intraday history."""
-        cls._ensure_loaded()
-        return cls._data.get("intraday_history", {})
-
-    @classmethod
-    def raw(cls) -> Dict[str, Any]:
-        """Trả về toàn bộ raw data từ YAML — dùng khi cần truy cập section tuỳ ý."""
-        cls._ensure_loaded()
-        return cls._data
+# Re-export TCBSConstants để backward-compatible với code cũ import từ tcbs_client
+__all__ = ["TCBSRestClient", "TCBSConstants"]
 
 
 # ─── Retry logging callback ───────────────────────────────────────────────────
@@ -215,6 +77,10 @@ class TCBSRestClient:
     Retry:
         - Sử dụng tenacity với exponential backoff.
         - Số lần retry và wait time đọc từ exchange_config.yaml.
+
+    Constants:
+        - Đọc endpoint paths, index codes, enums qua TCBSConstants
+          (từ tcbs_constants_loader.py → tcbs_constants.yaml).
 
     Usage:
         client = TCBSRestClient.from_env()
@@ -441,36 +307,26 @@ class TCBSRestClient:
         """
         Lấy bảng giá cổ phiếu với orderbook 3 bước giá (bid/offer × 3).
 
-        Tương đương VPS get_market_data nhưng chi tiết hơn nhiều:
-        có bid/offer 3 cấp, OHLC, foreign room, average price.
-
         QUAN TRỌNG: Chỉ dùng tickers HOẶC index, không dùng cả hai.
 
         Args:
             tickers: Danh sách mã, e.g. ["VCB", "VHM", "TCB"].
-                     None → cần truyền index.
             index:   Tên basket index, e.g. "HOSE", "VN30", "HNX".
-                     None → cần truyền tickers.
 
         Returns:
             Dict với keys: tradingDate, data (list of ticker objects).
-            Mỗi ticker có: symbol, refPrice, ceilPrice, floorPrice,
-            bid/offer 3 cấp, matchPrice, matchQtty, change, changePercent,
-            open, high, low, avg, totalVol, totalVal, buyForeignQtty,
-            sellForeignQtty, room, indexNumber.
 
         Raises:
-            ValueError: nếu cả tickers và index đều None.
+            ValueError: nếu cả tickers và index đều None, hoặc cả hai đều được truyền.
             requests.HTTPError: HTTP error sau khi hết retry.
         """
         if tickers is None and index is None:
             raise ValueError(
-                "get_ticker_commons: phải truyền ít nhất tickers hoặc index. "
-                "Không thể request mà không có filter — sẽ trả về toàn bộ thị trường."
+                "get_ticker_commons: phải truyền ít nhất tickers hoặc index."
             )
         if tickers is not None and index is not None:
             raise ValueError(
-                "get_ticker_commons: không dùng tickers và index cùng lúc theo TCBS API spec."
+                "get_ticker_commons: không dùng tickers và index cùng lúc."
             )
 
         params: Dict[str, Any] = {}
@@ -480,9 +336,7 @@ class TCBSRestClient:
             params["index"] = TCBSConstants.index_code(index)
 
         path = TCBSConstants.endpoint("ticker_commons")
-        logger.debug(
-            "get_ticker_commons — params=%s", params
-        )
+        logger.debug("get_ticker_commons — params=%s", params)
 
         try:
             result = self._get(path, params=params)
@@ -515,9 +369,6 @@ class TCBSRestClient:
 
         Returns:
             Dict với keys: tradingDate, data (list).
-            Mỗi item có: symbol, refPrice, ceilPrice, floorPrice, matchPrice,
-            matchQtty, change, changePercent, totalVolume, totalValue,
-            buyForeignQtty, sellForeignQtty, room.
 
         Raises:
             requests.HTTPError: HTTP error.
@@ -553,9 +404,6 @@ class TCBSRestClient:
 
         Returns:
             Dict với keys: data (list).
-            Mỗi contract có: symbol, ceilPrice, floorPrice, refPrice,
-            bidPrice01, bidQtty01, offerPrice01, offerQtty01,
-            matchPrice, matchQtty, change, changePercent, totalVolume.
 
         Raises:
             requests.HTTPError: HTTP error.
@@ -619,12 +467,10 @@ class TCBSRestClient:
         Lấy dữ liệu cung/cầu trong ngày (Buy/Sell Analysis) cho 1 mã cổ phiếu.
 
         Phân loại nhà đầu tư: sheep (nhỏ lẻ), wolf (vừa), shark (tổ chức lớn), all.
-        Fields: bup (Buy Up Percent), sdp (Sell Down Percent), bsr (Buy/Sell Ratio), t (time).
 
         Args:
             ticker:        Mã cổ phiếu, e.g. "TCB", "VCB".
-            investor_type: Loại nhà đầu tư từ tcbs_constants.yaml bsa_investor_types.
-                           Default "all".
+            investor_type: Loại nhà đầu tư từ bsa_investor_types trong YAML.
 
         Returns:
             Dict với keys: ticker, data (list of BSA records).
@@ -638,10 +484,7 @@ class TCBSRestClient:
         path = TCBSConstants.endpoint("intraday_bsa").replace("{ticker}", ticker)
         params: Dict[str, Any] = {"type": investor_type}
 
-        logger.debug(
-            "get_intraday_bsa — ticker=%s, investor_type=%s",
-            ticker, investor_type,
-        )
+        logger.debug("get_intraday_bsa — ticker=%s, investor_type=%s", ticker, investor_type)
 
         try:
             result = self._get(path, params=params)
@@ -665,10 +508,7 @@ class TCBSRestClient:
         reraise=True,
         after=_log_retry,
     )
-    def get_intraday_bsa_ext(
-        self,
-        ticker: str,
-    ) -> Dict[str, Any]:
+    def get_intraday_bsa_ext(self, ticker: str) -> Dict[str, Any]:
         """
         Lấy dữ liệu cung/cầu intraday theo khung 15 phút.
 
@@ -698,10 +538,7 @@ class TCBSRestClient:
         reraise=True,
         after=_log_retry,
     )
-    def get_intraday_bsa_month(
-        self,
-        ticker: str,
-    ) -> Dict[str, Any]:
+    def get_intraday_bsa_month(self, ticker: str) -> Dict[str, Any]:
         """
         Lấy dữ liệu cung/cầu theo tháng cho 1 mã cổ phiếu.
 
@@ -816,15 +653,12 @@ class TCBSRestClient:
         Lấy thông tin niêm yết chứng khoán (stock, bond, derivative listing data).
 
         Args:
-            filter_expr: Filter expression dạng "field=value", e.g. "symbol=TCB",
-                         "exchange=HOSE". Fields hợp lệ trong tcbs_constants.yaml
-                         securities_filter_fields.
+            filter_expr: Filter expression dạng "field=value", e.g. "symbol=TCB".
             fields:      Comma-separated field names cần trả về. None → tất cả.
             require_auth: True (default) — endpoint này yêu cầu JWT token.
 
         Returns:
-            Response JSON từ TCBS (schema không được document trong spec —
-            cần kiểm tra thực tế).
+            Response JSON từ TCBS.
 
         Raises:
             RuntimeError: nếu require_auth=True và token chưa được set.
@@ -847,9 +681,7 @@ class TCBSRestClient:
             logger.debug("get_securities — success")
             return result
         except Exception as exc:
-            logger.error(
-                "get_securities failed — filter=%s: %s", filter_expr, exc
-            )
+            logger.error("get_securities failed — filter=%s: %s", filter_expr, exc)
             raise
 
     # ── Batch helpers ─────────────────────────────────────────────────────────
@@ -981,19 +813,18 @@ class TCBSRestClient:
         Factory method — tạo client từ environment variables.
 
         Env vars:
-            TCBS_BASE_URL:    Base URL (default: https://openapi.tcbs.com.vn)
-            TCBS_API_KEY:     API Key từ TCInvest app (required cho auth endpoints)
-            TCBS_JWT_TOKEN:   Pre-obtained JWT token (optional — skip authenticate())
-            TCBS_TIMEOUT:     Request timeout seconds (default: 15)
-            TCBS_RETRY:       Retry attempts (default: 3)
+            TCBS_BASE_URL:             Base URL (default: https://openapi.tcbs.com.vn)
+            TCBS_API_KEY:              API Key từ TCInvest app (required cho auth)
+            TCBS_JWT_TOKEN:            Pre-obtained JWT token (optional)
+            TCBS_TIMEOUT:              Request timeout seconds (default: 15)
+            TCBS_RETRY:                Retry attempts (default: 3)
+            TCBS_TOKEN_THRESHOLD_SEC:  Refresh threshold seconds (default: 7200 = 2h)
 
         Auth note:
             TCBS Access Token có TTL = 8 giờ (28800s).
             token_refresh_threshold_sec = 7200s → cảnh báo/refresh khi còn < 2h.
-            Khớp với Go client: tcbsconst.TokenRefreshThreshold = 3600s.
-            Workflow: có TCBS_API_KEY thì set vào client; có TCBS_JWT_TOKEN thì
-            dùng luôn (manual flow). Không có TCBS_JWT_TOKEN → phải gọi
-            client.authenticate(otp) với Smart OTP từ TCInvest app.
+            Nếu TCBS_JWT_TOKEN được set, dùng ngay (bỏ qua authenticate()).
+            Nếu không, phải gọi client.authenticate(otp) với Smart OTP từ TCInvest app.
 
         Returns:
             Configured TCBSRestClient instance.
@@ -1003,12 +834,9 @@ class TCBSRestClient:
             api_key=os.getenv("TCBS_API_KEY", ""),
             request_timeout=int(os.getenv("TCBS_TIMEOUT", "15")),
             retry_attempts=int(os.getenv("TCBS_RETRY", "3")),
-            # TCBS token TTL = 8h (28800s). Refresh threshold = 7200s (2h trước khi hết).
-            # Default cũ là 300s — quá ngắn, sẽ coi token injected từ env là expired sau 5 phút.
             token_refresh_threshold_sec=int(os.getenv("TCBS_TOKEN_THRESHOLD_SEC", "7200")),
         )
 
-        # Nếu token đã được set sẵn qua env (e.g. CI/CD pipeline)
         preset_token = os.getenv("TCBS_JWT_TOKEN", "")
         if preset_token:
             client.set_token(preset_token)
