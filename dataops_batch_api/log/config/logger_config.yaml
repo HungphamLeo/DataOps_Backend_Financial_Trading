@@ -119,12 +119,29 @@ handlers:
 # ─── Loggers (route theo __name__ prefix hierarchy) ───────────────────────────
 loggers:
 
-  # ── TCBS sub-layer: tcbs_client + tcbs_constants ─────────────────────────────
-  # Khớp: cli.ingestion.sources.tcbs_client (và bất kỳ module TCBS tương lai)
+  # ── TCBS sub-layer: tcbs_client + tcbs_constants_loader ──────────────────────
+  # Khớp: cli.ingestion.sources.tcbs_client và tcbs_constants_loader
   # Override cli để ghi thêm vào tcbs_file — dễ isolate debug TCBS issues
   cli.ingestion.sources.tcbs_client:
     level: DEBUG
     handlers: [console, tcbs_file, cli_file, error_file]
+    propagate: false
+
+  cli.ingestion.sources.tcbs_constants_loader:
+    level: DEBUG
+    handlers: [console, tcbs_file, cli_file, error_file]
+    propagate: false
+
+  # ── Binance sub-layer: binance_client + binance_constants ────────────────────
+  # Khớp: cli.ingestion.sources.binance_client và binance_constants
+  cli.ingestion.sources.binance_client:
+    level: DEBUG
+    handlers: [console, cli_file, error_file]
+    propagate: false
+
+  cli.ingestion.sources.binance_constants:
+    level: DEBUG
+    handlers: [console, cli_file, error_file]
     propagate: false
 
   # ── CLI layer: tất cả flows + ingestion sources + indicators ─────────────────

@@ -20,13 +20,10 @@ References:
 """
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
-import logging
 import os
 import time
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -37,7 +34,9 @@ from tenacity import (
     wait_exponential,
 )
 
-logger = logging.getLogger(__name__)
+from log.logger_setup import logger_manager
+
+logger = logger_manager.get_logger(__name__)
 
 
 def _log_retry(retry_state: RetryCallState) -> None:
