@@ -1,108 +1,211 @@
 syntax = "proto3";
 
-// Protobuf schema cho Batch Data & Historical Delta Lake Tables
-// Reference: dataops_batch_api (Bronze/Silver/Gold Delta Lake), dataops_backend_api/repository/delta
+// batch_data.proto — gRPC Service: backend_api (Go client) → batch_api (Python server)
+//
+// ═══════════════════════════════════════════════════════════════════════════
+// MỤC ĐÍCH: Historical data queries.
+// Snapshot / realtime data KHÔNG đi qua đây — gọi trực tiếp Binance/TCBS REST.
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Python gRPC server:  dataops_batch_api — query Delta Lake (MinIO/S3)
+// Go gRPC client:      dataops_backend_api — serve /api/v1/crypto/ohlcv, /api/v1/tcbs/ohlcv
+//
+// Data được phục vụ:
+//   1. Binance OHLCV 4h (1 năm rolling)  — Delta: bronze/binance_candles_4h
+//   2. Binance OHLCV 1d (10 năm)         — Delta: bronze/binance_candles_1d
+//   3. TCBS Market EOD 1d (10 năm)        — Delta: bronze/tcbs_market_eod
+//   4. TCBS BSA daily summary (2 năm)     — Delta: bronze/tcbs_bsa_daily
+//
+// Transport: gRPC over HTTP/2 (mTLS trong production, plaintext trong dev)
+// Port:      50051 (dataops-batch-api container)
+//
+// Codegen:
+//   Python server: python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. batch-data/batch_data.proto
+//   Go client:     protoc --go_out=. --go-grpc_out=. batch-data/batch_data.proto
+//
+// Import enums từ market_data.proto (Exchange, Interval, InstrumentType).
 
 package batchdata.v1;
 
-option go_package = "dataops-protobuf/batchdata;batchdatav1";
+option go_package     = "dataops-protobuf/batchdata;batchdatav1";
+option python_package = "dataops_protobuf.batch_data.v1";
 
 import "google/protobuf/timestamp.proto";
 
-// ─── BatchData Service ────────────────────────────────────────────────────────
+// ─── gRPC Service Definition ──────────────────────────────────────────────────
 
-service BatchData {
-  rpc GetOHLCV(BatchOHLCVRequest) returns (BatchOHLCVResponse);
-  rpc GetIndicator(IndicatorRequest) returns (IndicatorResponse);
-  rpc ListAvailableSymbols(ListSymbolsRequest) returns (ListSymbolsResponse);
-  rpc GetDailySummary(DailySummaryBatchRequest) returns (DailySummaryBatchResponse);
+service HistoricalDataService {
+  // ── Binance OHLCV ────────────────────────────────────────────────────────
+  // Trả về nến 4h hoặc 1d từ Delta Lake (không gọi Binance API).
+  // interval hợp lệ: "4h" | "1d"
+  rpc GetBinanceOHLCV(BinanceOHLCVRequest) returns (BinanceOHLCVResponse);
+
+  // ── TCBS Market EOD ───────────────────────────────────────────────────────
+  // Trả về daily OHLCV của cổ phiếu VN từ Delta Lake.
+  // Đây là nến 1D của TCBS — không có intraday granularity.
+  rpc GetTCBSMarketEOD(TCBSMarketEODRequest) returns (TCBSMarketEODResponse);
+
+  // ── TCBS BSA History ──────────────────────────────────────────────────────
+  // Trả về BSA daily summary theo ticker và investor_type.
+  rpc GetTCBSBSAHistory(TCBSBSARequest) returns (TCBSBSAResponse);
+
+  // ── Metadata ──────────────────────────────────────────────────────────────
+  // Kiểm tra data availability — bao nhiêu records, oldest/newest date.
+  rpc GetDataRange(DataRangeRequest) returns (DataRangeResponse);
 }
 
-// ─── OHLCV Messages ───────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 1 — BINANCE OHLCV
+// ═══════════════════════════════════════════════════════════════════════════
 
-message BatchOHLCVRequest {
-  string                    symbol   = 1; // "BTCUSDT" hoặc "VCB"
-  string                    exchange = 2; // "binance" | "tcbs" | "vps"
-  string                    interval = 3; // "1m", "5m", "15m", "1h", "1d"
-  google.protobuf.Timestamp from     = 4;
-  google.protobuf.Timestamp to       = 5;
-  int32                     limit    = 6;
+message BinanceOHLCVRequest {
+  // Binance symbol — uppercase, no hyphen: "BTCUSDT", "ETHUSDT"
+  string symbol = 1;
+
+  // "SPOT" | "FUTURES" — maps to inst_type column in Delta table
+  string inst_type = 2;
+
+  // Timeframe: "4h" | "1d" — chỉ 2 interval được lưu trong batch_api
+  // "4h" → query bronze/binance_candles_4h
+  // "1d" → query bronze/binance_candles_1d
+  string interval = 3;
+
+  // Thời gian bắt đầu — inclusive. Nếu không set → lấy từ oldest record.
+  google.protobuf.Timestamp from = 4;
+
+  // Thời gian kết thúc — inclusive. Nếu không set → lấy đến newest record.
+  google.protobuf.Timestamp to = 5;
+
+  // Số candles tối đa trả về. 0 = không giới hạn (tối đa 10000).
+  // Khuyến nghị: 365 cho 1d, 2190 cho 4h (1 năm)
+  int32 limit = 6;
 }
 
-message BatchOHLCVBar {
-  string                    symbol       = 1;
-  string                    exchange     = 2;
-  string                    interval     = 3;
-  double                    open         = 4;
-  double                    high         = 5;
-  double                    low          = 6;
-  double                    close        = 7;
-  double                    volume       = 8;
-  double                    quote_volume = 9;  // quote asset volume (e.g. USDT / VND)
-  double                    vwap         = 10; // Volume weighted average price
-  int64                     trade_count  = 11;
-  google.protobuf.Timestamp timestamp    = 12;
+message BinanceOHLCVBar {
+  string symbol       = 1;  // "BTCUSDT"
+  string inst_type    = 2;  // "SPOT" | "FUTURES"
+  string interval     = 3;  // "4h" | "1d"
+  int64  ts_open_ms   = 4;  // Unix ms — candle open time
+  int64  ts_close_ms  = 5;  // Unix ms — candle close time
+  double open         = 6;
+  double high         = 7;
+  double low          = 8;
+  double close        = 9;
+  double volume       = 10; // base asset (BTC)
+  double quote_volume = 11; // quote asset (USDT) — row[7] từ Binance API
+  int32  num_trades   = 12;
 }
 
-message BatchOHLCVResponse {
-  repeated BatchOHLCVBar bars = 1;
+message BinanceOHLCVResponse {
+  string                symbol    = 1;
+  string                inst_type = 2;
+  string                interval  = 3;
+  repeated BinanceOHLCVBar bars   = 4;
+  // Số records trả về thực tế (có thể < limit nếu không đủ data)
+  int32                 count     = 5;
 }
 
-// ─── Indicator Messages ───────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 2 — TCBS MARKET EOD
+// ═══════════════════════════════════════════════════════════════════════════
 
-message IndicatorRequest {
-  string                    symbol         = 1;
-  string                    exchange       = 2;
-  string                    interval       = 3;
-  string                    indicator_name = 4; // "SMA", "EMA", "ATR", "RSI", "BBANDS", "VWAP", "BSA"
-  google.protobuf.Timestamp from           = 5;
-  google.protobuf.Timestamp to             = 6;
-  int32                     limit          = 7;
-}
+message TCBSMarketEODRequest {
+  // Mã cổ phiếu HOSE: "VCB", "HPG", "TCB"
+  string symbol = 1;
 
-message IndicatorPoint {
-  string                    symbol         = 1;
-  string                    exchange       = 2;
-  string                    interval       = 3;
-  string                    indicator_name = 4;
-  double                    value          = 5;
-  string                    meta_json      = 6; // e.g. {"upper": 90.5, "lower": 82.1, "bup": 60.5}
-  google.protobuf.Timestamp timestamp      = 7;
-}
-
-message IndicatorResponse {
-  repeated IndicatorPoint points = 1;
-}
-
-// ─── Symbols List ─────────────────────────────────────────────────────────────
-
-message ListSymbolsRequest {
-  string exchange = 1; // "binance", "tcbs", "vps"
-}
-
-message ListSymbolsResponse {
-  repeated string symbols = 1;
-}
-
-// ─── Daily Summary ────────────────────────────────────────────────────────────
-
-message DailySummaryBatchRequest {
-  string symbol   = 1;
+  // Sàn: "HOSE" | "HNX" | "UPCOM". Default "HOSE".
   string exchange = 2;
-  string date     = 3; // "YYYY-MM-DD"
+
+  // Khoảng thời gian (theo ngày giao dịch "YYYY-MM-DD")
+  // Nếu không set → 1 năm gần nhất
+  string from_date = 3;  // "YYYY-MM-DD"
+  string to_date   = 4;  // "YYYY-MM-DD"
+
+  // Số records tối đa. 0 = không giới hạn (tối đa 3650 = 10 năm)
+  int32 limit = 5;
 }
 
-message DailySummaryBatchResponse {
-  string symbol       = 1;
-  string exchange     = 2;
-  string date         = 3;
-  int64  trade_count  = 4;
-  double price_low    = 5;
-  double price_high   = 6;
-  double price_open   = 7;
-  double price_close  = 8;
-  double volume       = 9;
-  double buy_volume   = 10;
-  double sell_volume  = 11;
-  double vwap         = 12;
+message TCBSMarketEODBar {
+  string trading_date     = 1;  // "YYYY-MM-DD"
+  string symbol           = 2;  // "VCB"
+  string exchange         = 3;  // "HOSE"
+  double open             = 4;  // giá ATO
+  double high             = 5;  // cao nhất phiên
+  double low              = 6;  // thấp nhất phiên
+  double close            = 7;  // giá ATC / đóng cửa
+  double total_vol        = 8;  // tổng khối lượng (cổ phiếu)
+  double total_val        = 9;  // tổng giá trị (VND)
+  double buy_foreign_qty  = 10; // KL nước ngoài mua
+  double sell_foreign_qty = 11; // KL nước ngoài bán
+  double net_foreign_qty  = 12; // net NN = buy - sell
+  double change_pct       = 13; // % thay đổi so với ref_price
+  double ref_price        = 14; // giá tham chiếu ngày đó
+  double ceil_price       = 15; // giá trần
+  double floor_price      = 16; // giá sàn
+}
+
+message TCBSMarketEODResponse {
+  string                    symbol   = 1;
+  string                    exchange = 2;
+  repeated TCBSMarketEODBar bars     = 3;
+  int32                     count    = 4;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 3 — TCBS BSA DAILY HISTORY
+// ═══════════════════════════════════════════════════════════════════════════
+
+message TCBSBSARequest {
+  // Mã cổ phiếu: "VCB", "HPG"
+  string ticker = 1;
+
+  // Loại nhà đầu tư: "sheep" | "wolf" | "shark" | "all"
+  // "all" = trả về tổng hợp của tất cả loại
+  string investor_type = 2;
+
+  // Khoảng thời gian — tối đa 730 ngày (2 năm, theo retention policy)
+  string from_date = 3;  // "YYYY-MM-DD"
+  string to_date   = 4;  // "YYYY-MM-DD"
+
+  // Số records tối đa. 0 = không giới hạn (tối đa 730)
+  int32 limit = 5;
+}
+
+message TCBSBSAPoint {
+  string trading_date  = 1;  // "YYYY-MM-DD"
+  string ticker        = 2;
+  string investor_type = 3;  // "sheep" | "wolf" | "shark" | "all"
+  double bup           = 4;  // Buy Up Percent (0–100): % mua chủ động
+  double sdp           = 5;  // Sell Down Percent (0–100): % bán chủ động
+  double bsr           = 6;  // Buy/Sell Ratio: bup / sdp
+}
+
+message TCBSBSAResponse {
+  string               ticker        = 1;
+  string               investor_type = 2;
+  repeated TCBSBSAPoint points       = 3;
+  int32                count         = 4;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 4 — METADATA
+// ═══════════════════════════════════════════════════════════════════════════
+
+message DataRangeRequest {
+  // Nguồn data: "binance_4h" | "binance_1d" | "tcbs_market_eod" | "tcbs_bsa_daily"
+  string source = 1;
+
+  // Filter thêm (optional)
+  string symbol        = 2;  // filter by symbol/ticker
+  string inst_type     = 3;  // filter by inst_type (Binance only)
+  string investor_type = 4;  // filter by investor_type (BSA only)
+}
+
+message DataRangeResponse {
+  string source      = 1;
+  string symbol      = 2;
+  string oldest_date = 3;  // "YYYY-MM-DD" — oldest record available
+  string newest_date = 4;  // "YYYY-MM-DD" — newest record available
+  int64  total_count = 5;  // tổng số records
+  string last_updated_at = 6;  // ISO8601 UTC — lần cuối ingest
 }
