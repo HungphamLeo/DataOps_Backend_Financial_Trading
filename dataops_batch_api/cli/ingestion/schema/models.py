@@ -266,3 +266,182 @@ class OHLCVRecord(BaseModel):
         if "low" in info.data and v < info.data["low"]:
             raise ValueError("High price cannot be lower than Low price")
         return v
+
+
+# ─── TCBS Trading / Account Contracts ─────────────────────────────────────────
+# Dùng cho dataops_backend_api TCBS proxy layer — validate response trước khi cache.
+# Reference: openapi-v1.0.0.json — TCBS iFlash Open API v1.0.0
+
+class TCBSDerivativeRecord(BaseModel):
+    """
+    Derivative contract info từ TCBS /tartarus/v1/derivatives.
+
+    Cung cấp thông tin giá + open interest cho phái sinh VN30F.
+    Dùng cho Bronze ingestion vào Delta Lake (batch, REST poll EOD).
+
+    Fields:
+        symbol:       Contract symbol, e.g. "VN30F2411"
+        ceil_price:   Giá trần
+        floor_price:  Giá sàn
+        ref_price:    Giá tham chiếu
+        bid_price_01 / bid_qty_01: Bid top 1
+        offer_price_01 / offer_qty_01: Ask top 1
+        match_price:  Giá khớp lệnh hiện tại
+        match_qty:    Khối lượng khớp
+        change:       Thay đổi giá tuyệt đối
+        change_pct:   Thay đổi phần trăm
+        total_vol:    Tổng khối lượng trong phiên
+        open_vol:     Open interest (số hợp đồng đang mở)
+        expiry_date:  Ngày đáo hạn (string từ API)
+        ts_ms:        Unix timestamp milliseconds lúc snapshot
+    """
+    symbol:         str
+    ceil_price:     float = Field(ge=0, default=0.0)
+    floor_price:    float = Field(ge=0, default=0.0)
+    ref_price:      float = Field(ge=0, default=0.0)
+    bid_price_01:   float = Field(ge=0, default=0.0)
+    bid_qty_01:     float = Field(ge=0, default=0.0)
+    offer_price_01: float = Field(ge=0, default=0.0)
+    offer_qty_01:   float = Field(ge=0, default=0.0)
+    match_price:    float = Field(ge=0, default=0.0)
+    match_qty:      float = Field(ge=0, default=0.0)
+    change:         float = 0.0
+    change_pct:     float = 0.0
+    total_vol:      float = Field(ge=0, default=0.0)
+    open_vol:       float = Field(ge=0, default=0.0)
+    expiry_date:    str   = ""
+    ts_ms:          int
+
+
+class TCBSAccountCashRecord(BaseModel):
+    """
+    Cash balance record từ TCBS /aion/v1/accounts/{accountNo}/cashInvestments.
+
+    Dùng để validate response trước khi cache vào Redis và trả về client.
+    Không persist vào Delta Lake (account data là transactional, không phải market data).
+
+    Fields:
+        account_no:          Số tài khoản
+        bod_balance:         Số dư đầu ngày tại TCBS
+        cash_balance:        Số dư tiền mặt
+        pp0_for_bf:          Sức mua cơ bản cho sản phẩm BOND/FUND
+        bank_avl_balance_bf: Tổng số dư IA khả dụng cho BOND/FUND
+        total_count:         Tổng số records
+        ts_ms:               Unix timestamp milliseconds lúc query
+    """
+    account_no:          str
+    bod_balance:         float = Field(ge=0, default=0.0)
+    cash_balance:        float = Field(ge=0, default=0.0)
+    pp0_for_bf:          float = Field(ge=0, default=0.0)
+    bank_avl_balance_bf: float = Field(ge=0, default=0.0)
+    total_count:         int   = 0
+    ts_ms:               int
+
+
+class TCBSStockAssetRecord(BaseModel):
+    """
+    Stock holding record từ TCBS /aion/v1/accounts/{accountNo}/se.
+
+    Một record = một mã cổ phiếu đang nắm giữ trong tài khoản.
+    Validate market value consistency: market_value = quantity * avg_price (approx).
+
+    Fields:
+        account_no:   Số tài khoản sub-account
+        symbol:       Mã cổ phiếu, e.g. "VCB"
+        quantity:     Số lượng cổ phiếu đang nắm giữ
+        avg_price:    Giá vốn bình quân
+        market_value: Giá trị thị trường hiện tại
+        ts_ms:        Unix timestamp milliseconds lúc query
+    """
+    account_no:   str
+    symbol:       str
+    quantity:     int   = Field(ge=0)
+    avg_price:    float = Field(ge=0, default=0.0)
+    market_value: float = Field(ge=0, default=0.0)
+    ts_ms:        int
+
+
+class TCBSOrderRecord(BaseModel):
+    """
+    Stock order record từ TCBS /aion/v1/accounts/{accountNo}/orders.
+
+    Validate order fields theo TCBS business rules.
+    Dùng để map response từ TCBS sang internal format cho logging/audit (MySQL).
+
+    Fields:
+        account_no:  Số tài khoản
+        order_id:    Order ID (orderId field)
+        symbol:      Mã cổ phiếu
+        exec_type:   Direction: "NB" = Normal Buy, "NS" = Normal Sell
+        price:       Giá đặt lệnh
+        quantity:    Số lượng đặt
+        status:      Trạng thái lệnh (string từ TCBS)
+        ts_ms:       Unix timestamp milliseconds
+    """
+    account_no: str
+    order_id:   str
+    symbol:     str
+    exec_type:  str    # "NB" | "NS"
+    price:      int    = Field(ge=0)   # Binance-style: VND price as int
+    quantity:   int    = Field(ge=0)
+    status:     str    = ""
+    ts_ms:      int
+
+    @field_validator("exec_type")
+    @classmethod
+    def validate_exec_type(cls, v: str) -> str:
+        """Validate exec_type theo TCBS order direction enum."""
+        valid = {"NB", "NS"}
+        if v not in valid:
+            raise ValueError(f"exec_type '{v}' must be one of {valid}")
+        return v
+
+
+class TCBSOpenPositionRecord(BaseModel):
+    """
+    Open derivative position từ TCBS /khronos/v1/account/portfolio/status.
+
+    Validate position fields và P&L consistency.
+    Dùng cho account portfolio dashboard và risk management display.
+
+    Fields:
+        account_id:     Custody account number
+        sub_account_id: Derivative sub-account
+        symbol:         Contract symbol, e.g. "VN30F2411"
+        im:             Margin ratio (string từ API)
+        deliver:        Số vị thế SHORT đang mở
+        receive:        Số vị thế LONG đang mở
+        net:            Net position (>0 = LONG, <0 = SHORT)
+        side:           "L" = Long, "S" = Short
+        last_price:     Giá thị trường hiện tại
+        im_value:       Initial margin value
+        vm_value:       Unrealized P&L
+        mr_value:       Required margin value
+        duedate:        Ngày đáo hạn
+        pc_remain:      Open position P&L %
+        ts_ms:          Unix timestamp milliseconds lúc query
+    """
+    account_id:     str
+    sub_account_id: str
+    symbol:         str
+    im:             str   = ""
+    deliver:        int   = Field(ge=0, default=0)
+    receive:        int   = Field(ge=0, default=0)
+    net:            int   = 0
+    side:           str   = ""     # "L" | "S"
+    last_price:     float = Field(ge=0, default=0.0)
+    im_value:       float = Field(ge=0, default=0.0)
+    vm_value:       float = 0.0    # can be negative (P&L)
+    mr_value:       float = Field(ge=0, default=0.0)
+    duedate:        str   = ""
+    pc_remain:      str   = ""
+    ts_ms:          int
+
+    @field_validator("side")
+    @classmethod
+    def validate_side(cls, v: str) -> str:
+        """Validate position side theo TCBS khronos response."""
+        if v and v not in {"L", "S"}:
+            raise ValueError(f"side '{v}' must be 'L' (Long) or 'S' (Short)")
+        return v
+

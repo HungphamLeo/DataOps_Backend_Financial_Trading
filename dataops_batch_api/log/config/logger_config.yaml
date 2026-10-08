@@ -8,7 +8,6 @@
 #   cli.ingestion.sources.tcbs_client     → khớp prefix "cli.ingestion.sources.tcbs" → tcbs_file + cli_file
 #   platforms.processing.delta_utils      → khớp prefix "platforms.processing" → processing_file
 #   platforms.processing.spark_stack.*    → khớp prefix "platforms.processing.spark_stack" → spark_file
-#   platforms.prefect_orchestra.*         → khớp prefix "platforms.prefect_orchestra" → orchestration_file
 #
 # Thay đổi routing / level / handler → chỉ sửa file này, không đụng vào module nào.
 # Tất cả loggers có propagate: false để tránh double-logging lên root.
@@ -156,13 +155,6 @@ loggers:
     handlers: [console, spark_file, error_file]
     propagate: false
 
-  # ── Prefect orchestration ─────────────────────────────────────────────────────
-  # Khớp: platforms.prefect_orchestra.*
-  platforms.prefect_orchestra:
-    level: INFO
-    handlers: [console, orchestration_file, error_file]
-    propagate: false
-
   # ── Config module ─────────────────────────────────────────────────────────────
   # Khớp: config (__name__ của config.py ở root package)
   config:
@@ -179,7 +171,7 @@ loggers:
 
 # ─── Root Logger ────────────────────────────────────────────────────────────────
 # Nhận WARNING+ từ thư viện bên ngoài không khớp logger nào ở trên:
-#   pyspark, requests, tenacity, deltalake, pyarrow, prefect, urllib3…
+#   pyspark, requests, tenacity, deltalake, pyarrow, urllib3…
 root:
   level: WARNING
   handlers: [console, application_file, error_file]

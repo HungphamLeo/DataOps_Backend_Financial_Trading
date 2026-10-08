@@ -1,0 +1,187 @@
+# binance_constants.yaml — Binance REST API Constants
+#
+# Single source of truth cho tất cả endpoint paths, enums và field specs của Binance.
+# Không hardcode bất kỳ giá trị nào trong source code — đọc qua BinanceConstants class.
+#
+# Reference:
+#   Spot: https://binance-docs.github.io/apidocs/spot/en/
+#   Futures: https://binance-docs.github.io/apidocs/futures/en/
+#
+# Auth pattern (private endpoints):
+#   Header: X-MBX-APIKEY: <api_key>
+#   Query:  &timestamp=<unix_ms>&signature=<hex(HMAC-SHA256(query_string, secret_key))>
+
+# ─── Base URLs ────────────────────────────────────────────────────────────────
+base_urls:
+  spot:           "https://api.binance.com/api/v3"
+  futures_usdm:   "https://fapi.binance.com/fapi/v1"
+  futures_coinm:  "https://dapi.binance.com/dapi/v1"
+  testnet_spot:   "https://testnet.binance.vision/api/v3"
+  testnet_futures: "https://testnet.binancefuture.com/fapi/v1"
+
+# ─── WebSocket URLs ───────────────────────────────────────────────────────────
+websocket_urls:
+  spot_stream:    "wss://stream.binance.com:9443/ws/stream"
+  spot_stream_443: "wss://stream.binance.com:443/ws/stream"   # port 443 fallback
+  futures_stream: "wss://fstream.binance.com/stream"
+
+# ─── Public Endpoints (no auth required) ─────────────────────────────────────
+public_endpoints:
+  # Market Data
+  ping:               "/ping"
+  server_time:        "/time"
+  exchange_info:      "/exchangeInfo"
+  klines:             "/klines"
+  trades:             "/trades"
+  agg_trades:         "/aggTrades"
+  orderbook:          "/depth"
+  ticker_price:       "/ticker/price"
+  ticker_24h:         "/ticker/24hr"
+  ticker_book:        "/ticker/bookTicker"
+  avg_price:          "/avgPrice"
+  mark_price:         "/premiumIndex"           # Futures only
+  funding_rate:       "/fundingRate"            # Futures only
+  open_interest:      "/openInterest"           # Futures only
+
+# ─── Private Endpoints (requires X-MBX-APIKEY + signature) ───────────────────
+private_endpoints:
+  # Account
+  account_info:       "/account"                # GET — account balances + status
+  my_trades:          "/myTrades"               # GET — trade history
+  order_history:      "/allOrders"              # GET — all orders
+  open_orders:        "/openOrders"             # GET — current open orders
+
+  # Order Management
+  order_place:        "/order"                  # POST — place order
+  order_cancel:       "/order"                  # DELETE — cancel order
+  order_status:       "/order"                  # GET — query order status
+  batch_orders:       "/batchOrders"            # POST/DELETE — batch operations
+
+# ─── Kline / OHLCV Intervals ─────────────────────────────────────────────────
+# Dùng cho param `interval` trong /klines
+kline_intervals:
+  "1s":  "1 second (Spot only)"
+  "1m":  "1 minute"
+  "3m":  "3 minutes"
+  "5m":  "5 minutes"
+  "15m": "15 minutes"
+  "30m": "30 minutes"
+  "1h":  "1 hour"
+  "2h":  "2 hours"
+  "4h":  "4 hours"
+  "6h":  "6 hours"
+  "8h":  "8 hours"
+  "12h": "12 hours"
+  "1d":  "1 day"
+  "3d":  "3 days"
+  "1w":  "1 week"
+  "1M":  "1 month"
+
+# ─── Kline Response Field Indices ────────────────────────────────────────────
+# Binance /klines response là array of arrays — index-based access
+# QUAN TRỌNG: vol_ccy là row[7] (quoteAssetVolume), KHÔNG phải row[6]
+kline_fields:
+  open_time:              0   # Unix ms — candle open time
+  open:                   1   # string — open price
+  high:                   2   # string — high price
+  low:                    3   # string — low price
+  close:                  4   # string — close price
+  volume:                 5   # string — base asset volume (e.g. BTC)
+  close_time:             6   # Unix ms — candle close time
+  quote_asset_volume:     7   # string — quote asset volume (USDT) — dùng làm vol_ccy
+  num_trades:             8   # int — number of trades
+  taker_buy_base_volume:  9   # string — taker buy base asset volume
+  taker_buy_quote_volume: 10  # string — taker buy quote asset volume
+  ignore:                 11  # string — unused field
+
+# ─── WebSocket Stream Names ───────────────────────────────────────────────────
+# Pattern: {symbol_lower}@{stream_type}
+ws_streams:
+  trade:            "@trade"               # Real-time trade ticks
+  depth5:           "@depth5"              # Order book top 5 levels (1000ms)
+  depth5_100ms:     "@depth5@100ms"        # Order book top 5 levels (100ms)
+  depth20:          "@depth20"             # Order book top 20 levels
+  kline_1m:         "@kline_1m"            # 1-min kline updates
+  kline_5m:         "@kline_5m"            # 5-min kline updates
+  kline_1h:         "@kline_1h"            # 1-hour kline updates
+  mini_ticker:      "@miniTicker"          # 24hr mini ticker
+  ticker:           "@ticker"              # 24hr rolling window ticker
+  mark_price:       "@markPrice"           # Mark price + funding rate (futures)
+  mark_price_1s:    "@markPrice@1s"        # Mark price 1s update (futures)
+  force_order:      "@forceOrder"          # Liquidation orders (futures)
+  all_force_orders: "!forceOrder@arr"      # All symbol liquidations (futures)
+
+# ─── Trade Tick Field Mapping ─────────────────────────────────────────────────
+# Binance @trade stream message payload (combined stream: msg.data)
+trade_tick_fields:
+  event_type:      "e"    # string — "trade"
+  event_time:      "E"    # int64 ms — event time
+  symbol:          "s"    # string — e.g. "BTCUSDT"
+  trade_id:        "t"    # int64 — trade ID (không phải string như OKX)
+  price:           "p"    # string — price
+  quantity:        "q"    # string — quantity (base asset)
+  buyer_order_id:  "b"    # int64 — buyer order ID
+  seller_order_id: "a"    # int64 — seller order ID
+  trade_time:      "T"    # int64 ms — trade time
+  is_buyer_maker:  "m"    # bool — false = buy (taker), true = sell (taker)
+  # Logic: side = "sell" if m=true else "buy"
+
+# ─── Symbol Format ────────────────────────────────────────────────────────────
+# Binance dùng symbol không có dấu gạch ngang — khác OKX
+symbol_format:
+  spot:    "BTCUSDT"        # uppercase, no hyphen
+  futures: "BTCUSDT"        # same as spot — khác nhau bởi domain (api vs fapi)
+  # WS stream: lowercase + @stream → "btcusdt@trade"
+
+# ─── Instrument Types ─────────────────────────────────────────────────────────
+# Dùng cho inst_type field trong BinanceCandleRecord
+instrument_types:
+  SPOT:    "Spot market"
+  FUTURES: "USD-M Perpetual/Quarterly Futures (fapi.binance.com)"
+  COINM:   "Coin-M Futures (dapi.binance.com)"
+
+# ─── Rate Limits ──────────────────────────────────────────────────────────────
+rate_limits:
+  klines_per_minute:        1200   # requests/min per IP (public)
+  orders_per_second:        10     # orders/sec (private)
+  orders_per_day:           100000 # orders/24h
+  recommended_interval_sec: 0.1    # 100ms giữa các request (conservative)
+  weight_per_klines_request: 2     # request weight
+
+# ─── Error Codes (HTTP 4xx với Binance error format) ─────────────────────────
+# Response: {"code": -1121, "msg": "Invalid symbol."}
+error_codes:
+  "-1000": "UNKNOWN — An unknown error occurred"
+  "-1100": "ILLEGAL_CHARS — Illegal characters found in parameter"
+  "-1121": "INVALID_SYMBOL — Invalid symbol"
+  "-1130": "INVALID_PARAMETER — An invalid value was sent for a param"
+  "-2010": "NEW_ORDER_REJECTED — New order rejected"
+  "-2011": "CANCEL_REJECTED — Cancel order rejected"
+  "-2013": "NO_SUCH_ORDER — Order does not exist"
+  "-2014": "BAD_API_KEY_FMT — API-key format invalid"
+  "-2015": "REJECTED_MBX_KEY — Invalid API-key, IP, or permissions"
+
+# ─── Order Types (Spot) ───────────────────────────────────────────────────────
+order_types_spot:
+  LIMIT:             "Limit order"
+  MARKET:            "Market order"
+  STOP_LOSS:         "Stop loss"
+  STOP_LOSS_LIMIT:   "Stop loss limit"
+  TAKE_PROFIT:       "Take profit"
+  TAKE_PROFIT_LIMIT: "Take profit limit"
+  LIMIT_MAKER:       "Limit maker"
+
+# ─── Order Sides ─────────────────────────────────────────────────────────────
+order_sides:
+  BUY:  "Buy"
+  SELL: "Sell"
+
+# ─── Order Status ─────────────────────────────────────────────────────────────
+order_status:
+  NEW:              "Order accepted"
+  PARTIALLY_FILLED: "Partially filled"
+  FILLED:           "Completely filled"
+  CANCELED:         "Canceled"
+  PENDING_CANCEL:   "Pending cancel"
+  REJECTED:         "Rejected"
+  EXPIRED:          "Expired"
