@@ -29,6 +29,15 @@ from log.logger_setup import logger_manager
 
 logger = logger_manager.get_logger(__name__)
 
+# CloudFront 403 geo-block tại VN nodes (SGN*, HAN*) cho /fapi/v1/klines — bị chặn ở tầng CDN,
+# không phải lỗi code. Không tính vào errors counter; log WARN thay vì ERROR.
+_GEO_BLOCK_NODES = ("SGN", "HAN")
+
+def _is_geo_blocked(exc: Exception) -> bool:
+    """True nếu exception là 403 do CloudFront geo-block (không phải lỗi code)."""
+    msg = str(exc)
+    return "403" in msg and "CloudFront" in msg
+
 _SCHEMA = pa.schema([
     pa.field("symbol",       pa.string(),  nullable=False),
     pa.field("inst_type",    pa.string(),  nullable=False),
@@ -197,9 +206,17 @@ def run(from_date: str | None = None, to_date: str | None = None) -> dict:
             symbols_ok.append(f"futures:{symbol}")
             logger.info("binance_1d_job: FUTURES %s → %d candles", symbol, len(records))
         except Exception as exc:
-            logger.error("binance_1d_job: FUTURES %s failed: %s", symbol, exc)
-            symbols_err.append(f"futures:{symbol}")
-            errors += 1
+            if _is_geo_blocked(exc):
+                logger.warning(
+                    "binance_1d_job: FUTURES %s SKIPPED — CloudFront 403 geo-block (VN node). "
+                    "Spot data unaffected.",
+                    symbol,
+                )
+                symbols_err.append(f"futures:{symbol}:geo-blocked")
+            else:
+                logger.error("binance_1d_job: FUTURES %s failed: %s", symbol, exc)
+                symbols_err.append(f"futures:{symbol}")
+                errors += 1
 
     written = 0
     if all_records:
@@ -217,6 +234,12 @@ def run(from_date: str | None = None, to_date: str | None = None) -> dict:
 
 if __name__ == "__main__":
     import sys
+    from pathlib import Path
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(Path(__file__).resolve().parents[4] / ".env", override=False)
+    except ImportError:
+        pass
     from_d = sys.argv[1] if len(sys.argv) > 1 else None
     to_d   = sys.argv[2] if len(sys.argv) > 2 else None
     result = run(from_date=from_d, to_date=to_d)
