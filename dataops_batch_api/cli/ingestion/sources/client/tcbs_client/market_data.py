@@ -20,11 +20,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from log.logger_setup import logger_manager
 from cli.ingestion.sources.tcbs_constants_loader import TCBSConstants
-from cli.ingestion.sources.client.tcbs_client._retry import _log_retry
+from cli.ingestion.sources.client.tcbs_client._retry import _is_retryable, _log_retry
 
 logger = logger_manager.get_logger(__name__)
 
@@ -39,6 +39,7 @@ class TCBSMarketDataMixin:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=1, max=15),
+        retry=retry_if_exception(_is_retryable),
         reraise=True,
         after=_log_retry,
     )
@@ -82,7 +83,7 @@ class TCBSMarketDataMixin:
         logger.debug("get_ticker_commons — params=%s", params)
 
         try:
-            result = self._get(path, params=params)  # type: ignore[attr-defined]
+            result = self._get(path, params=params, require_auth=True)  # type: ignore[attr-defined]
             data = result.get("data", [])
             logger.debug(
                 "get_ticker_commons — returned %d tickers, tradingDate=%s",
@@ -97,6 +98,7 @@ class TCBSMarketDataMixin:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=1, max=15),
+        retry=retry_if_exception(_is_retryable),
         reraise=True,
         after=_log_retry,
     )
@@ -124,7 +126,7 @@ class TCBSMarketDataMixin:
         logger.debug("get_ticker_snaps — index=%s", index)
 
         try:
-            result = self._get(path, params=params)  # type: ignore[attr-defined]
+            result = self._get(path, params=params, require_auth=True)  # type: ignore[attr-defined]
             data = result.get("data", [])
             logger.debug(
                 "get_ticker_snaps — returned %d records",
@@ -138,6 +140,7 @@ class TCBSMarketDataMixin:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=1, max=15),
+        retry=retry_if_exception(_is_retryable),
         reraise=True,
         after=_log_retry,
     )
@@ -155,7 +158,7 @@ class TCBSMarketDataMixin:
         logger.debug("get_derivatives — fetching derivative market board")
 
         try:
-            result = self._get(path)  # type: ignore[attr-defined]
+            result = self._get(path, require_auth=True)  # type: ignore[attr-defined]
             data = result.get("data", [])
             logger.debug(
                 "get_derivatives — returned %d contracts",
@@ -169,6 +172,7 @@ class TCBSMarketDataMixin:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=1, max=15),
+        retry=retry_if_exception(_is_retryable),
         reraise=True,
         after=_log_retry,
     )
@@ -186,7 +190,7 @@ class TCBSMarketDataMixin:
         logger.debug("get_put_through_snaps — fetching put-through data")
 
         try:
-            result = self._get(path)  # type: ignore[attr-defined]
+            result = self._get(path, require_auth=True)  # type: ignore[attr-defined]
             logger.debug("get_put_through_snaps — success")
             return result
         except Exception as exc:

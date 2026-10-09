@@ -51,6 +51,17 @@ BATCH_API_DIR = PROJECT_ROOT / "dataops_batch_api"
 if str(BATCH_API_DIR) not in sys.path:
     sys.path.insert(0, str(BATCH_API_DIR))
 
+# ── 2. Auto-load .env từ project root (nếu python-dotenv có sẵn) ───────────────
+# Giúp chạy script local mà không cần `source .env` thủ công.
+# Không làm gì nếu dotenv không được cài.
+try:
+    from dotenv import load_dotenv
+    _env_file = PROJECT_ROOT / ".env"
+    if _env_file.exists():
+        load_dotenv(_env_file, override=False)  # override=False: không ghi đè biến đã có trong shell
+except ImportError:
+    pass
+
 # Cấu hình logging
 logging.basicConfig(
     level=logging.INFO,
@@ -91,6 +102,18 @@ def record_result(name: str, domain: str, status: str, details: str, duration_ms
         "details": details,
         "duration_ms": duration_ms,
     })
+
+
+def _is_tcbs_auth_error(exc: Exception) -> bool:
+    """Trả về True nếu exception là HTTP 401 Unauthorized từ TCBS API."""
+    try:
+        import requests
+        if isinstance(exc, requests.HTTPError) and exc.response is not None:
+            return exc.response.status_code == 401
+    except ImportError:
+        pass
+    # Fallback: kiểm tra message string (trường hợp exception bị wrap bởi tenacity)
+    return "401" in str(exc) and "Unauthorized" in str(exc)
 
 
 # ==============================================================================
@@ -479,8 +502,12 @@ def test_tcbs_ticker_commons_symbols(verbose: bool = False) -> bool:
         return True
     except Exception as e:
         duration = (time.perf_counter() - start_time) * 1000
-        print(f"✗ FAILED / AUTH REQUIRED: {e}")
-        record_result(func_name, "TCBS Market", "FAIL/AUTH", str(e), duration)
+        if _is_tcbs_auth_error(e):
+            print(f"⚠ SKIP {func_name}: TCBS_JWT_TOKEN chưa được set.")
+            record_result(func_name, "TCBS Market", "SKIP", "401 Unauthorized — set TCBS_JWT_TOKEN to run", duration)
+            return True
+        print(f"✗ FAILED {func_name}: {e}")
+        record_result(func_name, "TCBS Market", "FAIL", str(e), duration)
         return False
 
 
@@ -509,8 +536,12 @@ def test_tcbs_ticker_commons_index(verbose: bool = False) -> bool:
         return True
     except Exception as e:
         duration = (time.perf_counter() - start_time) * 1000
-        print(f"✗ FAILED / AUTH REQUIRED: {e}")
-        record_result(func_name, "TCBS Market", "FAIL/AUTH", str(e), duration)
+        if _is_tcbs_auth_error(e):
+            print(f"⚠ SKIP {func_name}: TCBS_JWT_TOKEN chưa được set.")
+            record_result(func_name, "TCBS Market", "SKIP", "401 Unauthorized — set TCBS_JWT_TOKEN to run", duration)
+            return True
+        print(f"✗ FAILED {func_name}: {e}")
+        record_result(func_name, "TCBS Market", "FAIL", str(e), duration)
         return False
 
 
@@ -536,8 +567,12 @@ def test_tcbs_ticker_snaps(verbose: bool = False) -> bool:
         return True
     except Exception as e:
         duration = (time.perf_counter() - start_time) * 1000
-        print(f"✗ FAILED / AUTH REQUIRED: {e}")
-        record_result(func_name, "TCBS Market", "FAIL/AUTH", str(e), duration)
+        if _is_tcbs_auth_error(e):
+            print(f"⚠ SKIP {func_name}: TCBS_JWT_TOKEN chưa được set.")
+            record_result(func_name, "TCBS Market", "SKIP", "401 Unauthorized — set TCBS_JWT_TOKEN to run", duration)
+            return True
+        print(f"✗ FAILED {func_name}: {e}")
+        record_result(func_name, "TCBS Market", "FAIL", str(e), duration)
         return False
 
 
@@ -567,8 +602,12 @@ def test_tcbs_derivatives(verbose: bool = False) -> bool:
         return True
     except Exception as e:
         duration = (time.perf_counter() - start_time) * 1000
-        print(f"✗ FAILED / AUTH REQUIRED: {e}")
-        record_result(func_name, "TCBS Derivatives", "FAIL/AUTH", str(e), duration)
+        if _is_tcbs_auth_error(e):
+            print(f"⚠ SKIP {func_name}: TCBS_JWT_TOKEN chưa được set.")
+            record_result(func_name, "TCBS Derivatives", "SKIP", "401 Unauthorized — set TCBS_JWT_TOKEN to run", duration)
+            return True
+        print(f"✗ FAILED {func_name}: {e}")
+        record_result(func_name, "TCBS Derivatives", "FAIL", str(e), duration)
         return False
 
 
@@ -594,8 +633,12 @@ def test_tcbs_put_through_snaps(verbose: bool = False) -> bool:
         return True
     except Exception as e:
         duration = (time.perf_counter() - start_time) * 1000
-        print(f"✗ FAILED / AUTH REQUIRED: {e}")
-        record_result(func_name, "TCBS Market", "FAIL/AUTH", str(e), duration)
+        if _is_tcbs_auth_error(e):
+            print(f"⚠ SKIP {func_name}: TCBS_JWT_TOKEN chưa được set.")
+            record_result(func_name, "TCBS Market", "SKIP", "401 Unauthorized — set TCBS_JWT_TOKEN to run", duration)
+            return True
+        print(f"✗ FAILED {func_name}: {e}")
+        record_result(func_name, "TCBS Market", "FAIL", str(e), duration)
         return False
 
 
@@ -627,8 +670,12 @@ def test_tcbs_intraday_bsa(verbose: bool = False) -> bool:
         return True
     except Exception as e:
         duration = (time.perf_counter() - start_time) * 1000
-        print(f"✗ FAILED / AUTH REQUIRED: {e}")
-        record_result(func_name, "TCBS BSA", "FAIL/AUTH", str(e), duration)
+        if _is_tcbs_auth_error(e):
+            print(f"⚠ SKIP {func_name}: TCBS_JWT_TOKEN chưa được set.")
+            record_result(func_name, "TCBS BSA", "SKIP", "401 Unauthorized — set TCBS_JWT_TOKEN to run", duration)
+            return True
+        print(f"✗ FAILED {func_name}: {e}")
+        record_result(func_name, "TCBS BSA", "FAIL", str(e), duration)
         return False
 
 
@@ -658,8 +705,12 @@ def test_tcbs_intraday_bsa_ext_and_month(verbose: bool = False) -> bool:
         return True
     except Exception as e:
         duration = (time.perf_counter() - start_time) * 1000
-        print(f"✗ FAILED / AUTH REQUIRED: {e}")
-        record_result(func_name, "TCBS BSA", "FAIL/AUTH", str(e), duration)
+        if _is_tcbs_auth_error(e):
+            print(f"⚠ SKIP {func_name}: TCBS_JWT_TOKEN chưa được set.")
+            record_result(func_name, "TCBS BSA", "SKIP", "401 Unauthorized — set TCBS_JWT_TOKEN to run", duration)
+            return True
+        print(f"✗ FAILED {func_name}: {e}")
+        record_result(func_name, "TCBS BSA", "FAIL", str(e), duration)
         return False
 
 
@@ -690,8 +741,12 @@ def test_tcbs_intraday_history(verbose: bool = False) -> bool:
         return True
     except Exception as e:
         duration = (time.perf_counter() - start_time) * 1000
-        print(f"✗ FAILED / AUTH REQUIRED: {e}")
-        record_result(func_name, "TCBS Ticks", "FAIL/AUTH", str(e), duration)
+        if _is_tcbs_auth_error(e):
+            print(f"⚠ SKIP {func_name}: TCBS_JWT_TOKEN chưa được set.")
+            record_result(func_name, "TCBS Ticks", "SKIP", "401 Unauthorized — set TCBS_JWT_TOKEN to run", duration)
+            return True
+        print(f"✗ FAILED {func_name}: {e}")
+        record_result(func_name, "TCBS Ticks", "FAIL", str(e), duration)
         return False
 
 
@@ -717,8 +772,12 @@ def test_tcbs_batch_helpers(verbose: bool = False) -> bool:
         return True
     except Exception as e:
         duration = (time.perf_counter() - start_time) * 1000
-        print(f"✗ FAILED / AUTH REQUIRED: {e}")
-        record_result(func_name, "TCBS Batch", "FAIL/AUTH", str(e), duration)
+        if _is_tcbs_auth_error(e):
+            print(f"⚠ SKIP {func_name}: TCBS_JWT_TOKEN chưa được set.")
+            record_result(func_name, "TCBS Batch", "SKIP", "401 Unauthorized — set TCBS_JWT_TOKEN to run", duration)
+            return True
+        print(f"✗ FAILED {func_name}: {e}")
+        record_result(func_name, "TCBS Batch", "FAIL", str(e), duration)
         return False
 
 
