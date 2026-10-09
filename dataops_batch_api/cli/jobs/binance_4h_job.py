@@ -201,11 +201,7 @@ def run() -> dict:
 
 
 if __name__ == "__main__":
-    from pathlib import Path
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(Path(__file__).resolve().parents[4] / ".env", override=False)
-    except ImportError:
-        pass
+    from cli.jobs._env import load_project_env
+    load_project_env()
     result = run()
     print(result)
