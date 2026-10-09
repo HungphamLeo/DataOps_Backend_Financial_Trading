@@ -153,6 +153,7 @@ docker logs dataops-stream-producer --tail=20
 **Log bình thường khi token hợp lệ:**
 ---
 ---
+---
 ```
 [TCBSPoller] Starting — indexes=[HOSE VN30 HNX]
 [TCBSPoller] Cron jobs started
@@ -166,6 +167,7 @@ docker logs dataops-batch-api --tail=30
 ```
 ---
 **Log bình thường:**
+---
 ---
 ---
 ```

@@ -28,7 +28,6 @@ syntax = "proto3";
 package batchdata.v1;
 
 option go_package     = "dataops-protobuf/batchdata;batchdatav1";
-option python_package = "dataops_protobuf.batch_data.v1";
 
 import "google/protobuf/timestamp.proto";
 

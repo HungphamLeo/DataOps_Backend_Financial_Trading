@@ -30,7 +30,6 @@ package marketdata.v1;
 
 option go_package     = "dataops-protobuf/marketdata;marketdatav1";
 option java_package   = "com.dataops.marketdata.v1";
-option python_package = "dataops_protobuf.market_data.v1";
 
 import "google/protobuf/timestamp.proto";
 
