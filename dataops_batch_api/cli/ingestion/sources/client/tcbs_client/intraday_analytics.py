@@ -26,11 +26,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from log.logger_setup import logger_manager
 from cli.ingestion.sources.tcbs_constants_loader import TCBSConstants
-from cli.ingestion.sources.client.tcbs_client._retry import _log_retry
+from cli.ingestion.sources.client.tcbs_client._retry import _is_retryable, _log_retry
 
 logger = logger_manager.get_logger(__name__)
 
@@ -45,6 +45,7 @@ class TCBSIntradayAnalyticsMixin:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=1, max=15),
+        retry=retry_if_exception(_is_retryable),
         reraise=True,
         after=_log_retry,
     )
@@ -77,7 +78,7 @@ class TCBSIntradayAnalyticsMixin:
         logger.debug("get_intraday_bsa — ticker=%s, investor_type=%s", ticker, investor_type)
 
         try:
-            result = self._get(path, params=params)  # type: ignore[attr-defined]
+            result = self._get(path, params=params, require_auth=True)  # type: ignore[attr-defined]
             data = result.get("data", [])
             logger.debug(
                 "get_intraday_bsa — ticker=%s returned %d BSA records",
@@ -95,6 +96,7 @@ class TCBSIntradayAnalyticsMixin:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=1, max=15),
+        retry=retry_if_exception(_is_retryable),
         reraise=True,
         after=_log_retry,
     )
@@ -115,7 +117,7 @@ class TCBSIntradayAnalyticsMixin:
         logger.debug("get_intraday_bsa_ext — ticker=%s", ticker)
 
         try:
-            result = self._get(path)  # type: ignore[attr-defined]
+            result = self._get(path, require_auth=True)  # type: ignore[attr-defined]
             logger.debug("get_intraday_bsa_ext — ticker=%s success", ticker)
             return result
         except Exception as exc:
@@ -125,6 +127,7 @@ class TCBSIntradayAnalyticsMixin:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=1, max=15),
+        retry=retry_if_exception(_is_retryable),
         reraise=True,
         after=_log_retry,
     )
@@ -145,7 +148,7 @@ class TCBSIntradayAnalyticsMixin:
         logger.debug("get_intraday_bsa_month — ticker=%s", ticker)
 
         try:
-            result = self._get(path)  # type: ignore[attr-defined]
+            result = self._get(path, require_auth=True)  # type: ignore[attr-defined]
             logger.debug("get_intraday_bsa_month — ticker=%s success", ticker)
             return result
         except Exception as exc:
@@ -155,6 +158,7 @@ class TCBSIntradayAnalyticsMixin:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=1, max=15),
+        retry=retry_if_exception(_is_retryable),
         reraise=True,
         after=_log_retry,
     )
@@ -212,7 +216,7 @@ class TCBSIntradayAnalyticsMixin:
         )
 
         try:
-            result = self._get(path, params=params)  # type: ignore[attr-defined]
+            result = self._get(path, params=params, require_auth=True)  # type: ignore[attr-defined]
             logger.debug(
                 "get_intraday_history — ticker=%s: %s items returned",
                 ticker, result.get("numberOfItems", "N/A"),

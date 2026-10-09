@@ -18,11 +18,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from log.logger_setup import logger_manager
 from cli.ingestion.sources.tcbs_constants_loader import TCBSConstants
-from cli.ingestion.sources.client.tcbs_client._retry import _log_retry
+from cli.ingestion.sources.client.tcbs_client._retry import _is_retryable, _log_retry
 
 logger = logger_manager.get_logger(__name__)
 
@@ -38,6 +38,7 @@ class TCBSSecuritiesMixin:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=1, max=15),
+        retry=retry_if_exception(_is_retryable),
         reraise=True,
         after=_log_retry,
     )
