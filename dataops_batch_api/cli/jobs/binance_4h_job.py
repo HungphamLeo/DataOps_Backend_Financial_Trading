@@ -43,6 +43,11 @@ from log.logger_setup import logger_manager
 
 logger = logger_manager.get_logger(__name__)
 
+def _is_geo_blocked(exc: Exception) -> bool:
+    """True nếu exception là 403 do CloudFront geo-block (không phải lỗi code)."""
+    msg = str(exc)
+    return "403" in msg and "CloudFront" in msg
+
 # ── PyArrow schema ─────────────────────────────────────────────────────────────
 _SCHEMA = pa.schema([
     pa.field("symbol",       pa.string(),  nullable=False),
@@ -165,9 +170,17 @@ def run() -> dict:
             symbols_ok.append(f"futures:{symbol}")
             logger.info("binance_4h_job: FUTURES %s → %d candles", symbol, len(records))
         except Exception as exc:
-            logger.error("binance_4h_job: FUTURES %s failed: %s", symbol, exc)
-            symbols_err.append(f"futures:{symbol}")
-            errors += 1
+            if _is_geo_blocked(exc):
+                logger.warning(
+                    "binance_4h_job: FUTURES %s SKIPPED — CloudFront 403 geo-block (VN node). "
+                    "Spot data unaffected.",
+                    symbol,
+                )
+                symbols_err.append(f"futures:{symbol}:geo-blocked")
+            else:
+                logger.error("binance_4h_job: FUTURES %s failed: %s", symbol, exc)
+                symbols_err.append(f"futures:{symbol}")
+                errors += 1
 
     written = 0
     if all_records:
@@ -188,5 +201,11 @@ def run() -> dict:
 
 
 if __name__ == "__main__":
+    from pathlib import Path
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(Path(__file__).resolve().parents[4] / ".env", override=False)
+    except ImportError:
+        pass
     result = run()
     print(result)

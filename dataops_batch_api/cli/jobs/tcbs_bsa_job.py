@@ -175,5 +175,11 @@ def run() -> dict:
 
 
 if __name__ == "__main__":
+    from pathlib import Path
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(Path(__file__).resolve().parents[4] / ".env", override=False)
+    except ImportError:
+        pass
     result = run()
     print(result)
