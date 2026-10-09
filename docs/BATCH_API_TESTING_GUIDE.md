@@ -166,6 +166,9 @@ tests/test_delta_writer.py::TestSchemaEnforcement::test_pa_table_built_from_reco
 ### Bước 3: Kiểm thử Live Batch Ingestion Jobs (Tầng 2 - Cần container `dataops-minio`)
 
 Đảm bảo container `dataops-minio` đang chạy trên cổng `9010`.
+Khi chạy job thủ công từ `dataops_batch_api/`, CLI tự nạp `.env` ở repository root
+cho các biến MinIO như `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` và
+`AWS_ENDPOINT_URL`. Biến môi trường đã được export trong shell sẽ được ưu tiên.
 
 #### 3.1 Test Binance 1D Klines Job & Chunked Backfill
 Hỗ trợ lấy nến ngày của các cặp Spot & Futures (`BTCUSDT`, `ETHUSDT`, `SOLUSDT`, ...).

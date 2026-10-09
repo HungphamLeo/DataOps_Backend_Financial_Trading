@@ -23,6 +23,7 @@ import pyarrow as pa
 from cli.ingestion.schema.models import BinanceCandleRecord
 from cli.ingestion.sources.client.binance_client import BinanceSpotClient, BinanceFuturesClient
 from cli.jobs._delta_writer import _table_path, write_records
+from cli.jobs._env import load_project_env
 from cli.jobs.metrics import push_metrics, record_ingest
 from cli.flows.loader.load_config import load_exchange_config
 from log.logger_setup import logger_manager
@@ -234,12 +235,7 @@ def run(from_date: str | None = None, to_date: str | None = None) -> dict:
 
 if __name__ == "__main__":
     import sys
-    from pathlib import Path
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(Path(__file__).resolve().parents[4] / ".env", override=False)
-    except ImportError:
-        pass
+    load_project_env()
     from_d = sys.argv[1] if len(sys.argv) > 1 else None
     to_d   = sys.argv[2] if len(sys.argv) > 2 else None
     result = run(from_date=from_d, to_date=to_d)
