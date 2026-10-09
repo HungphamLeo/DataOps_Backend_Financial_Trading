@@ -45,5 +45,5 @@ RUN mkdir -p log/log_storage && chown -R appuser:appgroup /app
 
 USER appuser
 
-# Default command: chạy daily pipeline
-CMD ["python", "cli/flows/serving/daily_pipeline.py"]
+# Default command: chạy gRPC server phục vụ historical queries cho backend-api
+CMD ["python", "grpc_server.py"]

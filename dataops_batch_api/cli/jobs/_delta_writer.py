@@ -23,7 +23,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 from deltalake import DeltaTable, write_deltalake
 
 from log.logger_setup import logger_manager

@@ -14,6 +14,7 @@ import (
 	"dataops-backend-api/middlewares"
 	"dataops-backend-api/redis"
 	"dataops-backend-api/repository"
+	"dataops-backend-api/repository/batch"
 	"dataops-backend-api/services"
 	"os/signal"
 	"syscall"
@@ -65,10 +66,19 @@ func NewServer() error {
 	// 5. Middlewares JWT sử dụng Redis session — REUSE: market-maker-api/middlewares/auth.go
 	_ = middlewares.JwtAuthMiddleware // registered in rest.go
 
-	// 6. Services — DI pattern: REUSE market-maker-api/services/services.go
-	svc := services.NewServices(repo, cfg, redisDB0, logger)
+	// 6. Batch gRPC Client (cho historical data queries tới dataops_batch_api)
+	batchClient, err := batch.NewClient(cfg.Batch.GRPCURL, logger)
+	if err != nil {
+		logger.Warn("server.batch_grpc", "Failed to initialize batch gRPC client", map[string]interface{}{"err": err.Error()})
+	}
+	if batchClient != nil {
+		defer batchClient.Close()
+	}
 
-	// 7. HTTP Server — REUSE: trading-bot-api/app/server.go
+	// 7. Services — DI pattern: REUSE market-maker-api/services/services.go
+	svc := services.NewServices(repo, cfg, redisDB0, batchClient, logger)
+
+	// 8. HTTP Server — REUSE: trading-bot-api/app/server.go
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

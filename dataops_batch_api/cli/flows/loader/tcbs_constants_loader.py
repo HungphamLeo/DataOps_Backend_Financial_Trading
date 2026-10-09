@@ -26,7 +26,18 @@ from log.logger_setup import logger_manager
 
 logger = logger_manager.get_logger(__name__)
 
-_YAML_PATH = Path(__file__).parent / "tcbs_constants.yaml"
+def _find_yaml_path() -> Path:
+    candidates = [
+        Path(__file__).parent.parent.parent / "ingestion" / "sources" / "config" / "tcbs_constants.yaml",
+        Path(__file__).parent / "tcbs_constants.yaml",
+        Path(__file__).parent.parent / "config" / "tcbs_constants.yaml",
+        Path(__file__).parent.parent.parent / "config" / "tcbs_constants.yaml",
+        Path("cli/ingestion/sources/config/tcbs_constants.yaml"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return candidates[0]
 
 
 class TCBSConstants:
@@ -48,16 +59,17 @@ class TCBSConstants:
         """Load YAML lần đầu — subsequent calls là no-op."""
         if cls._loaded:
             return
-        if not _YAML_PATH.exists():
+        yaml_path = _find_yaml_path()
+        if not yaml_path.exists():
             raise FileNotFoundError(
-                f"tcbs_constants.yaml not found at {_YAML_PATH}. "
+                f"tcbs_constants.yaml not found at {yaml_path}. "
                 "File này là required — không thể chạy TCBS pipeline."
             )
         try:
-            with open(_YAML_PATH, "r", encoding="utf-8") as fh:
+            with open(yaml_path, "r", encoding="utf-8") as fh:
                 cls._data = yaml.safe_load(fh) or {}
             cls._loaded = True
-            logger.debug("TCBSConstants loaded from %s", _YAML_PATH)
+            logger.debug("TCBSConstants loaded from %s", yaml_path)
         except yaml.YAMLError as exc:
             raise RuntimeError(f"Malformed tcbs_constants.yaml: {exc}") from exc
 
@@ -89,12 +101,12 @@ class TCBSConstants:
     # ── Index Codes ───────────────────────────────────────────────────────────
 
     @classmethod
-    def index_code(cls, index_name: str) -> int:
+    def index_code(cls, index_name: str | int) -> int:
         """
         Trả về numeric code cho stock index basket.
 
         Args:
-            index_name: e.g. "HOSE", "VN30", "HNX"
+            index_name: e.g. "HOSE", "VN30", "HNX", hoặc int code (1, 2)
 
         Returns:
             int code để truyền vào ?index= param
@@ -102,9 +114,14 @@ class TCBSConstants:
         Raises:
             KeyError: index_name không hợp lệ.
         """
+        if isinstance(index_name, int):
+            return index_name
         cls._ensure_loaded()
+        str_val = str(index_name).strip()
+        if str_val.isdigit():
+            return int(str_val)
         codes = cls._data.get("index_codes", {})
-        upper = index_name.upper()
+        upper = str_val.upper()
         if upper not in codes:
             raise KeyError(
                 f"Unknown index '{index_name}'. "
@@ -154,6 +171,22 @@ class TCBSConstants:
         """Trả về danh sách session states hợp lệ."""
         cls._ensure_loaded()
         return list(cls._data.get("session_states", {}).keys())
+
+    @classmethod
+    def ticker_commons_fields(cls) -> Dict[str, str]:
+        """
+        Trả về mapping canonical snake_case → TCBS camelCase field names
+        cho response của endpoint tickerCommons.
+
+        Returns:
+            Dict e.g. {"symbol": "symbol", "match_price": "matchPrice", ...}
+
+        Usage:
+            fields = TCBSConstants.ticker_commons_fields()
+            match_price = raw.get(fields["match_price"], 0.0)
+        """
+        cls._ensure_loaded()
+        return cls._data.get("ticker_commons_fields", {})
 
     @classmethod
     def intraday_history_config(cls) -> Dict[str, Any]:

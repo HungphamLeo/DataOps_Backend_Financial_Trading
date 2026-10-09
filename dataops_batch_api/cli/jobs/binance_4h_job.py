@@ -37,6 +37,7 @@ import pyarrow as pa
 from cli.ingestion.schema.models import BinanceCandleRecord
 from cli.ingestion.sources.client.binance_client import BinanceSpotClient, BinanceFuturesClient
 from cli.jobs._delta_writer import _table_path, write_records, apply_rolling_retention
+from cli.jobs.metrics import push_metrics, record_ingest
 from cli.flows.loader.load_config import load_exchange_config
 from log.logger_setup import logger_manager
 
@@ -172,7 +173,12 @@ def run() -> dict:
     if all_records:
         written = write_records(path, all_records, _SCHEMA, mode="append", partition_by=["inst_type", "symbol", "year"])
         # Rolling retention — xóa candles cũ hơn 1 năm
-        apply_rolling_retention(path, date_col="year", keep_days=_RETENTION_DAYS)
+        apply_rolling_retention(path, date_col="ingested_at", keep_days=_RETENTION_DAYS)
+
+    record_ingest("binance_4h_job", count=written, status="success")
+    if errors:
+        record_ingest("binance_4h_job", count=errors, status="error")
+    push_metrics("binance_4h_job")
 
     logger.info(
         "binance_4h_job: DONE written=%d errors=%d ok=%s err=%s",

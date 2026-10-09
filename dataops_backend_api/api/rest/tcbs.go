@@ -42,6 +42,8 @@ type TCBSHandler struct {
 //	/bsa             → Buy/Sell Analysis (TCBS-exclusive: sheep/wolf/shark/all)
 //	/intraday-ticks  → Lịch sử khớp lệnh intraday với pagination
 func (h *TCBSHandler) Register(r *gin.RouterGroup) {
+	r.GET("/ticker", h.GetTicker)
+	r.GET("/:symbol/ticker", h.GetTickerByParam)
 	r.GET("/market", h.GetMarket)
 	r.GET("/orderbook", h.GetOrderBook)
 	r.GET("/ohlcv", h.GetOHLCV)
@@ -49,6 +51,48 @@ func (h *TCBSHandler) Register(r *gin.RouterGroup) {
 	r.GET("/market-summary", h.GetMarketSummary)
 	r.GET("/bsa", h.GetBSA)
 	r.GET("/intraday-ticks", h.GetIntradayTicks)
+}
+
+// GetTicker trả về real-time ticker data từ Redis cache
+// GET /api/v1/tcbs/ticker?symbol=VCB
+func (h *TCBSHandler) GetTicker(ctx *gin.Context) {
+	symbol := ctx.Query("symbol")
+	if symbol == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "symbol is required"})
+		return
+	}
+	if !constants.IsValidTCBSSymbol(symbol) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "unsupported TCBS symbol"})
+		return
+	}
+
+	data, err := h.TCBSSvc.GetTicker(ctx, symbol)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, data)
+}
+
+// GetTickerByParam trả về ticker theo path param
+// GET /api/v1/tcbs/:symbol/ticker
+func (h *TCBSHandler) GetTickerByParam(ctx *gin.Context) {
+	symbol := ctx.Param("symbol")
+	if symbol == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "symbol is required"})
+		return
+	}
+	if !constants.IsValidTCBSSymbol(symbol) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "unsupported TCBS symbol"})
+		return
+	}
+
+	data, err := h.TCBSSvc.GetTicker(ctx, symbol)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, data)
 }
 
 // GetMarket trả về real-time market snapshot của 1 mã cổ phiếu HOSE.
