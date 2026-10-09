@@ -43,6 +43,7 @@ import pyarrow as pa
 from cli.ingestion.schema.models import TCBSMarketRecord
 from cli.ingestion.sources.client.tcbs_client import TCBSRestClient
 from cli.jobs._delta_writer import _table_path, write_records
+from cli.jobs.metrics import push_metrics, record_ingest
 from cli.flows.loader.load_config import load_exchange_config
 from cli.flows.loader.tcbs_constants_loader import TCBSConstants
 from log.logger_setup import logger_manager
@@ -172,8 +173,14 @@ def run() -> dict:
 
     for index in indexes:
         try:
-            index_code = TCBSConstants.index_code(index)
-            raw_list   = client.get_ticker_commons(index=index_code)
+            raw_resp = client.get_ticker_commons(index=index)
+            if isinstance(raw_resp, dict):
+                raw_list = raw_resp.get("data", [])
+            elif isinstance(raw_resp, list):
+                raw_list = raw_resp
+            else:
+                raw_list = []
+
             for raw in raw_list:
                 row = _validate_and_map(raw, now_iso)
                 if row:
@@ -183,7 +190,7 @@ def run() -> dict:
             logger.info("tcbs_eod_job: index=%s → %d records", index, len(raw_list))
         except Exception as exc:
             logger.error("tcbs_eod_job: index=%s failed: %s", index, exc)
-            errors += len(indexes)  # conservative estimate
+            errors += 1
 
     written = 0
     if all_records:
@@ -193,6 +200,11 @@ def run() -> dict:
             mode="append",
             partition_by=["exchange", "trading_date"],
         )
+
+    record_ingest("tcbs_eod_job", count=written, status="success")
+    if errors:
+        record_ingest("tcbs_eod_job", count=errors, status="error")
+    push_metrics("tcbs_eod_job")
 
     logger.info("tcbs_eod_job: DONE written=%d errors=%d", written, errors)
     return {"written": written, "errors": errors, "records_ok": written, "records_err": errors}

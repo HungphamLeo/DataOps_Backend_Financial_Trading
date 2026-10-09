@@ -25,7 +25,9 @@ import (
 //	GET  /api/v1/tcbs/*             ← JWT required
 //	GET  /api/v1/admin/*            ← Admin only
 func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Service, logger *log.Logger) *gin.Engine {
-	logger.Println("[API] Starting REST API")
+	if logger != nil {
+		logger.Println("[API] Starting REST API")
+	}
 
 	if cfg.App.Mode == "prod" {
 		gin.SetMode(gin.ReleaseMode)
@@ -66,12 +68,20 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 
 	// TCBS iFlash Analytics (TCBS data: market snapshot, orderbook, BSA, intraday ticks)
 	tcbsHandler := &TCBSHandler{TCBSSvc: svc.TCBSSvc}
-	tcbsHandler.Register(protected.Group("/tcbs"))
+	tcbsGroup := protected.Group("/tcbs")
+	tcbsHandler.Register(tcbsGroup)
+
+	// TCBS Account & Trading Proxy (Cash, Stock assets, Orders, Derivatives)
+	tcbsAccountHandler := &TCBSAccountHandler{AccountSvc: svc.TCBSAccountSvc}
+	tcbsAccountHandler.Register(tcbsGroup.Group("/account"), tcbsGroup.Group("/derivative"))
+	tcbsAccountHandler.RegisterStockOrder(tcbsGroup.Group("/order"))
 
 	// Admin
 	adminHandler := &AdminHandler{Cfg: cfg}
 	adminHandler.Register(admin)
 
-	logger.Println("[API] Routes registered")
+	if logger != nil {
+		logger.Println("[API] Routes registered")
+	}
 	return router
 }

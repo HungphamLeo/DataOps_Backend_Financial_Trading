@@ -24,7 +24,19 @@ from log.logger_setup import logger_manager
 
 logger = logger_manager.get_logger(__name__)
 
-_YAML_PATH = Path(__file__).parent / "binance_constants.yaml"
+
+def _find_yaml_path() -> Path:
+    candidates = [
+        Path(__file__).parent.parent.parent / "ingestion" / "sources" / "config" / "binance_constants.yaml",
+        Path(__file__).parent / "binance_constants.yaml",
+        Path(__file__).parent.parent / "config" / "binance_constants.yaml",
+        Path(__file__).parent.parent.parent / "config" / "binance_constants.yaml",
+        Path("cli/ingestion/sources/config/binance_constants.yaml"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return candidates[0]
 
 
 class BinanceConstants:
@@ -46,16 +58,17 @@ class BinanceConstants:
         """Load YAML lần đầu — subsequent calls là no-op."""
         if cls._loaded:
             return
-        if not _YAML_PATH.exists():
+        yaml_path = _find_yaml_path()
+        if not yaml_path.exists():
             raise FileNotFoundError(
-                f"binance_constants.yaml not found at {_YAML_PATH}. "
+                f"binance_constants.yaml not found at {yaml_path}. "
                 "File này là required — không thể chạy Binance pipeline."
             )
         try:
-            with open(_YAML_PATH, "r", encoding="utf-8") as fh:
+            with open(yaml_path, "r", encoding="utf-8") as fh:
                 cls._data = yaml.safe_load(fh) or {}
             cls._loaded = True
-            logger.debug("BinanceConstants loaded from %s", _YAML_PATH)
+            logger.debug("BinanceConstants loaded from %s", yaml_path)
         except yaml.YAMLError as exc:
             raise RuntimeError(f"Malformed binance_constants.yaml: {exc}") from exc
 

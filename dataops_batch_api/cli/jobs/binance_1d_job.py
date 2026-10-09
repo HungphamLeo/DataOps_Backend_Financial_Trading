@@ -23,6 +23,7 @@ import pyarrow as pa
 from cli.ingestion.schema.models import BinanceCandleRecord
 from cli.ingestion.sources.client.binance_client import BinanceSpotClient, BinanceFuturesClient
 from cli.jobs._delta_writer import _table_path, write_records
+from cli.jobs.metrics import push_metrics, record_ingest
 from cli.flows.loader.load_config import load_exchange_config
 from log.logger_setup import logger_manager
 
@@ -87,6 +88,60 @@ def _parse_kline_row(row: list, symbol: str, inst_type: str, now_iso: str) -> di
     }
 
 
+_CHUNK_DAYS = 900  # < 1000 max per Binance request, buffer để tránh off-by-one
+_MS_PER_DAY = 86_400_000
+
+
+def _fetch_chunked(client, symbol: str, inst_type: str, start_ms: int, end_ms: int, now_iso: str) -> List[dict]:
+    """
+    Fetch klines với pagination tự động.
+    Binance max 1000 candles/request — với interval 1d, chunk 900 ngày mỗi lần.
+
+    Args:
+        client:    BinanceSpotClient hoặc BinanceFuturesClient.
+        symbol:    e.g. "BTCUSDT".
+        inst_type: "SPOT" | "FUTURES".
+        start_ms:  Unix ms — bắt đầu.
+        end_ms:    Unix ms — kết thúc (exclusive).
+        now_iso:   ISO8601 string cho ingested_at.
+
+    Returns:
+        List of validated row dicts.
+    """
+    records: List[dict] = []
+    chunk_start = start_ms
+    chunk_size_ms = _CHUNK_DAYS * _MS_PER_DAY
+
+    while chunk_start < end_ms:
+        chunk_end = min(chunk_start + chunk_size_ms, end_ms)
+        chunk_days = max(1, (chunk_end - chunk_start) // _MS_PER_DAY + 1)
+        limit = min(chunk_days + 1, 1000)
+
+        rows = client.get_klines(
+            symbol, interval=_INTERVAL,
+            start_time=chunk_start,
+            end_time=chunk_end,
+            limit=limit,
+        )
+        if not rows:
+            break
+
+        chunk_records = [r for row in rows if (r := _parse_kline_row(row, symbol, inst_type, now_iso))]
+        records.extend(chunk_records)
+        logger.debug(
+            "_fetch_chunked: %s %s chunk [%d→%d] → %d candles",
+            inst_type, symbol, chunk_start, chunk_end, len(chunk_records),
+        )
+
+        # Advance: last candle closeTime + 1ms để tránh overlap
+        last_close_ms = int(rows[-1][6])
+        chunk_start = last_close_ms + 1
+        if len(rows) < limit:
+            break  # Binance trả về ít hơn limit → đã hết data
+
+    return records
+
+
 def run(from_date: str | None = None, to_date: str | None = None) -> dict:
     """
     Chạy job Binance 1d.
@@ -116,10 +171,6 @@ def run(from_date: str | None = None, to_date: str | None = None) -> dict:
     else:
         end_ms = int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
 
-    # Tính limit dựa trên khoảng thời gian (1 candle/ngày)
-    days   = max(1, (end_ms - start_ms) // (86400 * 1000) + 1)
-    limit  = min(days + 1, 1000)   # Binance max 1000/request
-
     spot_symbols    = cfg["binance"]["instruments"]["spot"]
     futures_symbols = cfg["binance"]["instruments"]["futures"]
 
@@ -129,8 +180,7 @@ def run(from_date: str | None = None, to_date: str | None = None) -> dict:
     spot_client = BinanceSpotClient.from_env()
     for symbol in spot_symbols:
         try:
-            rows = spot_client.get_klines(symbol, interval=_INTERVAL, start_time=start_ms, end_time=end_ms, limit=limit)
-            records = [r for row in rows if (r := _parse_kline_row(row, symbol, "SPOT", now_iso))]
+            records = _fetch_chunked(spot_client, symbol, "SPOT", start_ms, end_ms, now_iso)
             all_records.extend(records)
             symbols_ok.append(f"spot:{symbol}")
             logger.info("binance_1d_job: SPOT %s → %d candles", symbol, len(records))
@@ -142,8 +192,7 @@ def run(from_date: str | None = None, to_date: str | None = None) -> dict:
     futures_client = BinanceFuturesClient.from_env()
     for symbol in futures_symbols:
         try:
-            rows = futures_client.get_klines(symbol, interval=_INTERVAL, start_time=start_ms, end_time=end_ms, limit=limit)
-            records = [r for row in rows if (r := _parse_kline_row(row, symbol, "FUTURES", now_iso))]
+            records = _fetch_chunked(futures_client, symbol, "FUTURES", start_ms, end_ms, now_iso)
             all_records.extend(records)
             symbols_ok.append(f"futures:{symbol}")
             logger.info("binance_1d_job: FUTURES %s → %d candles", symbol, len(records))
@@ -156,6 +205,11 @@ def run(from_date: str | None = None, to_date: str | None = None) -> dict:
     if all_records:
         # append-only — KHÔNG gọi apply_rolling_retention
         written = write_records(path, all_records, _SCHEMA, mode="append", partition_by=["inst_type", "symbol", "year"])
+
+    record_ingest("binance_1d_job", count=written, status="success")
+    if errors:
+        record_ingest("binance_1d_job", count=errors, status="error")
+    push_metrics("binance_1d_job")
 
     logger.info("binance_1d_job: DONE written=%d errors=%d", written, errors)
     return {"written": written, "errors": errors, "symbols_ok": symbols_ok, "symbols_err": symbols_err}

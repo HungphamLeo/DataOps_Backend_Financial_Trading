@@ -32,6 +32,7 @@ import pyarrow as pa
 from cli.ingestion.schema.models import TCBSBSARecord
 from cli.ingestion.sources.client.tcbs_client import TCBSRestClient
 from cli.jobs._delta_writer import _table_path, write_records, apply_rolling_retention
+from cli.jobs.metrics import push_metrics, record_ingest
 from cli.flows.loader.load_config import load_exchange_config
 from log.logger_setup import logger_manager
 
@@ -116,10 +117,18 @@ def run() -> dict:
     for ticker in bsa_tickers:
         for inv_type in investor_types:
             try:
-                raw_points = client.get_intraday_bsa(ticker, investor_type=inv_type)
+                raw_resp = client.get_intraday_bsa(ticker, investor_type=inv_type)
+                if isinstance(raw_resp, dict):
+                    raw_points = raw_resp.get("data", [])
+                elif isinstance(raw_resp, list):
+                    raw_points = raw_resp
+                else:
+                    raw_points = []
+
                 # Inject ticker vào mỗi point (API response không có field ticker)
                 for p in raw_points:
-                    p["ticker"] = ticker
+                    if isinstance(p, dict):
+                        p["ticker"] = ticker
 
                 summary = _aggregate_bsa(raw_points, inv_type)
                 if summary:
@@ -152,6 +161,11 @@ def run() -> dict:
         )
         # Rolling retention 2 năm
         apply_rolling_retention(path, date_col="trading_date", keep_days=_RETENTION_DAYS)
+
+    record_ingest("tcbs_bsa_job", count=written, status="success")
+    if errors:
+        record_ingest("tcbs_bsa_job", count=errors, status="error")
+    push_metrics("tcbs_bsa_job")
 
     logger.info(
         "tcbs_bsa_job: DONE written=%d errors=%d tickers=%d types=%d",
