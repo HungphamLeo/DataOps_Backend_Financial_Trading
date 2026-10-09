@@ -20,7 +20,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class BinanceCandleRecord(BaseModel):
@@ -47,13 +47,12 @@ class BinanceCandleRecord(BaseModel):
     vol_ccy:   float = Field(ge=0, default=0.0)
     confirm:   int   = Field(default=1, ge=0, le=1)
 
-    @field_validator("high")
-    @classmethod
-    def high_gte_low(cls, v: float, info) -> float:
+    @model_validator(mode="after")
+    def high_gte_low(self) -> BinanceCandleRecord:
         """Business rule: high price phải >= low price."""
-        if "low" in info.data and v < info.data["low"]:
-            raise ValueError(f"high {v} < low {info.data['low']}")
-        return v
+        if self.high < self.low:
+            raise ValueError(f"high {self.high} < low {self.low}")
+        return self
 
 
 # ─── TCBS Schemas ─────────────────────────────────────────────────────────────

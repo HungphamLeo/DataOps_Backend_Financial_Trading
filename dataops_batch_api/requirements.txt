@@ -46,7 +46,7 @@ python-dateutil==2.9.0.post0
 grpcio==1.64.1
 grpcio-tools==1.64.1
 grpcio-health-checking==1.64.1
-protobuf==4.25.3
+protobuf>=5.26.1,<6.0.0
 
 # -----------------------------------------------------------------------------
 # Observability
