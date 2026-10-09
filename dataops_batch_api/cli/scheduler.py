@@ -28,6 +28,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from cli.jobs import binance_4h_job, binance_1d_job, tcbs_eod_job, tcbs_bsa_job
+from cli.jobs._env import load_project_env
 from log.logger_setup import logger_manager
 
 logger = logger_manager.get_logger(__name__)
@@ -93,6 +94,7 @@ def build_scheduler() -> BlockingScheduler:
 
 
 def main() -> None:
+    load_project_env()
     logger.info("scheduler: starting — jobs: binance_4h, binance_1d, tcbs_eod, tcbs_bsa")
     scheduler = build_scheduler()
 
