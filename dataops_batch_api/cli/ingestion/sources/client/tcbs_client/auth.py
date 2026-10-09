@@ -27,6 +27,7 @@ Note:
 """
 from __future__ import annotations
 
+import os
 import time
 from typing import Dict
 
@@ -45,7 +46,7 @@ class TCBSAuthMixin:
 
     # ── Public auth methods ───────────────────────────────────────────────────
 
-    def authenticate(self, otp: str) -> str:
+    def authenticate(self, otp: str = "") -> str:
         """
         Lấy JWT token từ TCBS bằng apiKey + Smart OTP (iOTP từ TCInvest app).
 
@@ -54,25 +55,40 @@ class TCBSAuthMixin:
 
         Args:
             otp: Smart OTP code từ TCInvest app (thường là 6 chữ số).
+                 Nếu để trống, sẽ ưu tiên dùng token sẵn có (từ TCBS_JWT_TOKEN)
+                 hoặc đọc từ TCBS_OTP env var.
 
         Returns:
             JWT token string.
 
         Raises:
-            ValueError: nếu api_key rỗng.
+            ValueError: nếu api_key rỗng hoặc thiếu OTP khi chưa có token.
             requests.HTTPError: nếu TCBS từ chối xác thực.
             RuntimeError: nếu response không chứa token.
         """
+        # Nếu đã có token và không truyền OTP mới, tái sử dụng token
+        with self._token_lock:
+            if self._jwt_token and not otp:
+                self._update_auth_header()
+                logger.info("TCBSAuth: Reusing existing JWT token")
+                return self._jwt_token
+
+        resolved_otp = otp or os.getenv("TCBS_OTP", "")
         if not self.api_key:
             raise ValueError(
                 "TCBS api_key is empty. "
                 "Set TCBS_API_KEY env var hoặc truyền api_key vào constructor."
             )
+        if not resolved_otp:
+            raise ValueError(
+                "TCBS OTP is required for new authentication. "
+                "Set TCBS_JWT_TOKEN / TCBS_OTP env var hoặc truyền otp vào authenticate(otp)."
+            )
 
         endpoint = self.base_url + TCBSConstants.endpoint("token")
         payload = {
             "apiKey": self.api_key,
-            "otp":    otp,
+            "otp":    resolved_otp,
         }
 
         logger.info("Authenticating with TCBS — endpoint=%s", endpoint)

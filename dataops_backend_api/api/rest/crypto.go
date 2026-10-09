@@ -37,11 +37,55 @@ type CryptoHandler struct {
 //	/funding      → Funding rate history cho perpetual swaps
 //	/liquidations → Liquidation events (forced close) trong time range
 func (h *CryptoHandler) Register(r *gin.RouterGroup) {
+	r.GET("/ticker", h.GetTicker)
+	r.GET("/:symbol/ticker", h.GetTickerByParam)
 	r.GET("/vwap", h.GetVWAP)
 	r.GET("/ohlcv", h.GetOHLCV)
 	r.GET("/orderbook", h.GetOrderBook)
 	r.GET("/funding", h.GetFundingRate)
 	r.GET("/liquidations", h.GetLiquidations)
+}
+
+// GetTicker trả về real-time ticker data từ Redis cache
+// GET /api/v1/crypto/ticker?symbol=BTCUSDT
+func (h *CryptoHandler) GetTicker(ctx *gin.Context) {
+	symbol := ctx.Query("symbol")
+	if symbol == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "symbol is required"})
+		return
+	}
+	if !constants.IsValidBinanceSymbol(symbol) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "unsupported symbol"})
+		return
+	}
+
+	data, err := h.AnalyticsSvc.GetTicker(ctx, symbol)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, data)
+}
+
+// GetTickerByParam trả về ticker theo path param
+// GET /api/v1/crypto/:symbol/ticker
+func (h *CryptoHandler) GetTickerByParam(ctx *gin.Context) {
+	symbol := ctx.Param("symbol")
+	if symbol == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "symbol is required"})
+		return
+	}
+	if !constants.IsValidBinanceSymbol(symbol) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "unsupported symbol"})
+		return
+	}
+
+	data, err := h.AnalyticsSvc.GetTicker(ctx, symbol)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, data)
 }
 
 // GetVWAP trả về VWAP data points theo symbol, interval, và time range.

@@ -1,11 +1,10 @@
 // tcbs.go — TCBS Market Data Service
 //
 // Thay thế vnstock.Service bằng TCBSService cho TCBS iFlash API data.
-// Query InfluxDB để lấy market snapshots, BSA, intraday ticks đã được
-// ingest bởi dataops-stream-producer (TCBSPoller → Kafka → Spark → InfluxDB).
+// Query Redis cache (live ticker), Batch gRPC (historical Delta Lake), và InfluxDB (real-time stream).
 //
 // Data flow:
-//   TCBS API → TCBSPoller → Kafka Topics → (Spark streaming) → InfluxDB
+//   TCBS API → TCBSPoller → Kafka Topics → (Spark streaming) → InfluxDB / Delta Lake
 //              tcbs.market.snapshot  → tcbs_market measurement
 //              tcbs.bsa.events       → tcbs_bsa measurement
 //              tcbs.intraday.ticks   → tcbs_intraday measurement
@@ -15,8 +14,11 @@ package tcbs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
+	"time"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 
@@ -24,18 +26,22 @@ import (
 	"dataops-backend-api/constants"
 	"dataops-backend-api/logging"
 	"dataops-backend-api/models"
+	"dataops-backend-api/redis"
+	"dataops-backend-api/repository/batch"
 )
 
 // Service định nghĩa interface cho tất cả TCBS market data queries.
-// Tất cả handlers và test mocks dùng interface này — không dùng concrete struct trực tiếp.
 type Service interface {
+	// GetTicker lấy ticker snapshot từ Redis cache (tcbs_{symbol}_ticker, TTL 120s)
+	GetTicker(ctx context.Context, symbol string) (*models.TCBSMarketSnapshot, error)
+
 	// GetMarketSnapshot lấy snapshot mới nhất của 1 mã CK từ InfluxDB (tcbs_market measurement).
 	GetMarketSnapshot(ctx context.Context, symbol string) (*models.TCBSMarketSnapshot, error)
 
 	// GetOrderBook trích xuất orderbook từ market snapshot — 3 cấp bid/ask.
 	GetOrderBook(ctx context.Context, symbol string) (*models.TCBSOrderBook, error)
 
-	// GetOHLCV lấy OHLCV lịch sử từ InfluxDB (tcbs_ohlcv measurement).
+	// GetOHLCV lấy OHLCV lịch sử từ Batch gRPC (1d EOD) hoặc InfluxDB.
 	GetOHLCV(ctx context.Context, symbol, interval string, from, to int64) ([]*models.OHLCV, error)
 
 	// GetTopMovers lấy top cổ phiếu tăng/giảm mạnh nhất theo change_pct.
@@ -51,23 +57,56 @@ type Service interface {
 	GetIntradayTicks(ctx context.Context, ticker string, page, size int) ([]*models.TCBSIntradayTick, error)
 }
 
-// tcbsService là concrete implementation dùng InfluxDB làm storage backend.
+// tcbsService là concrete implementation dùng Redis, Batch gRPC, và InfluxDB.
 type tcbsService struct {
-	cfg    *configuration.Config
-	client influxdb2.Client
-	logger *logging.Logger
+	cfg         *configuration.Config
+	client      influxdb2.Client
+	redis       redis.Service
+	batchClient batch.Client
+	logger      *logging.Logger
 }
 
-// NewService khởi tạo TCBSService với InfluxDB client.
-func NewService(cfg *configuration.Config, logger *logging.Logger) Service {
+// NewService khởi tạo TCBSService với dependencies.
+func NewService(
+	cfg *configuration.Config,
+	redisSvc redis.Service,
+	batchClient batch.Client,
+	logger *logging.Logger,
+) Service {
 	client := influxdb2.NewClient(cfg.InfluxDB.URL, cfg.InfluxDB.Token)
-	return &tcbsService{cfg: cfg, client: client, logger: logger}
+	return &tcbsService{
+		cfg:         cfg,
+		client:      client,
+		redis:       redisSvc,
+		batchClient: batchClient,
+		logger:      logger,
+	}
+}
+
+// ─── GetTicker ────────────────────────────────────────────────────────────────
+
+// GetTicker lấy ticker snapshot từ Redis cache (TTL 120s)
+func (s *tcbsService) GetTicker(ctx context.Context, symbol string) (*models.TCBSMarketSnapshot, error) {
+	symUpper := strings.ToUpper(symbol)
+	cacheKey := fmt.Sprintf("tcbs_%s_ticker", symUpper)
+
+	if s.redis != nil {
+		cached := s.redis.Get(cacheKey)
+		if cached != "" {
+			var snap models.TCBSMarketSnapshot
+			if err := json.Unmarshal([]byte(cached), &snap); err == nil {
+				return &snap, nil
+			}
+		}
+	}
+
+	// Fallback sang GetMarketSnapshot từ InfluxDB
+	return s.GetMarketSnapshot(ctx, symbol)
 }
 
 // ─── GetMarketSnapshot ────────────────────────────────────────────────────────
 
 // GetMarketSnapshot lấy market snapshot mới nhất của 1 mã từ InfluxDB.
-// Data được ghi bởi Spark Streaming consumer đọc từ tcbs.market.snapshot topic.
 func (s *tcbsService) GetMarketSnapshot(ctx context.Context, symbol string) (*models.TCBSMarketSnapshot, error) {
 	queryAPI := s.client.QueryAPI(s.cfg.InfluxDB.Org)
 
@@ -145,7 +184,6 @@ func (s *tcbsService) GetMarketSnapshot(ctx context.Context, symbol string) (*mo
 // ─── GetOrderBook ────────────────────────────────────────────────────────────
 
 // GetOrderBook trích xuất orderbook 3 cấp từ market snapshot.
-// Không query riêng — reuse GetMarketSnapshot để tránh double query.
 func (s *tcbsService) GetOrderBook(ctx context.Context, symbol string) (*models.TCBSOrderBook, error) {
 	snap, err := s.GetMarketSnapshot(ctx, symbol)
 	if err != nil {
@@ -190,9 +228,23 @@ func (s *tcbsService) GetOrderBook(ctx context.Context, symbol string) (*models.
 
 // ─── GetOHLCV ────────────────────────────────────────────────────────────────
 
-// GetOHLCV lấy OHLCV lịch sử cổ phiếu từ InfluxDB (tcbs_ohlcv measurement).
-// Data được aggregate từ intraday ticks bởi Spark Silver layer.
+// GetOHLCV lấy OHLCV lịch sử cổ phiếu từ Batch gRPC (daily EOD) hoặc InfluxDB.
 func (s *tcbsService) GetOHLCV(ctx context.Context, symbol, interval string, from, to int64) ([]*models.OHLCV, error) {
+	// 1. Thử gọi Batch gRPC cho daily EOD nếu client khả dụng
+	if (interval == "1d" || interval == "1D" || interval == "") && s.batchClient != nil && s.batchClient.IsAvailable() {
+		fromDate := time.Unix(from, 0).Format("2006-01-02")
+		toDate := time.Unix(to, 0).Format("2006-01-02")
+		candles, err := s.batchClient.GetTCBSMarketEOD(ctx, symbol, "HOSE", fromDate, toDate, 365)
+		if err == nil && len(candles) > 0 {
+			return candles, nil
+		}
+		if err != nil {
+			s.logger.Warn("GetOHLCV.BatchGRPC", "Batch gRPC query failed for TCBS EOD, falling back to InfluxDB",
+				map[string]interface{}{"symbol": symbol, "err": err.Error()})
+		}
+	}
+
+	// 2. Query InfluxDB
 	queryAPI := s.client.QueryAPI(s.cfg.InfluxDB.Org)
 
 	fluxQuery := fmt.Sprintf(`
@@ -243,7 +295,6 @@ func (s *tcbsService) GetOHLCV(ctx context.Context, symbol, interval string, fro
 // ─── GetTopMovers ─────────────────────────────────────────────────────────────
 
 // GetTopMovers lấy top cổ phiếu tăng/giảm mạnh nhất theo change_pct từ InfluxDB.
-// Chỉ hỗ trợ sàn HOSE theo exchange label trong tcbs_market measurement.
 func (s *tcbsService) GetTopMovers(ctx context.Context, exchange string, limit int) ([]*models.TCBSMarketSnapshot, error) {
 	queryAPI := s.client.QueryAPI(s.cfg.InfluxDB.Org)
 
@@ -289,7 +340,6 @@ func (s *tcbsService) GetTopMovers(ctx context.Context, exchange string, limit i
 // ─── GetMarketSummary ─────────────────────────────────────────────────────────
 
 // GetMarketSummary trả về tóm tắt HOSE indices (VNINDEX, VN30, VN100).
-// Query 3 indices song song, bỏ qua nếu 1 index không có data.
 func (s *tcbsService) GetMarketSummary(ctx context.Context) (*models.TCBSMarketSummary, error) {
 	indices := []string{"VNINDEX", "VN30", "VN100"}
 	summary := &models.TCBSMarketSummary{
@@ -301,7 +351,7 @@ func (s *tcbsService) GetMarketSummary(ctx context.Context) (*models.TCBSMarketS
 		if err != nil {
 			s.logger.Error("TCBSSvc.GetMarketSummary", "Failed to get index snapshot",
 				map[string]interface{}{"index": idx, "err": err.Error()})
-			continue // bỏ qua index lỗi, không fail toàn bộ request
+			continue
 		}
 		summary.Indices[idx] = snap
 		if snap.TradingDate != "" && summary.TradingDate == "" {
@@ -314,9 +364,19 @@ func (s *tcbsService) GetMarketSummary(ctx context.Context) (*models.TCBSMarketS
 
 // ─── GetBSA ───────────────────────────────────────────────────────────────────
 
-// GetBSA lấy Buy/Sell Analysis cho 1 mã theo loại nhà đầu tư từ InfluxDB.
-// Data được ghi bởi Spark Streaming consumer đọc từ tcbs.bsa.events topic.
+// GetBSA lấy Buy/Sell Analysis cho 1 mã theo loại nhà đầu tư (thử Batch gRPC trước, fallback InfluxDB).
 func (s *tcbsService) GetBSA(ctx context.Context, ticker, investorType string) ([]*models.TCBSBSASnapshot, error) {
+	// 1. Thử gọi Batch gRPC
+	if s.batchClient != nil && s.batchClient.IsAvailable() {
+		fromDate := time.Now().AddDate(0, 0, -30).Format("2006-01-02")
+		toDate := time.Now().Format("2006-01-02")
+		bsaList, err := s.batchClient.GetTCBSBSAHistory(ctx, ticker, investorType, fromDate, toDate, 100)
+		if err == nil && len(bsaList) > 0 {
+			return bsaList, nil
+		}
+	}
+
+	// 2. Query InfluxDB
 	queryAPI := s.client.QueryAPI(s.cfg.InfluxDB.Org)
 
 	fluxQuery := fmt.Sprintf(`
@@ -368,7 +428,6 @@ func (s *tcbsService) GetBSA(ctx context.Context, ticker, investorType string) (
 // ─── GetIntradayTicks ─────────────────────────────────────────────────────────
 
 // GetIntradayTicks lấy lịch sử khớp lệnh intraday từ InfluxDB với pagination.
-// Data được ghi bởi Spark Streaming consumer đọc từ tcbs.intraday.ticks topic.
 func (s *tcbsService) GetIntradayTicks(ctx context.Context, ticker string, page, size int) ([]*models.TCBSIntradayTick, error) {
 	if size <= 0 || size > constants.MaxTCBSIntradayPages*constants.DefaultTCBSIntradayPageSize {
 		size = constants.DefaultTCBSIntradayPageSize

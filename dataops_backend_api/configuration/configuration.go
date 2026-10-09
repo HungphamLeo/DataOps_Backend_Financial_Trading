@@ -38,6 +38,11 @@ type Config struct {
 		APIKey   string // TCBS_API_KEY env var
 		JWTToken string // TCBS_JWT_TOKEN — pre-populated hoặc refresh bởi TCBSPoller
 	}
+	// Batch gRPC Server (dataops_batch_api:50051) cho historical data queries
+	Batch struct {
+		GRPCURL    string // default: localhost:50051
+		TimeoutSec int    // default: 5s
+	}
 }
 
 func FromEnv() (*Config, error) {
@@ -67,6 +72,9 @@ func FromEnv() (*Config, error) {
 	cfg.TCBS.BaseURL  = utils.GetEnv("TCBS_BASE_URL", "https://openapi.tcbs.com.vn")
 	cfg.TCBS.APIKey   = utils.GetEnv("TCBS_API_KEY", "")
 	cfg.TCBS.JWTToken = utils.GetEnv("TCBS_JWT_TOKEN", "")
+
+	cfg.Batch.GRPCURL    = utils.GetEnv("BATCH_GRPC_URL", "localhost:50051")
+	cfg.Batch.TimeoutSec = utils.GetEnvInt("BATCH_TIMEOUT_SEC", 5)
 
 	return cfg, nil
 }
