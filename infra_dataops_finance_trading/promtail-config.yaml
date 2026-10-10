@@ -1,0 +1,49 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: dataops-containers
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 15s
+        filters:
+          - name: label
+            values: ["com.docker.compose.project"]
+    relabel_configs:
+      # Use container name as job label
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/?(.*)"
+        target_label: "job"
+      # Add service label from compose service name
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: "service"
+      # Add container log stream (stdout/stderr)
+      - source_labels: ["__meta_docker_container_log_stream"]
+        target_label: "stream"
+    pipeline_stages:
+      # Try to parse JSON log lines (all dataops services emit JSON)
+      - json:
+          expressions:
+            level: level
+            trace_id: trace_id
+            correlation_id: correlation_id
+            service: service
+            action: action
+      # Promote log level to Loki label for quick filtering
+      - labels:
+          level:
+          service:
+      # Drop debug logs in production to reduce volume
+      - match:
+          selector: '{job=~"dataops-.*"}'
+          stages:
+            - drop:
+                expression: '.*"level":"DEBUG".*'
+                drop_counter_reason: "debug_log_filtered"

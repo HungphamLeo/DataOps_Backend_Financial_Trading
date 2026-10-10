@@ -5,6 +5,7 @@ package rest
 import (
 	"log"
 	"dataops-backend-api/configuration"
+	"dataops-backend-api/logging"
 	"dataops-backend-api/middlewares"
 	"dataops-backend-api/redis"
 	"dataops-backend-api/services"
@@ -15,6 +16,7 @@ import (
 // NewAPI khởi tạo Gin router với toàn bộ routes.
 //
 // Nhận vào logger chuẩn (*log.Logger) để ghi structured log thay vì fmt.Printf.
+// structuredLogger dùng cho TraceID + RequestLogger middleware.
 //
 // URL Structure:
 //
@@ -24,7 +26,7 @@ import (
 //	GET  /api/v1/vn-stocks/*        ← JWT required
 //	GET  /api/v1/tcbs/*             ← JWT required
 //	GET  /api/v1/admin/*            ← Admin only
-func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Service, logger *log.Logger) *gin.Engine {
+func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Service, logger *log.Logger, structuredLogger ...*logging.Logger) *gin.Engine {
 	if logger != nil {
 		logger.Println("[API] Starting REST API")
 	}
@@ -33,7 +35,16 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	router := gin.Default() // Logger + Recovery middleware tự động
+	router := gin.New()
+	router.Use(gin.Recovery())
+
+	// TraceID: extract X-Trace-ID header hoặc tạo mới UUID — phải đứng đầu chain
+	router.Use(middlewares.TraceID())
+
+	// RequestLogger: structured JSON log mỗi request với trace_id
+	if len(structuredLogger) > 0 && structuredLogger[0] != nil {
+		router.Use(middlewares.RequestLogger(structuredLogger[0]))
+	}
 
 	// REUSE: market-maker-api/middlewares/security.go
 	router.Use(middlewares.Secure(cfg))

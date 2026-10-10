@@ -17,11 +17,17 @@
 package indicator
 
 import (
+	"context"
 	"fmt"
+	"math"
+	"strings"
+
+	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
+
+	"dataops-backend-api/configuration"
 	"dataops-backend-api/logging"
 	"dataops-backend-api/models"
 	"dataops-backend-api/repository"
-	"strings"
 )
 
 // Service là interface cho indicator management
@@ -39,12 +45,19 @@ type Service interface {
 }
 
 type indicatorService struct {
-	repo   *repository.Gorm
-	logger *logging.Logger
+	repo         *repository.Gorm
+	logger       *logging.Logger
+	influxClient influxdb2.Client
+	cfg          *configuration.Config
 }
 
-func NewService(repo *repository.Gorm, logger *logging.Logger) Service {
-	return &indicatorService{repo: repo, logger: logger}
+func NewService(repo *repository.Gorm, logger *logging.Logger, cfg *configuration.Config) Service {
+	return &indicatorService{
+		repo:         repo,
+		logger:       logger,
+		influxClient: influxdb2.NewClient(cfg.InfluxDB.URL, cfg.InfluxDB.Token),
+		cfg:          cfg,
+	}
 }
 
 // ─── Request DTOs ─────────────────────────────────────────────────────────────
@@ -222,25 +235,162 @@ func (s *indicatorService) DeleteGroup(id, userID uint) error {
 	return nil
 }
 
-// ComputeSignal tính indicator signal — placeholder, extend với real logic
-// LEARN: Tách "tính toán signal" khỏi "lưu config" — single responsibility
+// ComputeSignal tính RSI(14) + MA(20) signal từ InfluxDB close price series.
+//
+// Data source: InfluxDB bucket "market-data", measurement "vwap"
+// Written by: dataops_processing VWAP Spark job
+//
+// Algorithm:
+//   1. Fetch 21 VWAP points (21 > 20 để MA(20) có đủ data)
+//   2. Tính MA(20) từ 20 giá trị VWAP cuối
+//   3. Tính RSI(14) từ 14 + 1 = 15 giá trị VWAP cuối (cần 1 prior để tính change)
+//   4. Kết hợp: RSI > 70 + price > MA → SELL; RSI < 30 + price < MA → BUY; else HOLD
 func (s *indicatorService) ComputeSignal(groupID uint, symbol, exchange, timeframe string) (*models.IndicatorSignal, error) {
-	group, err := s.repo.GetIndicatorGroupDetail(groupID, 0) // 0 = system call, no user filter
+	_, err := s.repo.GetIndicatorGroupDetail(groupID, 0)
 	if err != nil {
 		return nil, fmt.Errorf("get indicator group: %w", err)
 	}
 
-	// Placeholder: thực tế sẽ fetch price data từ InfluxDB và tính toán
-	// VD: nếu group có MA(20) indicator → fetch 20 candles → tính average
-	signal := &models.IndicatorSignal{
-		GroupID:   groupID,
-		Symbol:    symbol,
-		Exchange:  exchange,
-		SignalType: "NEUTRAL",
-		Confidence: 0.5,
-		Timeframe: timeframe,
+	// Fetch 21 VWAP points — đủ cho MA(20) + RSI(14) cùng 1 query
+	closes, err := s.fetchClosePrices(symbol, timeframe, 21)
+	if err != nil || len(closes) < 15 {
+		// Không đủ data → NEUTRAL với confidence thấp
+		s.logger.Warn("ComputeSignal", "insufficient price data, returning NEUTRAL",
+			map[string]interface{}{"symbol": symbol, "timeframe": timeframe, "points": len(closes)})
+		return &models.IndicatorSignal{
+			GroupID:    groupID,
+			Symbol:     symbol,
+			Exchange:   exchange,
+			SignalType: "NEUTRAL",
+			Confidence: 0.0,
+			Timeframe:  timeframe,
+		}, nil
 	}
 
-	_ = group // dùng trong real implementation
-	return signal, nil
+	ma20 := calcMA(closes, 20)
+	rsi14 := calcRSI(closes, 14)
+	currentPrice := closes[len(closes)-1]
+
+	signalType, confidence := classifySignal(currentPrice, ma20, rsi14)
+
+	s.logger.Info("ComputeSignal", "signal computed",
+		map[string]interface{}{
+			"symbol": symbol, "timeframe": timeframe,
+			"price": currentPrice, "ma20": ma20, "rsi14": rsi14,
+			"signal": signalType, "confidence": confidence,
+		})
+
+	return &models.IndicatorSignal{
+		GroupID:    groupID,
+		Symbol:     symbol,
+		Exchange:   exchange,
+		SignalType: signalType,
+		Confidence: confidence,
+		Value:      rsi14,
+		Timeframe:  timeframe,
+	}, nil
+}
+
+// fetchClosePrices lấy n điểm VWAP gần nhất từ InfluxDB.
+// Dùng VWAP làm proxy cho close price (VWAP ≈ fair value price trong window).
+func (s *indicatorService) fetchClosePrices(symbol, timeframe string, n int) ([]float64, error) {
+	queryAPI := s.influxClient.QueryAPI(s.cfg.InfluxDB.Org)
+
+	// Lookback đủ rộng để có n điểm: 1h timeframe * n * 3 buffer
+	lookbackHours := n * 3
+	if timeframe == "1d" {
+		lookbackHours = n * 24 * 2
+	} else if timeframe == "5m" {
+		lookbackHours = n / 12 + 2 // 12 points/hour
+	}
+
+	fluxQuery := fmt.Sprintf(`
+		from(bucket: "%s")
+		  |> range(start: -%dh)
+		  |> filter(fn: (r) => r._measurement == "vwap" and r.symbol == "%s" and r.interval == "%s")
+		  |> filter(fn: (r) => r._field == "vwap")
+		  |> sort(columns: ["_time"], desc: false)
+		  |> tail(n: %d)
+	`, s.cfg.InfluxDB.Bucket, lookbackHours, symbol, timeframe, n)
+
+	result, err := queryAPI.Query(context.Background(), fluxQuery)
+	if err != nil {
+		return nil, fmt.Errorf("fetchClosePrices InfluxDB: %w", err)
+	}
+	defer result.Close()
+
+	var prices []float64
+	for result.Next() {
+		if v, ok := result.Record().Value().(float64); ok && v > 0 {
+			prices = append(prices, v)
+		}
+	}
+	return prices, nil
+}
+
+// calcMA tính simple moving average của n giá trị cuối trong series.
+func calcMA(prices []float64, n int) float64 {
+	if len(prices) < n {
+		n = len(prices)
+	}
+	slice := prices[len(prices)-n:]
+	sum := 0.0
+	for _, p := range slice {
+		sum += p
+	}
+	return sum / float64(n)
+}
+
+// calcRSI tính RSI(period) theo Wilder's smoothed method (standard).
+//
+// Formula:
+//   RS  = avg_gain / avg_loss  (over period)
+//   RSI = 100 - (100 / (1 + RS))
+func calcRSI(prices []float64, period int) float64 {
+	if len(prices) < period+1 {
+		return 50.0 // không đủ data → neutral 50
+	}
+
+	slice := prices[len(prices)-(period+1):]
+	var gains, losses float64
+	for i := 1; i < len(slice); i++ {
+		change := slice[i] - slice[i-1]
+		if change > 0 {
+			gains += change
+		} else {
+			losses += math.Abs(change)
+		}
+	}
+
+	avgGain := gains / float64(period)
+	avgLoss := losses / float64(period)
+
+	if avgLoss == 0 {
+		return 100.0
+	}
+	rs := avgGain / avgLoss
+	return 100.0 - (100.0 / (1.0 + rs))
+}
+
+// classifySignal kết hợp RSI + MA để ra tín hiệu.
+//
+// Rules (theo quan điểm mean-reversion với trend filter):
+//   RSI > 70 AND price > MA → SELL  (overbought + trend confirm), confidence 0.75
+//   RSI < 30 AND price < MA → BUY   (oversold + trend confirm), confidence 0.75
+//   RSI > 60 OR  price > MA → HOLD  (mild bullish), confidence 0.55
+//   RSI < 40 OR  price < MA → HOLD  (mild bearish), confidence 0.55
+//   else                   → NEUTRAL, confidence 0.5
+func classifySignal(price, ma20, rsi14 float64) (string, float64) {
+	switch {
+	case rsi14 > 70 && price > ma20:
+		return "SELL", 0.75
+	case rsi14 < 30 && price < ma20:
+		return "BUY", 0.75
+	case rsi14 > 60 || price > ma20:
+		return "HOLD", 0.55
+	case rsi14 < 40 || price < ma20:
+		return "HOLD", 0.55
+	default:
+		return "NEUTRAL", 0.5
+	}
 }

@@ -122,7 +122,11 @@ func (p *BinanceProducer) connectAndStream(ctx context.Context, symbol string) e
 	}
 }
 
-// handleMessage parse message và route đến đúng Kafka topic thông qua Producer với DLQ + Retry
+// handleMessage parse message và route đến đúng Kafka topic thông qua Producer với DLQ + Retry.
+//
+// RANH GIỚI LAYER: Producer chỉ làm 1 việc — forward raw event lên Kafka.
+// Aggregation (VWAP, buyVol/sellVol accumulation) là trách nhiệm của dataops_processing (Spark).
+// Redis ticker chỉ lưu snapshot thuần — không tích lũy state liên message.
 func (p *BinanceProducer) handleMessage(symbol string, raw []byte) {
 	var envelope BinanceCombinedStreamMsg
 	if err := json.Unmarshal(raw, &envelope); err != nil {
@@ -152,36 +156,16 @@ func (p *BinanceProducer) handleMessage(symbol string, raw []byte) {
 			side = "sell" // Buyer is maker => Seller is taker (aggressive)
 		}
 
-		// Cache latest trade tick — dùng cho real-time dashboard / API query nhanh
-		// Key: binance_{SYMBOL}_ticker, TTL 10s (refresh mỗi trade)
-		// buyVol/sellVol: tích lũy trong window TTL — reset khi key expire
+		// Cache latest trade tick — snapshot thuần cho real-time dashboard / API query nhanh.
+		// Key: binance_{SYMBOL}_ticker, TTL 10s (refresh mỗi trade).
+		// KHÔNG tích lũy buyVol/sellVol — aggregation thuộc về dataops_processing (Spark VWAP job).
 		symLower := strings.ToLower(symbol)
 		tickerKey := fmt.Sprintf("binance_%s_ticker", symLower)
-		existing := p.redis.Get(tickerKey)
-		var buyVol, sellVol float64
-		if existing != "" {
-			var prev map[string]interface{}
-			if err := json.Unmarshal([]byte(existing), &prev); err == nil {
-				if v, ok := prev["buy_vol"].(float64); ok {
-					buyVol = v
-				}
-				if v, ok := prev["sell_vol"].(float64); ok {
-					sellVol = v
-				}
-			}
-		}
-		if side == "buy" {
-			buyVol += size
-		} else {
-			sellVol += size
-		}
 		p.redis.Set(tickerKey, map[string]interface{}{
 			"symbol":   symbol,
 			"price":    price,
 			"size":     size,
 			"side":     side,
-			"buy_vol":  buyVol,
-			"sell_vol": sellVol,
 			"trade_id": rawTrade.TradeID,
 			"ts":       rawTrade.TradeTime,
 		}, 10*time.Second)

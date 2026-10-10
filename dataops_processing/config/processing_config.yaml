@@ -1,0 +1,22 @@
+"""
+processing_config.yaml — Configuration cho dataops_processing jobs.
+
+Volume Bars: threshold theo symbol — 1 bar = N units của base asset.
+Thresholds được chọn để ~1-2 bars/ngày, dễ verify manual.
+
+Tham chiếu: docs/PROJECT_RESTRUCTURE_PLAN.md Sub-Task 3
+"""
+
+volume_bars:
+  # BTC: ~2-5 bars/ngày tại ~500 BTC/bar (volume ngày ~5000-20000 BTC)
+  BTCUSDT: 500
+  # ETH: ~2-4 bars/ngày tại ~5000 ETH/bar
+  ETHUSDT: 5000
+  # SOL: ~2-4 bars/ngày tại ~50000 SOL/bar
+  SOLUSDT: 50000
+
+delta:
+  # Base path trong MinIO — mirror từ dataops_batch_api/_delta_writer.py
+  bucket: "binance-datalake"
+  bronze_base: "delta/bronze"
+  silver_base: "delta/silver"

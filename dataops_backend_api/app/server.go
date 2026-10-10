@@ -84,7 +84,7 @@ func NewServer() error {
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", constants.DefaultHTTPPort),
-		Handler: rest.NewAPI(svc, cfg, redisDB0, apiLogger),
+		Handler: rest.NewAPI(svc, cfg, redisDB0, apiLogger, logger),
 	}
 
 	go func() {

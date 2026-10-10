@@ -27,6 +27,8 @@ type CryptoService interface {
 	GetOrderBook(ctx context.Context, symbol string) (*models.BinanceOrderBook5, error)
 	GetFundingRate(ctx context.Context, symbol string, from, to int64) ([]*models.BinanceFundingRate, error)
 	GetLiquidations(ctx context.Context, symbol string, from, to int64) ([]map[string]interface{}, error)
+	// ComputeSignal tính RSI(14) + MA(20) signal từ InfluxDB VWAP series
+	ComputeSignal(ctx context.Context, symbol, timeframe string) (*models.IndicatorSignal, error)
 }
 
 type cryptoService struct {
@@ -261,4 +263,123 @@ func (s *cryptoService) GetLiquidations(ctx context.Context, symbol string, from
 	}
 
 	return events, nil
+}
+
+// ComputeSignal tính RSI(14) + MA(20) từ InfluxDB VWAP series.
+//
+// Fetch 21 VWAP points từ measurement "vwap" (written bởi dataops_processing VWAP Spark job).
+// Nếu không đủ data → trả NEUTRAL với confidence 0.
+func (s *cryptoService) ComputeSignal(_ context.Context, symbol, timeframe string) (*models.IndicatorSignal, error) {
+	queryAPI := s.client.QueryAPI(s.cfg.InfluxDB.Org)
+
+	const n = 21
+	lookbackHours := n * 3
+	if timeframe == "1d" {
+		lookbackHours = n * 48
+	} else if timeframe == "5m" {
+		lookbackHours = 6
+	}
+
+	fluxQuery := fmt.Sprintf(`
+		from(bucket: "%s")
+		  |> range(start: -%dh)
+		  |> filter(fn: (r) => r._measurement == "vwap" and r.symbol == "%s" and r.interval == "%s")
+		  |> filter(fn: (r) => r._field == "vwap")
+		  |> sort(columns: ["_time"], desc: false)
+		  |> tail(n: %d)
+	`, s.cfg.InfluxDB.Bucket, lookbackHours, symbol, timeframe, n)
+
+	result, err := queryAPI.Query(context.Background(), fluxQuery)
+	if err != nil {
+		s.logger.Warn("ComputeSignal", "InfluxDB query failed",
+			map[string]interface{}{"symbol": symbol, "err": err.Error()})
+		return neutralSignal(symbol), nil
+	}
+	defer result.Close()
+
+	var prices []float64
+	for result.Next() {
+		if v, ok := result.Record().Value().(float64); ok && v > 0 {
+			prices = append(prices, v)
+		}
+	}
+
+	if len(prices) < 15 {
+		s.logger.Warn("ComputeSignal", "insufficient data",
+			map[string]interface{}{"symbol": symbol, "timeframe": timeframe, "points": len(prices)})
+		return neutralSignal(symbol), nil
+	}
+
+	ma20 := calcCryptoMA(prices, 20)
+	rsi14 := calcCryptoRSI(prices, 14)
+	current := prices[len(prices)-1]
+	signalType, confidence := classifyCryptoSignal(current, ma20, rsi14)
+
+	s.logger.Info("ComputeSignal", "signal computed",
+		map[string]interface{}{
+			"symbol": symbol, "timeframe": timeframe,
+			"price": current, "ma20": ma20, "rsi14": rsi14, "signal": signalType,
+		})
+
+	return &models.IndicatorSignal{
+		Symbol:     symbol,
+		SignalType: signalType,
+		Confidence: confidence,
+		Value:      rsi14,
+		Timeframe:  timeframe,
+	}, nil
+}
+
+func neutralSignal(symbol string) *models.IndicatorSignal {
+	return &models.IndicatorSignal{Symbol: symbol, SignalType: "NEUTRAL", Confidence: 0.0}
+}
+
+func calcCryptoMA(prices []float64, n int) float64 {
+	if len(prices) < n {
+		n = len(prices)
+	}
+	slice := prices[len(prices)-n:]
+	sum := 0.0
+	for _, p := range slice {
+		sum += p
+	}
+	return sum / float64(n)
+}
+
+func calcCryptoRSI(prices []float64, period int) float64 {
+	if len(prices) < period+1 {
+		return 50.0
+	}
+	slice := prices[len(prices)-(period+1):]
+	var gains, losses float64
+	for i := 1; i < len(slice); i++ {
+		d := slice[i] - slice[i-1]
+		if d > 0 {
+			gains += d
+		} else {
+			losses += -d
+		}
+	}
+	avgGain := gains / float64(period)
+	avgLoss := losses / float64(period)
+	if avgLoss == 0 {
+		return 100.0
+	}
+	rs := avgGain / avgLoss
+	return 100.0 - (100.0 / (1.0 + rs))
+}
+
+func classifyCryptoSignal(price, ma20, rsi14 float64) (string, float64) {
+	switch {
+	case rsi14 > 70 && price > ma20:
+		return "SELL", 0.75
+	case rsi14 < 30 && price < ma20:
+		return "BUY", 0.75
+	case rsi14 > 60 || price > ma20:
+		return "HOLD", 0.55
+	case rsi14 < 40 || price < ma20:
+		return "HOLD", 0.55
+	default:
+		return "NEUTRAL", 0.5
+	}
 }

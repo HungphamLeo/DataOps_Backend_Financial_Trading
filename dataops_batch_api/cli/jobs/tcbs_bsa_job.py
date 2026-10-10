@@ -29,7 +29,7 @@ from typing import List
 
 import pyarrow as pa
 
-from cli.ingestion.schema.models import TCBSBSARecord
+from cli.ingestion.schema.canonical import from_tcbs_bsa_record
 from cli.ingestion.sources.client.tcbs_client import TCBSRestClient
 from cli.jobs._delta_writer import _table_path, write_records, apply_rolling_retention
 from cli.jobs.metrics import push_metrics, record_ingest
@@ -52,36 +52,13 @@ _INVESTOR_TYPES = ["sheep", "wolf", "shark", "all"]
 _RETENTION_DAYS = 730   # 2 năm
 
 
-def _aggregate_bsa(bsa_points: list, investor_type: str) -> dict | None:
+def _aggregate_bsa(bsa_points: list, ticker: str, investor_type: str, trading_date: str, now_iso: str) -> dict | None:
     """
-    Aggregate list BSA points trong ngày → 1 summary record.
+    Aggregate list BSA points trong ngày → 1 canonical summary dict.
 
-    Lấy điểm cuối phiên (latest event_time) làm đại diện cho cả ngày.
-    bsr được tính lại từ bup/sdp để tránh outlier từ API.
+    Delegates tới from_tcbs_bsa_record() trong canonical.py.
     """
-    if not bsa_points:
-        return None
-
-    # Lấy điểm cuối cùng trong ngày (sort by event_time string "HH:MM:SS")
-    latest = max(bsa_points, key=lambda x: x.get("t", ""), default=None)
-    if not latest:
-        return None
-
-    try:
-        rec = TCBSBSARecord(
-            ticker        = latest.get("ticker", ""),
-            investor_type = investor_type,
-            bup           = float(latest.get("bup", 0.0)),
-            sdp           = float(latest.get("sdp", 0.0)),
-            bsr           = float(latest.get("bsr", 0.0)),
-            event_time    = str(latest.get("t", "")),
-            ts_ms         = int(datetime.now(timezone.utc).timestamp() * 1000),
-        )
-    except Exception as exc:
-        logger.warning("_aggregate_bsa: validation failed: %s", exc)
-        return None
-
-    return rec
+    return from_tcbs_bsa_record(bsa_points, ticker, investor_type, trading_date, now_iso)
 
 
 def run() -> dict:
@@ -125,25 +102,12 @@ def run() -> dict:
                 else:
                     raw_points = []
 
-                # Inject ticker vào mỗi point (API response không có field ticker)
-                for p in raw_points:
-                    if isinstance(p, dict):
-                        p["ticker"] = ticker
-
-                summary = _aggregate_bsa(raw_points, inv_type)
-                if summary:
-                    all_records.append({
-                        "trading_date":  trading_date,
-                        "ticker":        summary.ticker,
-                        "investor_type": summary.investor_type,
-                        "bup":           summary.bup,
-                        "sdp":           summary.sdp,
-                        "bsr":           summary.bsr,
-                        "ingested_at":   now_iso,
-                    })
+                row = _aggregate_bsa(raw_points, ticker, inv_type, trading_date, now_iso)
+                if row:
+                    all_records.append(row)
                     logger.debug(
                         "tcbs_bsa_job: %s/%s bup=%.1f sdp=%.1f bsr=%.2f",
-                        ticker, inv_type, summary.bup, summary.sdp, summary.bsr,
+                        ticker, inv_type, row["bup"], row["sdp"], row["bsr"],
                     )
                 else:
                     logger.warning("tcbs_bsa_job: no BSA data for %s/%s", ticker, inv_type)

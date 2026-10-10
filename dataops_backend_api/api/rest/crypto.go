@@ -41,6 +41,7 @@ func (h *CryptoHandler) Register(r *gin.RouterGroup) {
 	r.GET("/:symbol/ticker", h.GetTickerByParam)
 	r.GET("/vwap", h.GetVWAP)
 	r.GET("/ohlcv", h.GetOHLCV)
+	r.GET("/:symbol/signal", h.GetSignal)
 	r.GET("/orderbook", h.GetOrderBook)
 	r.GET("/funding", h.GetFundingRate)
 	r.GET("/liquidations", h.GetLiquidations)
@@ -285,6 +286,42 @@ func (h *CryptoHandler) GetLiquidations(ctx *gin.Context) {
 	}
 	ctx.JSON(http.StatusOK, gin.H{"symbol": symbol, "data": data})
 }
+
+
+// GetSignal tính RSI(14) + MA(20) signal cho 1 symbol.
+//
+// Path param:  symbol   — e.g. "BTCUSDT"
+// Query param: timeframe — default "5m"
+//
+// Response 200:
+//
+//	{ "symbol":"BTCUSDT", "signal":"BUY"|"SELL"|"HOLD"|"NEUTRAL",
+//	  "confidence":0.75, "rsi14":28.5, "timeframe":"5m" }
+//
+// GET /api/v1/crypto/:symbol/signal
+func (h *CryptoHandler) GetSignal(ctx *gin.Context) {
+	symbol := ctx.Param("symbol")
+	if symbol == "" || !constants.IsValidBinanceSymbol(symbol) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "unsupported symbol"})
+		return
+	}
+	timeframe := ctx.DefaultQuery("timeframe", constants.DefaultCryptoVWAPInterval)
+
+	sig, err := h.AnalyticsSvc.ComputeSignal(ctx, symbol, timeframe)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"symbol":     symbol,
+		"signal":     sig.SignalType,
+		"confidence": sig.Confidence,
+		"rsi14":      sig.Value,
+		"timeframe":  sig.Timeframe,
+	})
+}
+
 
 // parseTimestamp parse string query param → int64 Unix timestamp (giây).
 // Trả về fallback nếu string rỗng hoặc không parse được.

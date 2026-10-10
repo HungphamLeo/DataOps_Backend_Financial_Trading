@@ -20,7 +20,7 @@ from typing import List
 
 import pyarrow as pa
 
-from cli.ingestion.schema.models import BinanceCandleRecord
+from cli.ingestion.schema.canonical import from_binance_kline_row
 from cli.ingestion.sources.client.binance_client import BinanceSpotClient, BinanceFuturesClient
 from cli.jobs._delta_writer import _table_path, write_records
 from cli.jobs.metrics import push_metrics, record_ingest
@@ -60,41 +60,10 @@ _INTERVAL = "1d"
 
 
 def _parse_kline_row(row: list, symbol: str, inst_type: str, now_iso: str) -> dict | None:
-    try:
-        rec = BinanceCandleRecord(
-            inst_id   = symbol,
-            inst_type = inst_type,
-            ts_ms     = int(row[6]),
-            open      = float(row[1]),
-            high      = float(row[2]),
-            low       = float(row[3]),
-            close     = float(row[4]),
-            vol       = float(row[5]),
-            vol_ccy   = float(row[7]),
-            confirm   = 1,
-        )
-    except Exception as exc:
-        logger.warning("_parse_kline_row: validation failed symbol=%s: %s", symbol, exc)
-        return None
-
-    year = datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc).strftime("%Y")
-    return {
-        "symbol":       rec.inst_id,
-        "inst_type":    rec.inst_type,
-        "interval":     _INTERVAL,
-        "ts_open_ms":   int(row[0]),
-        "ts_close_ms":  rec.ts_ms,
-        "open":         rec.open,
-        "high":         rec.high,
-        "low":          rec.low,
-        "close":        rec.close,
-        "volume":       rec.vol,
-        "quote_volume": rec.vol_ccy,
-        "num_trades":   int(row[8]),
-        "confirm":      True,
-        "year":         year,
-        "ingested_at":  now_iso,
-    }
+    result = from_binance_kline_row(row, symbol, inst_type, _INTERVAL, now_iso)
+    if result is None:
+        logger.warning("_parse_kline_row: validation failed symbol=%s", symbol)
+    return result
 
 
 _CHUNK_DAYS = 900  # < 1000 max per Binance request, buffer để tránh off-by-one
