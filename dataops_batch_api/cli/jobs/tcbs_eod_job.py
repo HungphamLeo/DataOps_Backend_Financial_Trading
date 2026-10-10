@@ -42,10 +42,10 @@ import pyarrow as pa
 
 from cli.ingestion.schema.models import TCBSMarketRecord
 from cli.ingestion.sources.client.tcbs_client import TCBSRestClient
+from cli.ingestion.sources.tcbs_constants_loader import TCBSConstants
 from cli.jobs._delta_writer import _table_path, write_records
 from cli.jobs.metrics import push_metrics, record_ingest
 from cli.flows.loader.load_config import load_exchange_config
-from cli.flows.loader.tcbs_constants_loader import TCBSConstants
 from log.logger_setup import logger_manager
 
 logger = logger_manager.get_logger(__name__)

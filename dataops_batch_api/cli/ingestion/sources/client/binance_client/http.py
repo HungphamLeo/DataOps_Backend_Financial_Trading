@@ -31,7 +31,7 @@ import os
 import time
 from typing import Optional
 
-from binance.spot import Spot
+from binance. import Spot
 
 from log.logger_setup import logger_manager
 
@@ -39,9 +39,8 @@ logger = logger_manager.get_logger(__name__)
 
 # ─── Base URLs (mirror từ binance_constants.yaml) ─────────────────────────────
 _SPOT_BASE_URL         = "https://api.binance.com"
-_FUTURES_USDM_BASE_URL = "https://fapi.binance.com"
 _TESTNET_SPOT_BASE_URL = "https://testnet.binance.vision"
-_TESTNET_FUTURES_URL   = "https://testnet.binancefuture.com"
+
 
 
 class BinanceClientBase:
@@ -153,10 +152,7 @@ class BinanceClientBase:
         """
         is_testnet = os.getenv("BINANCE_TESTNET", "false").lower() == "true"
 
-        if is_futures:
-            base_url = _TESTNET_FUTURES_URL if is_testnet else _FUTURES_USDM_BASE_URL
-        else:
-            base_url = _TESTNET_SPOT_BASE_URL if is_testnet else _SPOT_BASE_URL
+        base_url = _TESTNET_SPOT_BASE_URL if is_testnet else _SPOT_BASE_URL
 
         return cls(
             base_url=base_url,

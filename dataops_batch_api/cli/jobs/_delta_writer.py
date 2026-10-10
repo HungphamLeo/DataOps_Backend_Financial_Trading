@@ -23,7 +23,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 import pyarrow as pa
-from deltalake import DeltaTable, write_deltalake
+
+# Lazy import: allows tests to mock deltalake without requiring the package installed.
+# Production code always has deltalake available via requirements.txt.
+try:
+    from deltalake import DeltaTable, write_deltalake
+except ImportError:  # pragma: no cover
+    DeltaTable = None      # type: ignore[assignment,misc]
+    write_deltalake = None  # type: ignore[assignment]
 
 from log.logger_setup import logger_manager
 
