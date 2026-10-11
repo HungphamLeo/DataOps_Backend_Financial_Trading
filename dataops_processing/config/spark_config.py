@@ -1,63 +1,39 @@
 """
 spark_config.py — SparkSession builder cho dataops_processing.
 
-Cung cấp SparkSession đã được cấu hình sẵn với:
-  - Kafka source  (spark-sql-kafka)
-  - Delta Lake    (delta-spark 3.1.0)
-  - S3A / MinIO   (hadoop-aws + aws-java-sdk-bundle)
+Nhận SparkSettings từ get_settings() — không đọc os.environ trực tiếp.
+Tất cả tham số (packages, master, memory, checkpoint) đến từ processing_config.yaml
+với env var override qua settings.py.
 
-Env vars:
-  KAFKA_URL             default: localhost:9092
-  MINIO_ENDPOINT        default: http://minio:9010
-  MINIO_ACCESS_KEY      default: minioadmin
-  MINIO_SECRET_KEY      default: minioadmin
-  SPARK_APP_NAME        default: dataops-processing
-  SPARK_MASTER          default: local[*]
+Usage:
+    from dataops_processing.config.spark_config import build_spark_session, get_kafka_options
+    from dataops_processing.config.settings import get_settings
 
-Sử dụng:
-    from dataops_processing.config.spark_config import build_spark_session
-    spark = build_spark_session("vwap-job")
+    spark = build_spark_session("dataops-vwap-job")
+    kafka_opts = get_kafka_options()
 """
 from __future__ import annotations
 
-import os
 import logging
 
-logger = logging.getLogger(__name__)
+from dataops_processing.log.logger_setup import logger_manager
 
-# ---------------------------------------------------------------------------
-# Package versions — phải khớp với requirements.txt
-# Spark packages được download tự động qua spark.jars.packages khi submit.
-# ---------------------------------------------------------------------------
-_DELTA_VERSION = "3.1.0"
-_SCALA_VERSION = "2.12"
-_SPARK_VERSION = "3.5"
-
-# Maven coordinates cho Spark packages
-_SPARK_PACKAGES = ",".join([
-    # Kafka source/sink cho Spark Structured Streaming
-    f"org.apache.spark:spark-sql-kafka-0-10_{_SCALA_VERSION}:3.5.1",
-    # Delta Lake connector cho Spark 3.5
-    f"io.delta:delta-spark_{_SCALA_VERSION}:{_DELTA_VERSION}",
-    # S3A connector (Hadoop AWS) — dùng cho MinIO
-    "org.apache.hadoop:hadoop-aws:3.3.4",
-    "com.amazonaws:aws-java-sdk-bundle:1.12.262",
-])
+logger = logger_manager.get_logger(__name__)
 
 
 def build_spark_session(app_name: str | None = None):
     """
     Tạo SparkSession đã configured với Kafka + Delta + S3A.
 
+    Tất cả config đọc từ ProcessingSettings (settings.py + yaml + env override).
+    Không dùng os.environ trực tiếp ở đây.
+
     Args:
-        app_name: Tên job, hiển thị trên Spark UI. Default từ env SPARK_APP_NAME.
+        app_name: Override tên job trên Spark UI.
+                  None → dùng settings.spark.app_name từ config.
 
     Returns:
-        pyspark.sql.SparkSession — ready to use.
-
-    Note:
-        Hàm này lazy-import pyspark để test unit có thể mock mà không cần
-        cài Spark thật (tương tự lazy import deltalake trong _delta_writer.py).
+        pyspark.sql.SparkSession
     """
     try:
         from pyspark.sql import SparkSession
@@ -68,64 +44,75 @@ def build_spark_session(app_name: str | None = None):
             "Chạy: pip install pyspark==3.5.1 delta-spark==3.1.0"
         ) from exc
 
-    name = app_name or os.environ.get("SPARK_APP_NAME", "dataops-processing")
-    master = os.environ.get("SPARK_MASTER", "local[*]")
-    minio_endpoint = os.environ.get("MINIO_ENDPOINT", "http://minio:9010")
-    minio_access_key = os.environ.get("MINIO_ACCESS_KEY", "minioadmin")
-    minio_secret_key = os.environ.get("MINIO_SECRET_KEY", "minioadmin")
+    from dataops_processing.config.settings import get_settings
+    cfg = get_settings()
+    s   = cfg.spark
+    m   = cfg.minio
 
-    logger.info("Building SparkSession: app=%s master=%s minio=%s", name, master, minio_endpoint)
+    name = app_name or s.app_name
+
+    logger.info(
+        "Building SparkSession: app=%s master=%s minio=%s",
+        name, s.master, m.endpoint,
+    )
 
     builder = (
         SparkSession.builder
         .appName(name)
-        .master(master)
+        .master(s.master)
         # ── Delta Lake ──────────────────────────────────────────────────────
-        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
-        # ── Spark packages (tải lúc submit) ────────────────────────────────
-        .config("spark.jars.packages", _SPARK_PACKAGES)
+        .config("spark.sql.extensions",
+                "io.delta.sql.DeltaSparkSessionExtension")
+        .config("spark.sql.catalog.spark_catalog",
+                "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+        # ── Spark packages (download tại submit qua Maven) ──────────────────
+        .config("spark.jars.packages", s.spark_packages_str())
         # ── S3A / MinIO ─────────────────────────────────────────────────────
-        .config("spark.hadoop.fs.s3a.endpoint", minio_endpoint)
-        .config("spark.hadoop.fs.s3a.access.key", minio_access_key)
-        .config("spark.hadoop.fs.s3a.secret.key", minio_secret_key)
-        .config("spark.hadoop.fs.s3a.path.style.access", "true")   # MinIO bắt buộc
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
-        # ── Streaming tuning ────────────────────────────────────────────────
-        .config("spark.sql.streaming.checkpointLocation", "/tmp/spark-checkpoints")
-        .config("spark.streaming.stopGracefullyOnShutdown", "true")
-        # ── Shuffle / memory (local mode) ──────────────────────────────────
-        .config("spark.sql.shuffle.partitions", "8")
-        .config("spark.default.parallelism", "4")
+        .config("spark.hadoop.fs.s3a.endpoint",    m.endpoint)
+        .config("spark.hadoop.fs.s3a.access.key",  m.access_key)
+        .config("spark.hadoop.fs.s3a.secret.key",  m.secret_key)
+        .config("spark.hadoop.fs.s3a.path.style.access", str(m.path_style_access).lower())
+        .config("spark.hadoop.fs.s3a.impl",
+                "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .config("spark.hadoop.fs.s3a.connection.ssl.enabled",
+                str(m.ssl_enabled).lower())
+        # ── Streaming graceful shutdown ──────────────────────────────────────
+        .config("spark.streaming.stopGracefullyOnShutdown",
+                str(s.stop_gracefully_on_shutdown).lower())
+        # ── Shuffle / parallelism (local mode tuning) ───────────────────────
+        .config("spark.sql.shuffle.partitions", str(s.shuffle_partitions))
+        .config("spark.default.parallelism",    str(s.default_parallelism))
     )
 
     spark = configure_spark_with_delta_pip(builder).getOrCreate()
-    spark.sparkContext.setLogLevel("WARN")
+    spark.sparkContext.setLogLevel(s.log_level)
 
-    logger.info("SparkSession created: %s", spark.version)
+    logger.info("SparkSession created: Spark %s", spark.version)
     return spark
 
 
-def get_kafka_options(topic: str) -> dict[str, str]:
+def get_kafka_options(topic: str | None = None) -> dict[str, str]:
     """
     Trả về Kafka read options cho spark.readStream.format("kafka").
 
     Args:
-        topic: Kafka topic name (single topic, không dùng regex ở đây).
+        topic: Override Kafka topic. None → dùng kafka.topics.binance_trade_ticks từ config.
 
     Returns:
         Dict options để truyền vào .options(**opts).
     """
-    kafka_url = os.environ.get("KAFKA_URL", "localhost:9092")
+    from dataops_processing.config.settings import get_settings
+    cfg = get_settings()
+    k   = cfg.kafka
+
+    resolved_topic = topic or k.topic_trade_ticks
+
     return {
-        "kafka.bootstrap.servers": kafka_url,
-        "subscribe":               topic,
-        "startingOffsets":         "latest",
-        # Giới hạn số records mỗi micro-batch — tránh OOM khi lag lớn
-        "maxOffsetsPerTrigger":    "10000",
-        # Fail nhanh nếu Kafka unreachable thay vì retry vô hạn
-        "kafka.request.timeout.ms":  "10000",
-        "kafka.session.timeout.ms":  "30000",
-        "failOnDataLoss":            "false",  # tránh job crash khi topic bị compact
+        "kafka.bootstrap.servers":   k.bootstrap_servers,
+        "subscribe":                 resolved_topic,
+        "startingOffsets":           k.starting_offsets,
+        "maxOffsetsPerTrigger":      str(k.max_offsets_per_trigger),
+        "kafka.request.timeout.ms":  str(k.request_timeout_ms),
+        "kafka.session.timeout.ms":  str(k.session_timeout_ms),
+        "failOnDataLoss":            str(k.fail_on_data_loss).lower(),
     }

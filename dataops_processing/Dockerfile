@@ -54,5 +54,6 @@ COPY __init__.py /app/__init__.py
 # Ensure dataops_processing is on Python path
 ENV PYTHONPATH=/app
 
-# Default: run VWAP streaming job
-CMD ["python", "-m", "dataops_processing.jobs.vwap_job"]
+# Default: run VWAP streaming job via centralized runner
+# Override: docker run ... volume-bars --symbol BTCUSDT
+CMD ["python", "-m", "dataops_processing", "vwap"]

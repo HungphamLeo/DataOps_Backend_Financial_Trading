@@ -2,9 +2,9 @@
 tests/test_vwap_job.py — Unit tests cho vwap_job.py.
 
 Test 3 chức năng core mà không cần Spark thật hay Kafka running:
-  1. _strip_confluent_header   — Confluent wire-format header stripping
-  2. _parse_trade_payload      — JSON parse + validation logic
-  3. _write_to_influxdb        — InfluxDB sink (mock influxdb-client)
+  1. strip_confluent_header       — Confluent wire-format header stripping (models/trade.py)
+  2. TradeEvent.from_kafka_bytes  — JSON parse + validation logic (models/trade.py)
+  3. _write_to_influxdb           — InfluxDB sink (vwap_job.py, mock influxdb-client)
 
 Pattern: import trực tiếp các hàm pure Python, không khởi động SparkSession.
 """
@@ -13,13 +13,12 @@ import struct
 import unittest
 from unittest.mock import MagicMock, patch
 
-from dataops_processing.jobs.vwap_job import (
-    _parse_trade_payload,
-    _strip_confluent_header,
-    _write_to_influxdb,
-    INFLUX_MEASUREMENT,
-    INFLUX_TAG_INTERVAL_5M,
-)
+from dataops_processing.models.trade import TradeEvent, strip_confluent_header
+from dataops_processing.jobs.vwap_job import _write_to_influxdb
+
+# Constants dùng trong test — lấy trực tiếp từ config yaml (không hardcode)
+INFLUX_MEASUREMENT   = "vwap"
+INFLUX_TAG_INTERVAL_5M = "5m"
 
 
 # ---------------------------------------------------------------------------
@@ -27,17 +26,16 @@ from dataops_processing.jobs.vwap_job import (
 # ---------------------------------------------------------------------------
 
 class TestStripConfluentHeader(unittest.TestCase):
-    """Kiểm tra _strip_confluent_header() xử lý đúng cả 2 trường hợp."""
+    """Kiểm tra strip_confluent_header() xử lý đúng cả 2 trường hợp."""
 
     def test_strips_5_byte_header_when_magic_byte_present(self):
         """Payload có magic byte 0x00 + 4-byte schema_id → strip 5 bytes."""
         schema_id = 42
         actual_payload = b'{"instId":"BTCUSDT","price":65000.0}'
-        # Build Confluent wire-format: [0x00][schema_id BE 4 bytes][payload]
         header = struct.pack(">bI", 0x00, schema_id)
         raw = header + actual_payload
 
-        result = _strip_confluent_header(raw)
+        result = strip_confluent_header(raw)
 
         self.assertEqual(result, actual_payload)
 
@@ -45,7 +43,7 @@ class TestStripConfluentHeader(unittest.TestCase):
         """Plain JSON (không có header) → trả nguyên vẹn."""
         plain_json = b'{"instId":"ETHUSDT","price":3500.0,"size":0.5}'
 
-        result = _strip_confluent_header(plain_json)
+        result = strip_confluent_header(plain_json)
 
         self.assertEqual(result, plain_json)
 
@@ -53,24 +51,23 @@ class TestStripConfluentHeader(unittest.TestCase):
         """Payload < 6 bytes → không thể có header → trả nguyên."""
         short_payload = b'\x00\x01\x02'
 
-        result = _strip_confluent_header(short_payload)
+        result = strip_confluent_header(short_payload)
 
         self.assertEqual(result, short_payload)
 
 
 # ---------------------------------------------------------------------------
-# Test 2: Trade Payload Parsing
+# Test 2: Trade Payload Parsing — TradeEvent.from_kafka_bytes
 # ---------------------------------------------------------------------------
 
 class TestParseTradePayload(unittest.TestCase):
-    """Kiểm tra _parse_trade_payload() parse đúng và reject invalid records."""
+    """Kiểm tra TradeEvent.from_kafka_bytes() parse đúng và reject invalid records."""
 
     def _make_raw(self, data: dict) -> bytes:
-        """Helper: encode dict → bytes (plain JSON, no header)."""
         return json.dumps(data).encode("utf-8")
 
     def test_parses_valid_trade_event(self):
-        """TradeEvent đầy đủ field → dict với đúng symbol, price, size, side, ts_ms."""
+        """TradeEvent đầy đủ field → object với đúng symbol, price, size, side, ts_ms."""
         raw = self._make_raw({
             "instId":      "BTCUSDT",
             "tradeId":     "123456",
@@ -82,25 +79,24 @@ class TestParseTradePayload(unittest.TestCase):
             "instType":    "SPOT",
         })
 
-        result = _parse_trade_payload(raw)
+        result = TradeEvent.from_kafka_bytes(raw)
 
         self.assertIsNotNone(result)
-        self.assertEqual(result["symbol"], "BTCUSDT")
-        self.assertAlmostEqual(result["price"], 65000.5)
-        self.assertAlmostEqual(result["size"], 0.01)
-        self.assertEqual(result["side"], "buy")
-        self.assertEqual(result["ts_ms"], 1700000000000)
+        self.assertEqual(result.symbol, "BTCUSDT")
+        self.assertAlmostEqual(result.price, 65000.5)
+        self.assertAlmostEqual(result.size, 0.01)
+        self.assertEqual(result.side, "buy")
+        self.assertEqual(result.ts_ms, 1700000000000)
 
     def test_returns_none_for_missing_required_fields(self):
         """Thiếu field bắt buộc → None (record bị skip, không crash job)."""
-        # Thiếu 'size'
         raw = self._make_raw({
             "instId": "ETHUSDT",
             "price":  3500.0,
             "tsMs":   1700000000000,
         })
 
-        result = _parse_trade_payload(raw)
+        result = TradeEvent.from_kafka_bytes(raw)
 
         self.assertIsNone(result)
 
@@ -109,11 +105,11 @@ class TestParseTradePayload(unittest.TestCase):
         raw = self._make_raw({
             "instId": "SOLUSDT",
             "price":  150.0,
-            "size":   0.0,       # zero size — invalid
+            "size":   0.0,
             "tsMs":   1700000000000,
         })
 
-        result = _parse_trade_payload(raw)
+        result = TradeEvent.from_kafka_bytes(raw)
 
         self.assertIsNone(result)
 
@@ -126,13 +122,13 @@ class TestParseTradePayload(unittest.TestCase):
             "tsMs":   1700000000000,
         })
 
-        result = _parse_trade_payload(raw)
+        result = TradeEvent.from_kafka_bytes(raw)
 
         self.assertIsNone(result)
 
     def test_returns_none_for_malformed_bytes(self):
         """Non-JSON bytes → None (không crash)."""
-        result = _parse_trade_payload(b"\xff\xfe garbage not json")
+        result = TradeEvent.from_kafka_bytes(b"\xff\xfe garbage not json")
 
         self.assertIsNone(result)
 
@@ -144,13 +140,13 @@ class TestParseTradePayload(unittest.TestCase):
             "size":   1.0,
             "tsMs":   1700000000000,
         }).encode()
-        header = struct.pack(">bI", 0x00, 7)   # magic byte + schema_id=7
+        header = struct.pack(">bI", 0x00, 7)
         raw = header + payload
 
-        result = _parse_trade_payload(raw)
+        result = TradeEvent.from_kafka_bytes(raw)
 
         self.assertIsNotNone(result)
-        self.assertEqual(result["symbol"], "BNBUSDT")
+        self.assertEqual(result.symbol, "BNBUSDT")
 
 
 # ---------------------------------------------------------------------------

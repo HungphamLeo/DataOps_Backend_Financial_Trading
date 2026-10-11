@@ -5,81 +5,33 @@ volume_bars_job.py — Simplified Volume Bars Batch Job.
 ghi Delta Silver (volume_bars).
 
 Volume Bars (De Prado simplified):
-    - Thay vì aggregate theo time (1h candle), aggregate theo volume threshold
-    - 1 bar = khi cumulative volume vượt ngưỡng N (config theo symbol)
+    - Aggregate theo cumulative volume threshold thay vì thời gian
+    - 1 bar = khi cumsum volume vượt ngưỡng N (config per symbol trong YAML)
     - Output: OHLCV per bar với bar_index, open_ts, close_ts
 
-Ý nghĩa tài chính:
-    - Volume bars lọc nhiễu khi market ít hoạt động (bars rộng = thời gian dài nhưng ít trade)
-    - Giúp phát hiện pattern tốt hơn time bars cho thuật toán mean-reversion
-
-Input:
-    Delta Bronze s3a://binance-datalake/delta/bronze/binance_candles_1d
-    Schema: symbol, inst_type, interval, ts_open_ms, ts_close_ms, open, high, low, close, volume
-
-Output:
-    Delta Silver s3a://binance-datalake/delta/silver/volume_bars
-    Schema: symbol, inst_type, bar_index, open, high, low, close,
-            total_volume, num_candles, bar_open_ts, bar_close_ts, ingested_at
-
-Config:
-    dataops_processing/config/processing_config.yaml → volume_bars section
-
-Chạy:
-    python -m dataops_processing.jobs.volume_bars_job --symbol BTCUSDT
-    python -m dataops_processing.jobs.volume_bars_job  # all symbols in config
+Config & Paths đến từ:
+    Dependency Injection từ ProcessingOrchestrator (Settings + PathResolver).
+    KHÔNG có hardcode nào trong file này.
 """
 from __future__ import annotations
 
-import argparse
 import logging
-import os
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Iterator
+from typing import TYPE_CHECKING, Any, Optional
 
-import yaml
+from dataops_processing.core.base_job import BaseProcessingJob
+from dataops_processing.core.registry import JobRegistry
+from dataops_processing.log.logger_setup import logger_manager
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from pyspark.sql import SparkSession
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-_CONFIG_PATH = Path(__file__).parent.parent / "config" / "processing_config.yaml"
-
-_S3A_ENDPOINT   = os.environ.get("MINIO_ENDPOINT",   "http://minio:9010")
-_S3A_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "minioadmin")
-_S3A_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "minioadmin")
-_BUCKET         = os.environ.get("DELTA_BUCKET",     "binance-datalake")
+logger = logger_manager.get_logger(__name__)
 
 
-def _load_config() -> dict:
-    with open(_CONFIG_PATH, "r", encoding="utf-8") as fh:
-        return yaml.safe_load(fh)
-
-
-def _bronze_path(symbol: str) -> str:
-    return f"s3a://{_BUCKET}/delta/bronze/binance_candles_1d"
-
-
-def _silver_path() -> str:
-    return f"s3a://{_BUCKET}/delta/silver/volume_bars"
-
-
-def _s3a_opts() -> dict:
-    return {
-        "fs.s3a.endpoint":              _S3A_ENDPOINT,
-        "fs.s3a.access.key":            _S3A_ACCESS_KEY,
-        "fs.s3a.secret.key":            _S3A_SECRET_KEY,
-        "fs.s3a.path.style.access":     "true",
-        "fs.s3a.impl":                  "org.apache.hadoop.fs.s3a.S3AFileSystem",
-        "fs.s3a.aws.credentials.provider": "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
-    }
-
-
-# ---------------------------------------------------------------------------
-# Core algorithm — pure Python (không dùng Spark), testable independently
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Core algorithm — pure Python (testable mà không cần Spark)
+# =============================================================================
 
 def assign_volume_bars(rows: list[dict], threshold: float) -> list[dict]:
     """
@@ -88,37 +40,37 @@ def assign_volume_bars(rows: list[dict], threshold: float) -> list[dict]:
     Args:
         rows:      List of candle dicts, sorted by ts_open_ms ascending.
                    Required keys: ts_open_ms, ts_close_ms, open, high, low, close, volume.
-        threshold: Volume per bar, e.g. 500 for BTCUSDT.
+        threshold: Volume per bar (từ settings.volume_bars_job.thresholds[symbol]).
 
     Returns:
-        List of dicts — 1 dict per bar với OHLCV aggregated.
+        List of VolumeBar-compatible dicts — 1 dict per bar với OHLCV aggregated.
         Empty list nếu rows rỗng.
 
     Algorithm:
-        Duyệt tuần tự, cộng dồn volume.
-        Khi cumsum >= threshold → đóng bar hiện tại, bắt đầu bar mới.
-        Bar cuối được emit dù chưa đủ threshold (partial bar).
+        O(n) — duyệt tuần tự, cộng dồn volume.
+        Khi cumsum >= threshold → đóng bar hiện tại, reset state cho bar tiếp theo.
+        Partial bar cuối được emit dù chưa đủ threshold.
     """
     if not rows:
         return []
 
     bars: list[dict] = []
     bar_index = 0
-    cum_vol = 0.0
-    bar_open = rows[0]["open"]
-    bar_high = rows[0]["high"]
-    bar_low  = rows[0]["low"]
+    cum_vol   = 0.0
+    bar_open  = rows[0]["open"]
+    bar_high  = rows[0]["high"]
+    bar_low   = rows[0]["low"]
     bar_open_ts  = rows[0]["ts_open_ms"]
     bar_close_ts = rows[0]["ts_close_ms"]
-    num_candles = 0
+    num_candles  = 0
 
     for i, row in enumerate(rows):
-        cum_vol     += row["volume"]
-        bar_high     = max(bar_high, row["high"])
-        bar_low      = min(bar_low,  row["low"])
-        bar_close    = row["close"]
-        bar_close_ts = row["ts_close_ms"]
-        num_candles += 1
+        cum_vol      += row["volume"]
+        bar_high      = max(bar_high, row["high"])
+        bar_low       = min(bar_low,  row["low"])
+        bar_close     = row["close"]
+        bar_close_ts  = row["ts_close_ms"]
+        num_candles  += 1
 
         if cum_vol >= threshold:
             bars.append({
@@ -133,9 +85,9 @@ def assign_volume_bars(rows: list[dict], threshold: float) -> list[dict]:
                 "bar_close_ts": bar_close_ts,
             })
             bar_index += 1
-            # Reset cho bar tiếp theo — O(1) index thay vì O(n) list.index()
+            # O(1) reset — dùng index thay vì rows.index(row) O(n)
             if i + 1 < len(rows):
-                next_row = rows[i + 1]
+                next_row     = rows[i + 1]
                 bar_open     = next_row["open"]
                 bar_high     = next_row["high"]
                 bar_low      = next_row["low"]
@@ -144,7 +96,7 @@ def assign_volume_bars(rows: list[dict], threshold: float) -> list[dict]:
             cum_vol     = 0.0
             num_candles = 0
 
-    # Partial bar cuối nếu còn data
+    # Partial bar cuối nếu còn data chưa đóng bar
     if cum_vol > 0 and num_candles > 0:
         bars.append({
             "bar_index":    bar_index,
@@ -161,152 +113,172 @@ def assign_volume_bars(rows: list[dict], threshold: float) -> list[dict]:
     return bars
 
 
-# ---------------------------------------------------------------------------
-# Spark batch job
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Concrete Strategy: Volume Bars Batch Job
+# =============================================================================
 
-def run(symbol: str | None = None) -> dict:
+@JobRegistry.register("volume-bars")
+class VolumeBarsBatchJob(BaseProcessingJob):
     """
-    Chạy Volume Bars batch job.
-
-    Args:
-        symbol: Specific symbol (e.g. "BTCUSDT"), None = chạy tất cả symbols trong config.
-
-    Returns:
-        {"written": int, "symbols": list, "errors": int}
+    Job tính toán Volume Bars batch từ Delta Bronze sang Delta Silver.
     """
-    try:
-        from pyspark.sql import SparkSession
-        from pyspark.sql import functions as F
-        from pyspark.sql.types import (
-            StructType, StructField,
-            StringType, IntegerType, DoubleType, LongType,
-        )
-        from delta import configure_spark_with_delta_pip
-    except ImportError as exc:
-        logger.error("PySpark or Delta not installed: %s", exc)
-        return {"written": 0, "symbols": [], "errors": 1}
 
-    cfg = _load_config()
-    vol_thresholds: dict[str, float] = cfg.get("volume_bars", {})
+    @property
+    def name(self) -> str:
+        return "volume-bars"
 
-    symbols_to_run = [symbol] if symbol else list(vol_thresholds.keys())
-    if not symbols_to_run:
-        logger.warning("volume_bars_job: no symbols configured")
-        return {"written": 0, "symbols": [], "errors": 0}
+    @property
+    def job_type(self) -> str:
+        return "batch"
 
-    # Build SparkSession
-    builder = (
-        SparkSession.builder
-        .appName("dataops-volume-bars-job")
-        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
-    )
-    for k, v in _s3a_opts().items():
-        builder = builder.config(k, v)
+    def execute(
+        self,
+        spark: Optional["SparkSession"] = None,
+        symbol: Optional[str] = None,
+        **kwargs: Any,
+    ) -> dict:
+        """
+        Chạy Volume Bars batch job.
 
-    try:
-        spark = configure_spark_with_delta_pip(builder).getOrCreate()
-    except Exception as exc:
-        logger.error("volume_bars_job: SparkSession creation failed: %s", exc)
-        return {"written": 0, "symbols": symbols_to_run, "errors": 1}
+        Args:
+            spark: SparkSession tùy chọn.
+            symbol: Specific symbol (e.g. 'BTCUSDT'). None = chạy tất cả symbols trong config.
 
-    # Output schema
-    out_schema = StructType([
-        StructField("symbol",       StringType(),  False),
-        StructField("inst_type",    StringType(),  False),
-        StructField("bar_index",    IntegerType(), False),
-        StructField("open",         DoubleType(),  False),
-        StructField("high",         DoubleType(),  False),
-        StructField("low",          DoubleType(),  False),
-        StructField("close",        DoubleType(),  False),
-        StructField("total_volume", DoubleType(),  False),
-        StructField("num_candles",  IntegerType(), False),
-        StructField("bar_open_ts",  LongType(),    False),
-        StructField("bar_close_ts", LongType(),    False),
-        StructField("ingested_at",  StringType(),  False),
-    ])
-
-    now_iso = datetime.now(timezone.utc).isoformat()
-    total_written = 0
-    errors = 0
-    ok_symbols = []
-
-    for sym in symbols_to_run:
-        threshold = vol_thresholds.get(sym)
-        if threshold is None:
-            logger.warning("volume_bars_job: no threshold configured for %s — skip", sym)
-            continue
-
+        Returns:
+            {"written": int, "symbols": list, "errors": int}
+        """
         try:
-            bronze_df = (
-                spark.read.format("delta")
-                .load(_bronze_path(sym))
-                .filter(F.col("symbol") == sym)
-                .filter(F.col("interval") == "1d")
-                .orderBy("ts_open_ms")
-                .select("symbol", "inst_type", "ts_open_ms", "ts_close_ms",
-                        "open", "high", "low", "close", "volume")
+            from pyspark.sql import functions as F
+            from pyspark.sql.types import (
+                DoubleType, IntegerType, LongType, StringType,
+                StructField, StructType,
+            )
+        except ImportError as exc:
+            logger.error("PySpark or Delta not installed: %s", exc, exc_info=True)
+            return {"written": 0, "symbols": [], "errors": 1}
+
+        vb_cfg = self.settings.volume_bars_job
+        symbols_to_run = [symbol] if symbol else list(vb_cfg.thresholds.keys())
+        if not symbols_to_run:
+            logger.warning("volume_bars_job: no symbols configured in processing_config.yaml")
+            return {"written": 0, "symbols": [], "errors": 0}
+
+        s = self.settings.spark
+        m = self.settings.minio
+
+        created_spark_internally = False
+        if spark is None:
+            from pyspark.sql import SparkSession
+            from delta import configure_spark_with_delta_pip
+            builder = (
+                SparkSession.builder
+                .appName("dataops-volume-bars-job")
+                .master(s.master)
+                .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+                .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+                .config("spark.jars.packages", s.spark_packages_str())
+                .config("spark.hadoop.fs.s3a.endpoint",               m.endpoint)
+                .config("spark.hadoop.fs.s3a.access.key",             m.access_key)
+                .config("spark.hadoop.fs.s3a.secret.key",             m.secret_key)
+                .config("spark.hadoop.fs.s3a.path.style.access",      str(m.path_style_access).lower())
+                .config("spark.hadoop.fs.s3a.impl",                   "org.apache.hadoop.fs.s3a.S3AFileSystem")
+                .config("spark.hadoop.fs.s3a.connection.ssl.enabled", str(m.ssl_enabled).lower())
+                .config("spark.sql.shuffle.partitions",               str(s.shuffle_partitions))
             )
 
-            rows = [r.asDict() for r in bronze_df.collect()]
-            if not rows:
-                logger.warning("volume_bars_job: no bronze data for %s", sym)
+            try:
+                spark = configure_spark_with_delta_pip(builder).getOrCreate()
+                spark.sparkContext.setLogLevel(s.log_level)
+                created_spark_internally = True
+            except Exception as exc:
+                logger.error("volume_bars_job: SparkSession creation failed: %s", exc, exc_info=True)
+                return {"written": 0, "symbols": symbols_to_run, "errors": 1}
+
+        out_schema = StructType([
+            StructField("symbol",       StringType(),  False),
+            StructField("inst_type",    StringType(),  False),
+            StructField("bar_index",    IntegerType(), False),
+            StructField("open",         DoubleType(),  False),
+            StructField("high",         DoubleType(),  False),
+            StructField("low",          DoubleType(),  False),
+            StructField("close",        DoubleType(),  False),
+            StructField("total_volume", DoubleType(),  False),
+            StructField("num_candles",  IntegerType(), False),
+            StructField("bar_open_ts",  LongType(),    False),
+            StructField("bar_close_ts", LongType(),    False),
+            StructField("ingested_at",  StringType(),  False),
+        ])
+
+        bronze_path = self.paths.delta_bronze_path(vb_cfg.source_table)
+        silver_path = self.paths.delta_silver_path(vb_cfg.delta_table)
+        now_iso     = datetime.now(timezone.utc).isoformat()
+
+        total_written = 0
+        errors        = 0
+        ok_symbols    = []
+
+        for sym in symbols_to_run:
+            threshold = vb_cfg.thresholds.get(sym)
+            if threshold is None:
+                logger.warning("volume_bars_job: no threshold for %s — skip (add to config)", sym)
                 continue
 
-            inst_type = rows[0].get("inst_type", "SPOT")
-            bars = assign_volume_bars(rows, threshold)
+            try:
+                bronze_df = (
+                    spark.read.format("delta")
+                    .load(bronze_path)
+                    .filter(F.col("symbol") == sym)
+                    .filter(F.col("interval") == vb_cfg.source_interval)
+                    .orderBy("ts_open_ms")
+                    .select("symbol", "inst_type", "ts_open_ms", "ts_close_ms",
+                            "open", "high", "low", "close", "volume")
+                )
 
-            if not bars:
-                logger.warning("volume_bars_job: no bars generated for %s", sym)
-                continue
+                rows = [r.asDict() for r in bronze_df.collect()]
+                if not rows:
+                    logger.warning("volume_bars_job: no bronze data for %s", sym)
+                    continue
 
-            # Enrich với symbol/inst_type/ingested_at
-            records = [
-                {
-                    "symbol":       sym,
-                    "inst_type":    inst_type,
-                    "ingested_at":  now_iso,
-                    **bar,
-                }
-                for bar in bars
-            ]
+                inst_type = rows[0].get("inst_type", "SPOT")
+                bars      = assign_volume_bars(rows, threshold)
 
-            bar_df = spark.createDataFrame(records, schema=out_schema)
-            (
-                bar_df.write.format("delta")
-                .mode("overwrite")
-                .option("overwriteSchema", "true")
-                .partitionBy("symbol")
-                .save(_silver_path())
-            )
+                if not bars:
+                    logger.warning("volume_bars_job: no bars generated for %s (threshold=%.0f)", sym, threshold)
+                    continue
 
-            total_written += len(records)
-            ok_symbols.append(sym)
-            logger.info("volume_bars_job: %s → %d bars (threshold=%.0f)", sym, len(bars), threshold)
+                records = [
+                    {"symbol": sym, "inst_type": inst_type, "ingested_at": now_iso, **bar}
+                    for bar in bars
+                ]
 
-        except Exception as exc:
-            logger.error("volume_bars_job: %s failed: %s", sym, exc)
-            errors += 1
+                bar_df = spark.createDataFrame(records, schema=out_schema)
+                (
+                    bar_df.write.format("delta")
+                    .mode("overwrite")
+                    .option("overwriteSchema", str(vb_cfg.overwrite_schema).lower())
+                    .partitionBy("symbol")
+                    .save(silver_path)
+                )
 
-    spark.stop()
-    logger.info("volume_bars_job: DONE written=%d symbols=%s errors=%d",
-                total_written, ok_symbols, errors)
-    return {"written": total_written, "symbols": ok_symbols, "errors": errors}
+                total_written += len(records)
+                ok_symbols.append(sym)
+                logger.info("volume_bars_job: %s → %d bars (threshold=%.0f)", sym, len(bars), threshold)
+
+            except Exception as exc:
+                logger.error("volume_bars_job: symbol=%s failed — %s", sym, exc, exc_info=True)
+                errors += 1
+
+        if created_spark_internally:
+            spark.stop()
+
+        result = {"written": total_written, "symbols": ok_symbols, "errors": errors}
+        logger.info("volume_bars_job: DONE %s", result)
+        return result
 
 
-# ---------------------------------------------------------------------------
-# CLI entry point
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(levelname)s %(name)s — %(message)s")
-
-    parser = argparse.ArgumentParser(description="Volume Bars Batch Job")
-    parser.add_argument("--symbol", type=str, default=None,
-                        help="Symbol to process (e.g. BTCUSDT). Default: all from config.")
-    args = parser.parse_args()
-
-    result = run(symbol=args.symbol)
-    print(result)
+def run(symbol: Optional[str] = None, spark: Optional["SparkSession"] = None) -> dict:
+    """Backward-compatible functional entry point."""
+    from dataops_processing.config.paths import get_path_resolver
+    from dataops_processing.config.settings import get_settings
+    job = VolumeBarsBatchJob(settings=get_settings(), paths=get_path_resolver())
+    return job.run(spark=spark, symbol=symbol)

@@ -31,7 +31,7 @@ import os
 import time
 from typing import Optional
 
-from binance. import Spot
+from binance.spot import Spot
 
 from log.logger_setup import logger_manager
 

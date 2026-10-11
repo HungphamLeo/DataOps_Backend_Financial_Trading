@@ -80,7 +80,6 @@ curl -s -X POST https://openapi.tcbs.com.vn/gaia/v1/oauth2/openapi/token \
   -d '{"apiKey":"YOUR_API_KEY","otp":"YOUR_OTP_6DIGITS"}' \
   | python3 -m json.tool
 
-
 ```
 ---
 #### Từ PowerShell (Windows)
@@ -155,6 +154,7 @@ docker logs dataops-stream-producer --tail=20
 ---
 ---
 ---
+---
 ```
 [TCBSPoller] Starting — indexes=[HOSE VN30 HNX]
 [TCBSPoller] Cron jobs started
@@ -168,6 +168,7 @@ docker logs dataops-batch-api --tail=30
 ```
 ---
 **Log bình thường:**
+---
 ---
 ---
 ---

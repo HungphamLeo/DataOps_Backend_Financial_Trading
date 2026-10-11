@@ -30,9 +30,10 @@ Tài liệu này định nghĩa **chiến lược test 4 tầng** cho toàn bộ
 | `dataops-stream-producer` | `pkg/producer/partitioner_test.go` | 3 | Symbol → partition mapping |
 | `dataops_backend_api` | `api/rest/rest_test.go` | 6 | Route existence, JWT, symbol validation |
 | `dataops_batch_api` | `tests/test_delta_writer.py` | 13 | S3 URI, AWS env, PyArrow schema, Delta write |
+| `dataops_processing` | `tests/test_core_orchestrator.py` | 10 | StoragePathResolver, JobRegistry, Orchestrator DI |
 | `dataops_processing` | `tests/test_vwap_job.py` | 10 | Header strip, JSON parse, InfluxDB line protocol |
 | `dataops_processing` | `tests/test_volume_bars_job.py` | 6 | Volume bar cumsum algorithm (O(n)) |
-| **Tổng** | | **41** | ~5–10% overall |
+| **Tổng** | | **51** | ~10–15% overall |
 
 ### 2.2 Khoảng trống test quan trọng
 
@@ -219,6 +220,21 @@ Tài liệu này định nghĩa **chiến lược test 4 tầng** cho toàn bộ
 | `test_assign_volume_bars_single_row_exact` | 1 row = 1 threshold → 1 bar |
 | `test_assign_volume_bars_large_input_performance` | 10,000 rows < 0.1s (O(n) regression) |
 
+#### 3.4.5 Core Architecture & Orchestrator Pattern ✅ (Đã có — 10 tests)
+**File:** `tests/test_core_orchestrator.py`
+
+| Test case | Mô tả |
+|-----------|-------|
+| `TestStoragePathResolver_BronzePath` | Sinh đường dẫn S3A Bronze: `s3a://{bucket}/delta/bronze/{table}` |
+| `TestStoragePathResolver_SilverPath` | Sinh đường dẫn S3A Silver: `s3a://{bucket}/{silver_base}/{table}` |
+| `TestStoragePathResolver_GoldPath` | Sinh đường dẫn S3A Gold: `s3a://{bucket}/delta/gold/{table}` |
+| `TestStoragePathResolver_BuildPath` | Chuẩn hóa đường dẫn theo layer/domain/entity/interval |
+| `TestStoragePathResolver_CheckpointPath` | Sinh checkpoint directory cho streaming sinks |
+| `TestJobRegistry_RegisterAndCreate` | Đăng ký class qua decorator & Factory tạo instance với DI settings/paths |
+| `TestJobRegistry_UnknownJobKeyError` | Throw `KeyError` khi dispatch job chưa được đăng ký |
+| `TestOrchestrator_DispatchJob` | Orchestrator khởi tạo và dispatch job với kwargs truyền vào |
+| `TestOrchestrator_ConcreteJobsRegistered` | Tự động phát hiện và đăng ký sẵn `vwap` và `volume-bars` |
+
 ---
 
 ## 4. Tầng 2 — Integration Tests (Mocked Services)
@@ -311,7 +327,7 @@ Tài liệu này định nghĩa **chiến lược test 4 tầng** cho toàn bộ
 ### 4.3 dataops_processing — Spark Logic
 
 #### 4.3.1 VWAP Calculation (Pure Math) ❌
-**File:** `tests/test_vwap_calculation.py` (mới)  
+**File:** `tests/test_vwap_calculation.py` (mới)
 **Mock:** Không cần (pure function test)
 
 | Test case | Mô tả | Expected |
@@ -320,6 +336,15 @@ Tài liệu này định nghĩa **chiến lược test 4 tầng** cho toàn bộ
 | `TestVWAP_MultiTrade` | prices=[50000,51000], sizes=[1,2] | VWAP = (50000+102000)/3 = 50666.67 |
 | `TestVWAP_ZeroVolume` | Tất cả sizes = 0 | None hoặc raise ZeroDivisionError |
 | `TestVWAP_WeightedCorrect` | Nhấn mạnh rằng NOT simple average | `Σ(p×q)/Σq` khác `avg(p)` |
+
+#### 4.3.2 BaseProcessingJob Lifecycle & Validation ❌
+**File:** `tests/test_base_job.py` (mới)
+**Mock:** Mock SparkSession
+
+| Test case | Mô tả | Expected |
+|-----------|-------|----------|
+| `TestBaseProcessingJob_ValidateParams` | Gọi `run()` với invalid params | Raise ValueError trước khi `execute()` |
+| `TestBaseProcessingJob_ExecutionLifecycle` | Kiểm tra flow `validate_params` → `execute` | Log đúng correlation_id và exit status |
 
 ---
 
@@ -458,9 +483,9 @@ Binance REST /klines → batch_api job → Delta Bronze (MinIO)
 ### 6.3 Luồng VWAP Processing (Kafka → Spark → InfluxDB)
 
 ```
-Kafka (binance.trade.ticks) → processing (Spark Streaming) → InfluxDB + Delta Silver
-                                                                        ↓
-                                               backend_api GET /api/v1/crypto/:symbol/vwap
+Kafka (binance.trade.ticks) → processing (python -m dataops_processing vwap) → InfluxDB + Delta Silver
+                                                                                      ↓
+                                                             backend_api GET /api/v1/crypto/:symbol/vwap
 ```
 
 | Bước | Hành động | Kiểm tra |
