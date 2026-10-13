@@ -92,6 +92,16 @@ func TestPublicRoutes(t *testing.T) {
 		t.Errorf("Expected route /api/v1/login to exist, got 404")
 	}
 
+	// Test 1b: Root and API v1 Healthcheck endpoints
+	for _, path := range []string{"/health", "/api/v1/health"} {
+		reqHealth, _ := http.NewRequest(http.MethodGet, path, nil)
+		wHealth := httptest.NewRecorder()
+		router.ServeHTTP(wHealth, reqHealth)
+		if wHealth.Code != http.StatusOK {
+			t.Errorf("Expected route %s to return 200 OK, got %d", path, wHealth.Code)
+		}
+	}
+
 	// Test 2: Protected crypto ticker endpoint without JWT token -> 401 Unauthorized
 	reqTicker, _ := http.NewRequest(http.MethodGet, "/api/v1/crypto/ticker?symbol=BTCUSDT", nil)
 	wTicker := httptest.NewRecorder()

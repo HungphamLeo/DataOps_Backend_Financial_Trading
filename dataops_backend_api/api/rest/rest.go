@@ -69,6 +69,9 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 	authHandler := &AuthHandler{AuthSvc: svc.AuthSvc}
 	authHandler.RegisterPublic(public)
 
+	// Root health check endpoint for Docker container & load balancer probes
+	router.GET("/health", authHandler.Health)
+
 	// Crypto Analytics (Binance data)
 	cryptoHandler := &CryptoHandler{AnalyticsSvc: svc.CryptoSvc}
 	cryptoHandler.Register(protected.Group("/crypto"))

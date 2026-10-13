@@ -8,6 +8,7 @@ import (
 	"dataops-backend-api/models"
 	"dataops-backend-api/utils"
 	"log"
+	"time"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -32,11 +33,22 @@ func InitializeDatabase(cfg *configuration.Config) (*Gorm, error) {
 	}
 
 	var err error
-	DB, err = gorm.Open(mysql.Open(cfg.MySQL.DNS), &gorm.Config{
-		Logger: logger.Default.LogMode(logMode),
-	})
+	const maxRetries = 10
+	const retryInterval = 2 * time.Second
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		DB, err = gorm.Open(mysql.Open(cfg.MySQL.DNS), &gorm.Config{
+			Logger: logger.Default.LogMode(logMode),
+		})
+		if err == nil {
+			break
+		}
+		log.Printf("[Database] connect attempt %d/%d failed: %v. Retrying in %v...", attempt, maxRetries, err, retryInterval)
+		time.Sleep(retryInterval)
+	}
+
 	if err != nil {
-		log.Printf("[Database] connect error: %v", err)
+		log.Printf("[Database] connect error after %d attempts: %v", maxRetries, err)
 		return nil, err
 	}
 
