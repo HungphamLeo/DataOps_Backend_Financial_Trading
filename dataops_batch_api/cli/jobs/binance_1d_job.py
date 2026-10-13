@@ -11,6 +11,8 @@ Chiến lược:
 Delta table: s3://binance-datalake/delta/bronze/binance_candles_1d
 Partition:   inst_type, symbol, year
 
+Chỉ ingest Binance Spot (không dùng Futures).
+
 Schema: giống binance_candles_4h nhưng interval = "1d"
 """
 from __future__ import annotations
@@ -21,22 +23,13 @@ from typing import List
 import pyarrow as pa
 
 from cli.ingestion.schema.canonical import from_binance_kline_row
-from cli.ingestion.sources.client.binance_client import BinanceSpotClient, BinanceFuturesClient
+from cli.ingestion.sources.client.binance_client import BinanceSpotClient
 from cli.jobs._delta_writer import _table_path, write_records
 from cli.jobs.metrics import push_metrics, record_ingest
 from cli.flows.loader.load_config import load_exchange_config
 from log.logger_setup import logger_manager
 
 logger = logger_manager.get_logger(__name__)
-
-# CloudFront 403 geo-block tại VN nodes (SGN*, HAN*) cho /fapi/v1/klines — bị chặn ở tầng CDN,
-# không phải lỗi code. Không tính vào errors counter; log WARN thay vì ERROR.
-_GEO_BLOCK_NODES = ("SGN", "HAN")
-
-def _is_geo_blocked(exc: Exception) -> bool:
-    """True nếu exception là 403 do CloudFront geo-block (không phải lỗi code)."""
-    msg = str(exc)
-    return "403" in msg and "CloudFront" in msg
 
 _SCHEMA = pa.schema([
     pa.field("symbol",       pa.string(),  nullable=False),
@@ -76,9 +69,9 @@ def _fetch_chunked(client, symbol: str, inst_type: str, start_ms: int, end_ms: i
     Binance max 1000 candles/request — với interval 1d, chunk 900 ngày mỗi lần.
 
     Args:
-        client:    BinanceSpotClient hoặc BinanceFuturesClient.
+        client:    BinanceSpotClient.
         symbol:    e.g. "BTCUSDT".
-        inst_type: "SPOT" | "FUTURES".
+        inst_type: "SPOT".
         start_ms:  Unix ms — bắt đầu.
         end_ms:    Unix ms — kết thúc (exclusive).
         now_iso:   ISO8601 string cho ingested_at.
@@ -149,8 +142,7 @@ def run(from_date: str | None = None, to_date: str | None = None) -> dict:
     else:
         end_ms = int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
 
-    spot_symbols    = cfg["binance"]["instruments"]["spot"]
-    futures_symbols = cfg["binance"]["instruments"]["futures"]
+    spot_symbols = cfg["binance"]["instruments"]["spot"]
 
     all_records: List[dict] = []
     errors, symbols_ok, symbols_err = 0, [], []
@@ -166,26 +158,6 @@ def run(from_date: str | None = None, to_date: str | None = None) -> dict:
             logger.error("binance_1d_job: SPOT %s failed: %s", symbol, exc)
             symbols_err.append(f"spot:{symbol}")
             errors += 1
-
-    futures_client = BinanceFuturesClient.from_env()
-    for symbol in futures_symbols:
-        try:
-            records = _fetch_chunked(futures_client, symbol, "FUTURES", start_ms, end_ms, now_iso)
-            all_records.extend(records)
-            symbols_ok.append(f"futures:{symbol}")
-            logger.info("binance_1d_job: FUTURES %s → %d candles", symbol, len(records))
-        except Exception as exc:
-            if _is_geo_blocked(exc):
-                logger.warning(
-                    "binance_1d_job: FUTURES %s SKIPPED — CloudFront 403 geo-block (VN node). "
-                    "Spot data unaffected.",
-                    symbol,
-                )
-                symbols_err.append(f"futures:{symbol}:geo-blocked")
-            else:
-                logger.error("binance_1d_job: FUTURES %s failed: %s", symbol, exc)
-                symbols_err.append(f"futures:{symbol}")
-                errors += 1
 
     written = 0
     if all_records:

@@ -21,8 +21,11 @@ type Service interface {
 	GetStockAssets(ctx context.Context, accountNo string) ([]*models.TCBSStockAsset, error)
 	GetOrders(ctx context.Context, accountNo string) ([]*models.TCBSOrderRecord, error)
 	PlaceStockOrder(ctx context.Context, req *models.TCBSPlaceStockOrderRequest) (*models.TCBSPlaceStockOrderResponse, error)
+	CancelStockOrder(ctx context.Context, accountNo, orderNo string) (*models.TCBSCancelStockOrderResponse, error)
+	ModifyStockOrder(ctx context.Context, req *models.TCBSModifyStockOrderRequest) (*models.TCBSModifyStockOrderResponse, error)
 	GetDerivativePositions(ctx context.Context, accountID string) ([]*models.TCBSDerivativePositionRecord, error)
 	PlaceDerivativeOrder(ctx context.Context, req *models.TCBSPlaceDerivOrderRequest) (*models.TCBSPlaceDerivOrderResponse, error)
+	CancelDerivativeOrder(ctx context.Context, accountNo, orderNo string) (*models.TCBSCancelDerivOrderResponse, error)
 }
 
 type tcbsAccountService struct {
@@ -293,6 +296,91 @@ func (s *tcbsAccountService) PlaceStockOrder(ctx context.Context, reqData *model
 	}, nil
 }
 
+// ─── CancelStockOrder ─────────────────────────────────────────────────────────
+func (s *tcbsAccountService) CancelStockOrder(ctx context.Context, accountNo, orderNo string) (*models.TCBSCancelStockOrderResponse, error) {
+	url := fmt.Sprintf("%s/akhlys/v1/accounts/%s/orders/%s", s.cfg.TCBS.BaseURL, accountNo, orderNo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create cancel stock order request: %w", err)
+	}
+	s.setAuthHeaders(req)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		s.logger.Error("TCBSAccount.CancelStockOrder", "HTTP request failed",
+			map[string]interface{}{"accountNo": accountNo, "orderNo": orderNo, "err": err.Error()})
+		return nil, fmt.Errorf("execute cancel stock order: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OrderNo string `json:"orderNo"`
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode cancel stock order response: %w", err)
+	}
+
+	status := "SUCCESS"
+	if result.Error != "0" && result.Error != "" {
+		status = "FAILED"
+	}
+
+	return &models.TCBSCancelStockOrderResponse{
+		OrderNo:   result.OrderNo,
+		Status:    status,
+		ErrorCode: result.Error,
+		Message:   result.Message,
+	}, nil
+}
+
+// ─── ModifyStockOrder ─────────────────────────────────────────────────────────
+func (s *tcbsAccountService) ModifyStockOrder(ctx context.Context, reqData *models.TCBSModifyStockOrderRequest) (*models.TCBSModifyStockOrderResponse, error) {
+	url := fmt.Sprintf("%s/akhlys/v1/accounts/%s/orders/%s", s.cfg.TCBS.BaseURL, reqData.AccountNo, reqData.OrderNo)
+	payloadBytes, err := json.Marshal(reqData)
+	if err != nil {
+		return nil, fmt.Errorf("marshal modify stock order request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return nil, fmt.Errorf("create modify stock order request: %w", err)
+	}
+	s.setAuthHeaders(req)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		s.logger.Error("TCBSAccount.ModifyStockOrder", "HTTP request failed",
+			map[string]interface{}{"accountNo": reqData.AccountNo, "orderNo": reqData.OrderNo, "err": err.Error()})
+		return nil, fmt.Errorf("execute modify stock order: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OrderNo string `json:"orderNo"`
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode modify stock order response: %w", err)
+	}
+
+	status := "SUCCESS"
+	if result.Error != "0" && result.Error != "" {
+		status = "FAILED"
+	}
+
+	return &models.TCBSModifyStockOrderResponse{
+		OrderNo:   result.OrderNo,
+		Status:    status,
+		ErrorCode: result.Error,
+		Message:   result.Message,
+	}, nil
+}
+
 // ─── GetDerivativePositions ───────────────────────────────────────────────────
 func (s *tcbsAccountService) GetDerivativePositions(ctx context.Context, accountID string) ([]*models.TCBSDerivativePositionRecord, error) {
 	cacheKey := fmt.Sprintf("tcbs_deriv_positions_%s", accountID)
@@ -409,5 +497,48 @@ func (s *tcbsAccountService) PlaceDerivativeOrder(ctx context.Context, reqData *
 		OrderNo:   orderNo,
 		PKOrderNo: pkOrderNo,
 		Message:   result.Message,
+	}, nil
+}
+
+// ─── CancelDerivativeOrder ───────────────────────────────────────────────────
+func (s *tcbsAccountService) CancelDerivativeOrder(ctx context.Context, accountNo, orderNo string) (*models.TCBSCancelDerivOrderResponse, error) {
+	url := fmt.Sprintf("%s/khronos/v1/order/cancel", s.cfg.TCBS.BaseURL)
+	payload := map[string]string{
+		"accountNo": accountNo,
+		"orderNo":   orderNo,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal cancel deriv order: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return nil, fmt.Errorf("create cancel deriv order request: %w", err)
+	}
+	s.setAuthHeaders(req)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		s.logger.Error("TCBSAccount.CancelDerivativeOrder", "HTTP request failed",
+			map[string]interface{}{"accountNo": accountNo, "orderNo": orderNo, "err": err.Error()})
+		return nil, fmt.Errorf("execute cancel derivative order: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		RC      string `json:"rc"`
+		OrderNo string `json:"orderNo"`
+		Message string `json:"message"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode cancel deriv order response: %w", err)
+	}
+
+	return &models.TCBSCancelDerivOrderResponse{
+		RC:      result.RC,
+		OrderNo: result.OrderNo,
+		Message: result.Message,
 	}, nil
 }

@@ -36,6 +36,7 @@ from cli.ingestion.sources.client.tcbs_client.auth import TCBSAuthMixin
 from cli.ingestion.sources.client.tcbs_client.market_data import TCBSMarketDataMixin
 from cli.ingestion.sources.client.tcbs_client.intraday_analytics import TCBSIntradayAnalyticsMixin
 from cli.ingestion.sources.client.tcbs_client.securities import TCBSSecuritiesMixin
+from cli.ingestion.sources.client.tcbs_client.margin import TCBSMarginMixin
 from cli.ingestion.sources.client.tcbs_client.batch_helpers import TCBSBatchHelpersMixin
 
 # Re-export TCBSConstants để backward-compatible với code cũ import từ tcbs_client
@@ -47,6 +48,7 @@ class TCBSRestClient(
     TCBSMarketDataMixin,
     TCBSIntradayAnalyticsMixin,
     TCBSSecuritiesMixin,
+    TCBSMarginMixin,
     TCBSBatchHelpersMixin,
     TCBSClientBase,
 ):
@@ -60,6 +62,7 @@ class TCBSRestClient(
         Analytics  : get_intraday_bsa(), get_intraday_bsa_ext(),
                      get_intraday_bsa_month(), get_intraday_history()
         Securities : get_securities()
+        Margin     : get_account_risk(), get_pricing_policy(), get_margin_info()
         Batch      : get_ticker_commons_batch(), get_intraday_history_all_pages()
 
     Usage:

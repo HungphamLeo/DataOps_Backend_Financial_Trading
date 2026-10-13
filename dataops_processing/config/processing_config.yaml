@@ -45,6 +45,7 @@ delta:
   tables:
     vwap_1m: "vwap_1m"
     volume_bars: "volume_bars"
+    indicator_matrix: "indicator_matrix"
 
 # ─── Spark Session ────────────────────────────────────────────────────────────
 spark:
@@ -76,6 +77,28 @@ vwap_job:
   influx_interval_tag: "5m"
   delta_table: "vwap_1m"               # → delta.tables.vwap_1m
 
+# ─── Market Breadth & Foreign Flow Batch Job (TASK-P3) ────────────────────────
+# Nguồn: Delta Bronze tcbs_market_eod (batch_api). Output: Delta Gold market_breadth.
+# Group tự động: ALL + từng exchange (HOSE/HNX/UPCOM); thêm baskets khai báo bên dưới.
+market_breadth_job:
+  source_table: "tcbs_market_eod"
+  gold_table: "market_breadth"
+  baskets:
+    VN30: ["ACB", "BCM", "BID", "BVH", "CTG", "FPT", "GAS", "GVR", "HDB", "HPG",
+           "MBB", "MSN", "MWG", "PLX", "POW", "SAB", "SHB", "SSB", "SSI", "STB",
+           "TCB", "TPB", "VCB", "VHM", "VIB", "VIC", "VJC", "VNM", "VPB", "VRE"]
+
+# ─── Order Flow / CVD Streaming Job ───────────────────────────────────────────
+# Mỗi window emit buy_volume / sell_volume / delta / imbalance.
+# CVD = cumulativeSum(delta) — tính ở tầng query (Flux), không giữ state trong Spark.
+order_flow_job:
+  window_duration: "1 minute"
+  watermark: "30 seconds"
+  trigger_interval: "30 seconds"
+  output_mode: "append"
+  influx_measurement: "order_flow"
+  influx_interval_tag: "1m"
+
 # ─── Volume Bars Batch Job ────────────────────────────────────────────────────
 volume_bars_job:
   # Volume threshold per symbol — 1 bar = N units base asset
@@ -87,4 +110,29 @@ volume_bars_job:
   source_table: "binance_candles_1d"   # Delta Bronze table
   source_interval: "1d"
   delta_table: "volume_bars"           # → delta.tables.volume_bars
+  overwrite_schema: true
+
+# ─── Indicator Matrix Batch Job (Multi-Timeframe EMA, ATR, RSI, BB) ───────────
+indicator_matrix_job:
+  symbols:
+    - "BTCUSDT"
+    - "ETHUSDT"
+    - "SOLUSDT"
+    - "VNINDEX"
+    - "VN30"
+    - "TCB"
+    - "FPT"
+    - "HPG"
+  intervals:
+    - "1d"
+    - "1h"
+  ema_periods: [20, 50, 200]
+  rsi_period: 14
+  atr_period: 14
+  bb_period: 20
+  bb_std: 2.0
+  source_table_binance_1d: "binance_candles_1d"
+  source_table_binance_1h: "binance_candles_1h"
+  source_table_tcbs_1d: "tcbs_market_snapshot"
+  delta_table: "indicator_matrix"
   overwrite_schema: true

@@ -1,30 +1,25 @@
 """
-binance_client.py — BinanceSpotClient + BinanceFuturesClient assembled clients (thin facade).
+binance_client.py — BinanceSpotClient assembled client (thin facade).
 
 Phạm trù: Client Facade (Assembly)
 
-Hai class được tổng hợp từ domain mixins theo mixin pattern:
+Class được tổng hợp từ domain mixins theo mixin pattern:
 
     BinanceSpotClient:
         SpotMarketDataMixin   ← spot/market_data.py    Spot Market Data (public)
         SpotAccountMixin      ← spot/account.py        Spot Account & Trading (private)
         BinanceClientBase     ← http.py                HTTP Core: session, throttle, from_env
 
-    BinanceFuturesClient:
-        FuturesMarketDataMixin ← future/market_data.py  UM Futures Market Data (public)
-        FuturesAccountMixin    ← future/account.py      UM Futures Account & Trading (private)
-        BinanceClientBase      ← http.py                HTTP Core (fapi base_url)
-
-Base URLs:
+Base URL:
     Spot:        https://api.binance.com
-    UM Futures:  https://fapi.binance.com
+
+Dự án chỉ dùng Binance Spot — không hỗ trợ UM Futures.
 
 SDK: binance-connector v3.13.0 (binance.spot.Spot)
-    - Spot class dùng được cho cả Spot và Futures với base_url override.
     - Tự động sign private requests khi api_key + api_secret được set.
 
 Usage:
-    from cli.ingestion.sources.client.binance_client import BinanceSpotClient, BinanceFuturesClient
+    from cli.ingestion.sources.client.binance_client import BinanceSpotClient
 
     # Spot — public (không cần key)
     spot = BinanceSpotClient.from_env()
@@ -34,17 +29,6 @@ Usage:
     # Spot — private (cần BINANCE_API_KEY + BINANCE_SECRET_KEY)
     account = spot.get_account()
     trades  = spot.get_my_trades("BTCUSDT")
-
-    # UM Futures — public
-    futures = BinanceFuturesClient.from_env()
-    klines  = futures.get_klines("BTCUSDT", "4h", limit=100)
-    funding = futures.get_funding_rate("BTCUSDT", limit=50)
-    oi      = futures.get_open_interest("BTCUSDT")
-    mark    = futures.get_mark_price("BTCUSDT")
-
-    # UM Futures — private
-    positions = futures.get_positions("BTCUSDT")
-    account   = futures.get_account()
 """
 from __future__ import annotations
 

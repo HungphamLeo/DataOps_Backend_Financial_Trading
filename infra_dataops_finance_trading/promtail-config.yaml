@@ -47,3 +47,33 @@ scrape_configs:
             - drop:
                 expression: '.*"level":"DEBUG".*'
                 drop_counter_reason: "debug_log_filtered"
+
+  # ─── File-based logs: Python services (JsonFormatter → log_storage/*.log) ────
+  # Mounted read-only into the promtail container (see DOCKER_COMPOSE_ADDITIONS.md §6).
+  # Record format: {"time","level","logger","message","module","line","process","thread"}
+  - job_name: dataops-python-logfiles
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: dataops-batch-api-file
+          service: dataops_batch_api
+          __path__: /var/log/dataops/batch_api/*.log
+      - targets: [localhost]
+        labels:
+          job: dataops-processing-file
+          service: dataops_processing
+          __path__: /var/log/dataops/processing/*.log
+    pipeline_stages:
+      - json:
+          expressions:
+            level: level
+            logger: logger
+            ts: time
+            trace_id: trace_id
+            correlation_id: correlation_id
+      - timestamp:
+          source: ts
+          format: RFC3339
+      - labels:
+          level:
+          logger:

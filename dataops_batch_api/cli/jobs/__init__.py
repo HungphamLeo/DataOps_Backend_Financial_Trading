@@ -15,4 +15,6 @@ Jobs:
     binance_1d_job   — [Daily 00:05 UTC] Binance 1d candles, 10 năm append-only
     tcbs_eod_job     — [Daily 15:15 ICT] TCBS market EOD snapshot, 10 năm append-only
     tcbs_bsa_job     — [Daily 15:30 ICT] TCBS BSA daily summary, 2 năm rolling
+    tcbs_margin_job  — [Daily 15:45 ICT] TCBS margin risk snapshot, 2 năm rolling
+    benchmark_index_job — [Daily 15:50 ICT] VNINDEX/VN30 basket aggregate + BTC.D proxy, append-only
 """

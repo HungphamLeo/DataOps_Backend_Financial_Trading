@@ -72,8 +72,13 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 	// Root health check endpoint for Docker container & load balancer probes
 	router.GET("/health", authHandler.Health)
 
-	// Crypto Analytics (Binance data)
-	cryptoHandler := &CryptoHandler{AnalyticsSvc: svc.CryptoSvc}
+	// Crypto Analytics & Order Proxy (Binance data)
+	cryptoHandler := &CryptoHandler{
+		AnalyticsSvc:     svc.CryptoSvc,
+		CryptoAccountSvc: svc.CryptoAccountSvc,
+		PreTradeSvc:      svc.PreTradeSvc,
+		PreTradeEnable:   cfg.Risk.PreTradeEnforce,
+	}
 	cryptoHandler.Register(protected.Group("/crypto"))
 
 	// VN Stocks Analytics (VPS data)
@@ -86,9 +91,21 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 	tcbsHandler.Register(tcbsGroup)
 
 	// TCBS Account & Trading Proxy (Cash, Stock assets, Orders, Derivatives)
-	tcbsAccountHandler := &TCBSAccountHandler{AccountSvc: svc.TCBSAccountSvc}
+	tcbsAccountHandler := &TCBSAccountHandler{
+		AccountSvc:     svc.TCBSAccountSvc,
+		PreTradeSvc:    svc.PreTradeSvc,
+		PreTradeEnable: cfg.Risk.PreTradeEnforce,
+	}
 	tcbsAccountHandler.Register(tcbsGroup.Group("/account"), tcbsGroup.Group("/derivative"))
 	tcbsAccountHandler.RegisterStockOrder(tcbsGroup.Group("/order"))
+
+	// Real-time Portfolio, NAV & Risk Engine (/api/v1/portfolio)
+	portfolioHandler := &PortfolioHandler{
+		PortfolioSvc: svc.PortfolioSvc,
+		RiskSvc:      svc.RiskSvc,
+		PreTradeSvc:  svc.PreTradeSvc,
+	}
+	portfolioHandler.Register(protected.Group("/portfolio"))
 
 	// Admin
 	adminHandler := &AdminHandler{Cfg: cfg}

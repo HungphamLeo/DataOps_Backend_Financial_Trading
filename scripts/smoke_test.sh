@@ -20,6 +20,18 @@
 
 set -euo pipefail
 
+# SMOKE_STRICT=1 → pipeline-data checks (Kafka offsets, InfluxDB vwap, Delta objects)
+# được tính là FAIL thay vì WARN. Mặc định WARN vì dữ liệu phụ thuộc giờ giao dịch.
+SMOKE_STRICT="${SMOKE_STRICT:-0}"
+KAFKA_CONTAINER="${KAFKA_CONTAINER:-dataops-kafka1}"
+KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP:-kafka1:9092}"
+INFLUXDB_TOKEN="${INFLUXDB_TOKEN:-PROD_SUPER_SECRET_INFLUXDB_AUTH_TOKEN}"
+INFLUXDB_ORG="${INFLUXDB_ORG:-binance-vps-platform}"
+INFLUXDB_BUCKET="${INFLUXDB_BUCKET:-market-data}"
+MINIO_BUCKET="${MINIO_BUCKET:-binance-datalake}"
+MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY:-minioadmin}"
+MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-minioadmin}"
+
 BACKEND_URL="${BACKEND_URL:-http://localhost:8080}"
 INFLUXDB_URL="${INFLUXDB_URL:-http://localhost:8086}"
 MINIO_URL="${MINIO_URL:-http://localhost:9010}"
@@ -40,9 +52,14 @@ NC='\033[0m'
 PASS=0
 FAIL=0
 
-pass() { echo -e "${GREEN}  ✓ PASS${NC} — $1"; ((PASS++)); }
-fail() { echo -e "${RED}  ✗ FAIL${NC} — $1"; ((FAIL++)); }
+# NOTE: dùng $((x+1)) thay vì ((x++)) — ((0++)) trả exit 1 và làm `set -e` thoát script.
+pass() { echo -e "${GREEN}  ✓ PASS${NC} — $1"; PASS=$((PASS+1)); }
+fail() { echo -e "${RED}  ✗ FAIL${NC} — $1"; FAIL=$((FAIL+1)); }
 info() { echo -e "${YELLOW}  →${NC} $1"; }
+# warn: pipeline-data check — FAIL nếu SMOKE_STRICT=1, ngược lại chỉ cảnh báo
+soft_fail() {
+  if [ "$SMOKE_STRICT" = "1" ]; then fail "$1"; else echo -e "${YELLOW}  ! WARN${NC} — $1"; fi
+}
 
 # ── Helper ───────────────────────────────────────────────────────────────────
 http_check() {
@@ -64,7 +81,7 @@ echo "======================================================"
 echo ""
 
 # ── 1. Infrastructure health checks ─────────────────────────────────────────
-echo "[ 1/5 ] Infrastructure health"
+echo "[ 1/8 ] Infrastructure health"
 
 http_check "InfluxDB health" "$INFLUXDB_URL/health"
 http_check "MinIO health" "$MINIO_URL/minio/health/live"
@@ -73,13 +90,13 @@ http_check "Loki ready" "$LOKI_URL/ready"
 
 # ── 2. Backend API health ────────────────────────────────────────────────────
 echo ""
-echo "[ 2/5 ] Backend API health"
+echo "[ 2/8 ] Backend API health"
 
 http_check "Backend /health" "$BACKEND_URL/health"
 
 # ── 3. Auth — login ──────────────────────────────────────────────────────────
 echo ""
-echo "[ 3/5 ] Authentication"
+echo "[ 3/8 ] Authentication"
 
 if [ "$SKIP_AUTH" != "--skip-auth" ]; then
   # Register test user (idempotent — ignore 409 conflict)
@@ -111,7 +128,7 @@ AUTH_HEADER="Authorization: Bearer $TOKEN"
 
 # ── 4. Crypto endpoints ──────────────────────────────────────────────────────
 echo ""
-echo "[ 4/5 ] Crypto API endpoints"
+echo "[ 4/8 ] Crypto API endpoints"
 
 # Ticker list
 TICKER_RESP=$(curl -sf -H "$AUTH_HEADER" "$BACKEND_URL/api/v1/crypto/ticker" 2>/dev/null || echo "{}")
@@ -158,7 +175,7 @@ fi
 
 # ── 5. Trace ID propagation ──────────────────────────────────────────────────
 echo ""
-echo "[ 5/5 ] Trace ID propagation (X-Trace-ID)"
+echo "[ 5/8 ] Trace ID propagation (X-Trace-ID)"
 
 TRACE_ID="smoke-test-$(date +%s)"
 TRACE_RESP_HEADERS=$(curl -sf -D - -H "$AUTH_HEADER" -H "X-Trace-ID: $TRACE_ID" \
@@ -168,6 +185,80 @@ if echo "$TRACE_RESP_HEADERS" | grep -qi "x-trace-id: $TRACE_ID"; then
 else
   fail "X-Trace-ID not echoed back — middleware may not be registered"
 fi
+
+# ── 6. Portfolio & pre-trade risk endpoints ─────────────────────────────────
+echo ""
+echo "[ 6/8 ] Portfolio & Risk API (BE1–BE4)"
+
+for ep in overview nav allocation risk-report; do
+  code=$(curl -s -o /dev/null -w "%{http_code}" -H "$AUTH_HEADER" "$BACKEND_URL/api/v1/portfolio/$ep" || echo "000")
+  # 200 = OK ; 5xx/502 do upstream (Binance/TCBS creds chưa cấu hình) vẫn chứng minh route đã đăng ký
+  if [ "$code" = "200" ]; then
+    pass "GET /portfolio/$ep (HTTP 200)"
+  elif [ "$code" = "404" ] || [ "$code" = "000" ]; then
+    fail "GET /portfolio/$ep — route missing (HTTP $code)"
+  else
+    soft_fail "GET /portfolio/$ep — route exists but HTTP $code (upstream credentials?)"
+  fi
+done
+
+PT_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "$AUTH_HEADER" -H "Content-Type: application/json" \
+  -d '{"symbol":"BTCUSDT","side":"BUY","quantity":0.001,"price":1}' \
+  "$BACKEND_URL/api/v1/portfolio/pre-trade-check" || echo "000")
+if [ "$PT_CODE" = "404" ] || [ "$PT_CODE" = "000" ]; then
+  fail "POST /portfolio/pre-trade-check — route missing (HTTP $PT_CODE)"
+else
+  pass "POST /portfolio/pre-trade-check — route registered (HTTP $PT_CODE)"
+fi
+
+# ── 7. Streaming chain: producer → Kafka → processing ────────────────────────
+echo ""
+echo "[ 7/8 ] Streaming chain (stream-producer → Kafka → processing)"
+
+for c in dataops-kafka1 dataops-stream-producer dataops-processing dataops-batch-api; do
+  state=$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null || echo "missing")
+  if [ "$state" = "true" ]; then pass "container $c running"; else fail "container $c not running ($state)"; fi
+done
+
+for topic in binance.trade.ticks tcbs.market.snapshot; do
+  offs=$(docker exec "$KAFKA_CONTAINER" kafka-run-class kafka.tools.GetOffsetShell \
+    --bootstrap-server "$KAFKA_BOOTSTRAP" --topic "$topic" --time -1 2>/dev/null \
+    | awk -F: '{s+=$3} END{print s+0}' || echo 0)
+  if [ "${offs:-0}" -gt 0 ]; then
+    pass "Kafka topic $topic has messages (end-offset sum=$offs)"
+  else
+    soft_fail "Kafka topic $topic empty/unreachable (TCBS topic chỉ có dữ liệu trong giờ HOSE)"
+  fi
+done
+
+# ── 8. Sinks: InfluxDB (VWAP) + Delta Lake on MinIO ──────────────────────────
+echo ""
+echo "[ 8/8 ] Sinks (InfluxDB vwap, Delta Bronze/Silver)"
+
+FLUX="from(bucket:\"$INFLUXDB_BUCKET\") |> range(start:-1h) |> filter(fn:(r)=>r._measurement==\"vwap\") |> limit(n:1)"
+INFLUX_ROWS=$(curl -s -X POST "$INFLUXDB_URL/api/v2/query?org=$INFLUXDB_ORG" \
+  -H "Authorization: Token $INFLUXDB_TOKEN" \
+  -H "Content-Type: application/vnd.flux" -H "Accept: application/csv" \
+  --data "$FLUX" 2>/dev/null | grep -c ",vwap," || true)
+if [ "${INFLUX_ROWS:-0}" -gt 0 ]; then
+  pass "InfluxDB measurement 'vwap' has points in last 1h"
+else
+  soft_fail "InfluxDB measurement 'vwap' has no points in last 1h (processing VWAP job chưa emit window?)"
+fi
+
+delta_has_log() {
+  # $1 = prefix dưới bucket, e.g. delta/silver/vwap_1m
+  curl -s --aws-sigv4 "aws:amz:us-east-1:s3" --user "$MINIO_ACCESS_KEY:$MINIO_SECRET_KEY" \
+    "$MINIO_URL/$MINIO_BUCKET?list-type=2&prefix=$1/_delta_log/&max-keys=1" 2>/dev/null \
+    | grep -q "<Key>"
+}
+for tbl in delta/silver/vwap_1m delta/bronze/binance_candles_spot delta/bronze/tcbs_market_eod; do
+  if delta_has_log "$tbl"; then
+    pass "Delta table $tbl has _delta_log"
+  else
+    soft_fail "Delta table $tbl not found in s3://$MINIO_BUCKET (job chưa chạy lần nào?)"
+  fi
+done
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 echo ""

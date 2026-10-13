@@ -42,7 +42,10 @@ class ProcessingOrchestrator:
         """Tự động import các job modules để kích hoạt @JobRegistry.register."""
         known_modules = [
             "dataops_processing.jobs.vwap_job",
+            "dataops_processing.jobs.order_flow_job",
+            "dataops_processing.jobs.market_breadth_job",
             "dataops_processing.jobs.volume_bars_job",
+            "dataops_processing.jobs.indicator_matrix_job",
         ]
         for mod_name in known_modules:
             try:

@@ -130,10 +130,43 @@ class VWAPJobSettings:
 
 
 @dataclass(frozen=True)
+class MarketBreadthJobSettings:
+    source_table: str
+    gold_table: str
+    baskets: Dict[str, list[str]]
+
+
+@dataclass(frozen=True)
+class OrderFlowJobSettings:
+    window_duration: str
+    watermark: str
+    trigger_interval: str
+    output_mode: str
+    influx_measurement: str
+    influx_interval_tag: str
+
+
+@dataclass(frozen=True)
 class VolumeBarsJobSettings:
     thresholds: Dict[str, float]
     source_table: str
     source_interval: str
+    delta_table: str
+    overwrite_schema: bool
+
+
+@dataclass(frozen=True)
+class IndicatorMatrixJobSettings:
+    symbols: list[str]
+    intervals: list[str]
+    ema_periods: list[int]
+    rsi_period: int
+    atr_period: int
+    bb_period: int
+    bb_std: float
+    source_table_binance_1d: str
+    source_table_binance_1h: str
+    source_table_tcbs_1d: str
     delta_table: str
     overwrite_schema: bool
 
@@ -147,7 +180,10 @@ class ProcessingSettings:
     delta: DeltaSettings
     spark: SparkSettings
     vwap_job: VWAPJobSettings
+    order_flow_job: OrderFlowJobSettings
+    market_breadth_job: MarketBreadthJobSettings
     volume_bars_job: VolumeBarsJobSettings
+    indicator_matrix_job: IndicatorMatrixJobSettings
 
 
 # =============================================================================
@@ -257,6 +293,23 @@ def get_settings() -> ProcessingSettings:
         delta_table=      v.get("delta_table",       "vwap_1m"),
     )
 
+    of = cfg.get("order_flow_job", {})
+    order_flow_job = OrderFlowJobSettings(
+        window_duration=   of.get("window_duration",   "1 minute"),
+        watermark=         of.get("watermark",         "30 seconds"),
+        trigger_interval=  of.get("trigger_interval",  "30 seconds"),
+        output_mode=       of.get("output_mode",       "append"),
+        influx_measurement=of.get("influx_measurement", "order_flow"),
+        influx_interval_tag=of.get("influx_interval_tag", "1m"),
+    )
+
+    mb = cfg.get("market_breadth_job", {})
+    market_breadth_job = MarketBreadthJobSettings(
+        source_table=str(mb.get("source_table", "tcbs_market_eod")),
+        gold_table=  str(mb.get("gold_table",   "market_breadth")),
+        baskets=     {str(k): [str(s).upper() for s in v] for k, v in (mb.get("baskets") or {}).items()},
+    )
+
     vb = cfg.get("volume_bars_job", {})
     volume_bars_job = VolumeBarsJobSettings(
         thresholds=     {k: float(v) for k, v in vb.get("thresholds", {}).items()},
@@ -266,6 +319,22 @@ def get_settings() -> ProcessingSettings:
         overwrite_schema=bool(vb.get("overwrite_schema", True)),
     )
 
+    im = cfg.get("indicator_matrix_job", {})
+    indicator_matrix_job = IndicatorMatrixJobSettings(
+        symbols=                list(im.get("symbols", ["BTCUSDT", "ETHUSDT", "SOLUSDT", "VNINDEX", "VN30", "TCB", "FPT", "HPG"])),
+        intervals=              list(im.get("intervals", ["1d", "1h"])),
+        ema_periods=            list(im.get("ema_periods", [20, 50, 200])),
+        rsi_period=             int(im.get("rsi_period", 14)),
+        atr_period=             int(im.get("atr_period", 14)),
+        bb_period=              int(im.get("bb_period", 20)),
+        bb_std=                 float(im.get("bb_std", 2.0)),
+        source_table_binance_1d=str(im.get("source_table_binance_1d", "binance_candles_1d")),
+        source_table_binance_1h=str(im.get("source_table_binance_1h", "binance_candles_1h")),
+        source_table_tcbs_1d=   str(im.get("source_table_tcbs_1d", "tcbs_market_snapshot")),
+        delta_table=            str(im.get("delta_table", "indicator_matrix")),
+        overwrite_schema=       bool(im.get("overwrite_schema", True)),
+    )
+
     settings = ProcessingSettings(
         kafka=kafka,
         influxdb=influxdb,
@@ -273,7 +342,10 @@ def get_settings() -> ProcessingSettings:
         delta=delta,
         spark=spark,
         vwap_job=vwap_job,
+        order_flow_job=order_flow_job,
+        market_breadth_job=market_breadth_job,
         volume_bars_job=volume_bars_job,
+        indicator_matrix_job=indicator_matrix_job,
     )
     logger.info(
         "ProcessingSettings loaded — kafka=%s influx=%s minio=%s spark_master=%s",

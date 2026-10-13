@@ -3,9 +3,8 @@
 test_dataops_batch_sources.py — Comprehensive Data Sources Test Suite for dataops_batch_api.
 
 Phạm vi kiểm thử:
-  1. Binance REST Client (Spot & USD-M Futures):
+  1. Binance REST Client (Spot):
      - Spot: Klines (OHLCV), Exchange Info, Ticker 24h, Orderbook Depth, Recent Trades.
-     - Futures: Klines, Exchange Info, Funding Rate, Mark Price, Open Interest.
      - Pydantic Validation: BinanceCandleRecord.
   2. TCBS iFlash REST Client:
      - Ticker Commons (by tickers & by index HOSE/VN30/HNX).
@@ -132,7 +131,7 @@ def _is_tcbs_endpoint_error(exc: Exception) -> bool:
 
 
 # ==============================================================================
-# PHẦN 1: BINANCE SPOT & FUTURES TEST FUNCTIONS
+# PHẦN 1: BINANCE SPOT TEST FUNCTIONS
 # ==============================================================================
 
 def test_binance_spot_klines(verbose: bool = False) -> bool:
@@ -260,137 +259,6 @@ def test_binance_spot_orderbook(verbose: bool = False) -> bool:
         duration = (time.perf_counter() - start_time) * 1000
         print(f"✗ FAILED {func_name}: {e}")
         record_result(func_name, "Binance Spot", "FAIL", str(e), duration)
-        return False
-
-
-def test_binance_futures_klines(verbose: bool = False) -> bool:
-    """Test lấy nến USD-M Futures (BTCUSDT 4h, limit=5)."""
-    start_time = time.perf_counter()
-    func_name = "test_binance_futures_klines"
-    print(f"\n--- [BINANCE] 1.5: Futures Klines (BTCUSDT 4h, limit=5) ---")
-    try:
-        from cli.ingestion.sources.client.binance_client import BinanceFuturesClient
-        client = BinanceFuturesClient.from_env()
-
-        candles = client.get_klines(symbol="BTCUSDT", interval="4h", limit=5)
-        duration = (time.perf_counter() - start_time) * 1000
-
-        if not candles or not isinstance(candles, list):
-            print(f"✗ FAILED: Không có nến Futures trả về: {candles}")
-            record_result(func_name, "Binance Futures", "FAIL", "Empty response", duration)
-            return False
-
-        print(f"✓ SUCCESS: Lấy thành công {len(candles)} nến Futures BTCUSDT 4h")
-        sample = candles[-1]
-        print(f"  • Sample 4h Candle: Open={sample[1]}, Close={sample[4]}, VolQuote={sample[7]} USDT")
-
-        if verbose:
-            print_json(candles)
-
-        record_result(func_name, "Binance Futures", "PASS", f"{len(candles)} candles fetched", duration)
-        return True
-    except Exception as e:
-        duration = (time.perf_counter() - start_time) * 1000
-        # 403 = Binance CloudFront geo-block — không phải lỗi code, bỏ qua retry
-        try:
-            from binance.error import ClientError
-            if isinstance(e, ClientError) and e.status_code == 403:
-                print(f"⚠ SKIP {func_name}: Binance Futures /fapi/v1/klines bị CloudFront geo-block (403) tại IP này.")
-                print(f"  → Endpoint khác (funding_rate, mark_price, open_interest) vẫn hoạt động bình thường.")
-                record_result(func_name, "Binance Futures", "SKIP", "403 CloudFront geo-block — not a code error", duration)
-                return True
-        except ImportError:
-            pass
-        print(f"✗ FAILED {func_name}: {e}")
-        record_result(func_name, "Binance Futures", "FAIL", str(e), duration)
-        return False
-
-
-def test_binance_futures_funding_rate(verbose: bool = False) -> bool:
-    """Test lấy lịch sử Funding Rate của USD-M Futures từ /fapi/v1/fundingRate."""
-    start_time = time.perf_counter()
-    func_name = "test_binance_futures_funding_rate"
-    print(f"\n--- [BINANCE] 1.6: Futures Funding Rate History (BTCUSDT) ---")
-    try:
-        from cli.ingestion.sources.client.binance_client import BinanceFuturesClient
-        client = BinanceFuturesClient.from_env()
-
-        funding = client.get_funding_rate(symbol="BTCUSDT", limit=5)
-        duration = (time.perf_counter() - start_time) * 1000
-
-        print(f"✓ SUCCESS: Lấy thành công {len(funding)} bản ghi Funding Rate:")
-        if funding:
-            latest = funding[-1]
-            rate_pct = float(latest.get("fundingRate", 0)) * 100
-            funding_time = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(int(latest.get("fundingTime", 0))/1000))
-            print(f"  • Latest Funding Time: {funding_time} UTC -> Rate: {rate_pct:.4f}%")
-
-        if verbose:
-            print_json(funding)
-
-        record_result(func_name, "Binance Futures", "PASS", f"{len(funding)} funding records", duration)
-        return True
-    except Exception as e:
-        duration = (time.perf_counter() - start_time) * 1000
-        print(f"✗ FAILED {func_name}: {e}")
-        record_result(func_name, "Binance Futures", "FAIL", str(e), duration)
-        return False
-
-
-def test_binance_futures_mark_price(verbose: bool = False) -> bool:
-    """Test lấy Mark Price và Estimated Settle Price từ /fapi/v1/premiumIndex."""
-    start_time = time.perf_counter()
-    func_name = "test_binance_futures_mark_price"
-    print(f"\n--- [BINANCE] 1.7: Futures Mark Price & Index Price (BTCUSDT) ---")
-    try:
-        from cli.ingestion.sources.client.binance_client import BinanceFuturesClient
-        client = BinanceFuturesClient.from_env()
-
-        data = client.get_mark_price(symbol="BTCUSDT")
-        duration = (time.perf_counter() - start_time) * 1000
-
-        print(f"✓ SUCCESS: Mark Price Data:")
-        print(f"  • Mark Price: {data.get('markPrice')} USDT")
-        print(f"  • Index Price: {data.get('indexPrice')} USDT")
-        print(f"  • Last Funding Rate: {float(data.get('lastFundingRate', 0))*100:.4f}%")
-
-        if verbose:
-            print_json(data)
-
-        record_result(func_name, "Binance Futures", "PASS", f"MarkPrice: {data.get('markPrice')}", duration)
-        return True
-    except Exception as e:
-        duration = (time.perf_counter() - start_time) * 1000
-        print(f"✗ FAILED {func_name}: {e}")
-        record_result(func_name, "Binance Futures", "FAIL", str(e), duration)
-        return False
-
-
-def test_binance_futures_open_interest(verbose: bool = False) -> bool:
-    """Test lấy Open Interest (Hợp đồng mở) từ /fapi/v1/openInterest."""
-    start_time = time.perf_counter()
-    func_name = "test_binance_futures_open_interest"
-    print(f"\n--- [BINANCE] 1.8: Futures Open Interest (BTCUSDT) ---")
-    try:
-        from cli.ingestion.sources.client.binance_client import BinanceFuturesClient
-        client = BinanceFuturesClient.from_env()
-
-        oi = client.get_open_interest(symbol="BTCUSDT")
-        duration = (time.perf_counter() - start_time) * 1000
-
-        print(f"✓ SUCCESS: Open Interest:")
-        print(f"  • Open Interest: {float(oi.get('openInterest', 0)):,.2f} BTC")
-        print(f"  • Symbol: {oi.get('symbol')}")
-
-        if verbose:
-            print_json(oi)
-
-        record_result(func_name, "Binance Futures", "PASS", f"OI: {oi.get('openInterest')}", duration)
-        return True
-    except Exception as e:
-        duration = (time.perf_counter() - start_time) * 1000
-        print(f"✗ FAILED {func_name}: {e}")
-        record_result(func_name, "Binance Futures", "FAIL", str(e), duration)
         return False
 
 
@@ -870,10 +738,6 @@ BINANCE_TESTS: Dict[str, Tuple[Callable[[bool], bool], str]] = {
     "test_binance_spot_exchange_info": (test_binance_spot_exchange_info, "Danh mục cặp giao dịch Spot"),
     "test_binance_spot_ticker_24hr": (test_binance_spot_ticker_24hr, "Biến động 24h Spot (BTCUSDT)"),
     "test_binance_spot_orderbook": (test_binance_spot_orderbook, "Sổ lệnh Orderbook Depth"),
-    "test_binance_futures_klines": (test_binance_futures_klines, "Nến OHLCV USD-M Futures (4h)"),
-    "test_binance_futures_funding_rate": (test_binance_futures_funding_rate, "Lịch sử Funding Rate Futures"),
-    "test_binance_futures_mark_price": (test_binance_futures_mark_price, "Mark Price & Index Price"),
-    "test_binance_futures_open_interest": (test_binance_futures_open_interest, "Open Interest hợp đồng mở"),
     "test_binance_pydantic_validation": (test_binance_pydantic_validation, "Pydantic Schema Validation"),
 }
 
@@ -970,7 +834,7 @@ def main():
     print_section(f"BẮT ĐẦU TEST SUITE BATCH SOURCES (TARGET: {args.source.upper()})")
 
     if args.source in ("all", "binance"):
-        print_section("KIỂM THỬ NGUỒN BINANCE (SPOT & USD-M FUTURES)")
+        print_section("KIỂM THỬ NGUỒN BINANCE (SPOT)")
         for name, (fn, _) in BINANCE_TESTS.items():
             fn(args.verbose)
 

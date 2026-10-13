@@ -65,6 +65,31 @@ type TCBSPlaceStockOrderResponse struct {
 	Message   string `json:"message,omitempty"`
 }
 
+// TCBSCancelStockOrderResponse là kết quả hủy lệnh cổ phiếu cơ sở
+type TCBSCancelStockOrderResponse struct {
+	OrderNo   string `json:"order_no"`
+	Status    string `json:"status"`
+	ErrorCode string `json:"error_code,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+// TCBSModifyStockOrderRequest là request body sửa lệnh cổ phiếu
+type TCBSModifyStockOrderRequest struct {
+	AccountNo string  `json:"account_no" binding:"required"`
+	OrderNo   string  `json:"order_no" binding:"required"`
+	Price     float64 `json:"price" binding:"required"`
+	Quantity  float64 `json:"quantity" binding:"required"`
+	Pin       string  `json:"pin,omitempty"`
+}
+
+// TCBSModifyStockOrderResponse là kết quả sửa lệnh cổ phiếu
+type TCBSModifyStockOrderResponse struct {
+	OrderNo   string `json:"order_no"`
+	Status    string `json:"status"`
+	ErrorCode string `json:"error_code,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
 // TCBSDerivativePositionRecord là vị thế phái sinh đang mở
 // Endpoint: GET /khronos/v1/account/portfolio/status
 type TCBSDerivativePositionRecord struct {
@@ -96,4 +121,11 @@ type TCBSPlaceDerivOrderResponse struct {
 	OrderNo   string `json:"order_no,omitempty"`
 	PKOrderNo string `json:"pk_order_no,omitempty"`
 	Message   string `json:"message,omitempty"`
+}
+
+// TCBSCancelDerivOrderResponse là kết quả hủy lệnh phái sinh
+type TCBSCancelDerivOrderResponse struct {
+	RC      string `json:"rc"`
+	OrderNo string `json:"order_no,omitempty"`
+	Message string `json:"message,omitempty"`
 }
