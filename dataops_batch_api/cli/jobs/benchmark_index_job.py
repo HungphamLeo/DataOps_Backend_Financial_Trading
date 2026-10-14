@@ -221,10 +221,9 @@ def run() -> dict:
 
 
 if __name__ == "__main__":
-    from pathlib import Path
     try:
-        from dotenv import load_dotenv
-        load_dotenv(Path(__file__).resolve().parents[4] / ".env", override=False)
-    except ImportError:
+        from dotenv import find_dotenv, load_dotenv
+        load_dotenv(find_dotenv(usecwd=True), override=False)
+    except Exception:
         pass
     print(run())

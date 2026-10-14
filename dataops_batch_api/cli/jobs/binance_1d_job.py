@@ -175,11 +175,10 @@ def run(from_date: str | None = None, to_date: str | None = None) -> dict:
 
 if __name__ == "__main__":
     import sys
-    from pathlib import Path
     try:
-        from dotenv import load_dotenv
-        load_dotenv(Path(__file__).resolve().parents[4] / ".env", override=False)
-    except ImportError:
+        from dotenv import find_dotenv, load_dotenv
+        load_dotenv(find_dotenv(usecwd=True), override=False)
+    except Exception:
         pass
     from_d = sys.argv[1] if len(sys.argv) > 1 else None
     to_d   = sys.argv[2] if len(sys.argv) > 2 else None
