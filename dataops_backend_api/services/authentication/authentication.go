@@ -4,6 +4,7 @@ package authentication
 
 import (
 	"fmt"
+	"dataops-backend-api/constants"
 	"dataops-backend-api/configuration"
 	"dataops-backend-api/logging"
 	"dataops-backend-api/models"
@@ -18,6 +19,7 @@ import (
 
 type Service interface {
 	Login(username, password string) (map[string]interface{}, error)
+	Register(username, password, email string) error
 	RefreshToken(refreshToken string) (map[string]interface{}, error)
 	Logout(refreshToken string) error
 }
@@ -83,6 +85,31 @@ func (s *authService) Login(username, password string) (map[string]interface{}, 
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
 	}, nil
+}
+
+// Register tạo user mới, hash password bằng bcrypt và lưu vào DB.
+func (s *authService) Register(username, password, email string) error {
+	var existing models.User
+	if err := s.repo.Database.Where("username = ? OR email = ?", username, email).First(&existing).Error; err == nil {
+		return fmt.Errorf("username or email already exists")
+	}
+
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hash password failed: %w", err)
+	}
+
+	user := models.User{
+		Username: username,
+		Password: string(hashed),
+		Email:    email,
+		RoleId:   constants.USER,
+	}
+	if err := s.repo.Database.Create(&user).Error; err != nil {
+		return fmt.Errorf("create user failed: %w", err)
+	}
+	s.logger.Info("Register", "user created", map[string]interface{}{"userID": user.ID, "username": username})
+	return nil
 }
 
 // RefreshToken tạo access token mới từ refresh token còn hạn

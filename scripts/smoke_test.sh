@@ -99,20 +99,20 @@ echo ""
 echo "[ 3/8 ] Authentication"
 
 if [ "$SKIP_AUTH" != "--skip-auth" ]; then
-  # Register test user (idempotent — ignore 409 conflict)
+  # Register test user (idempotent — ignore 409 conflict nếu user đã tồn tại)
   info "Registering test user: $TEST_USER"
   curl -sf -X POST "$BACKEND_URL/api/v1/register" \
     -H "Content-Type: application/json" \
-    -d "{\"email\":\"$TEST_USER\",\"password\":\"$TEST_PASS\",\"username\":\"smoketest\"}" \
+    -d "{\"username\":\"$TEST_USER\",\"password\":\"$TEST_PASS\",\"email\":\"$TEST_USER\"}" \
     -o /dev/null 2>/dev/null || true
 fi
 
 info "Logging in as $TEST_USER"
 LOGIN_RESPONSE=$(curl -sf -X POST "$BACKEND_URL/api/v1/login" \
   -H "Content-Type: application/json" \
-  -d "{\"email\":\"$TEST_USER\",\"password\":\"$TEST_PASS\"}" 2>/dev/null || echo "{}")
+  -d "{\"username\":\"$TEST_USER\",\"password\":\"$TEST_PASS\"}" 2>/dev/null || echo "{}")
 
-TOKEN=$(echo "$LOGIN_RESPONSE" | jq -r '.token // empty' 2>/dev/null || echo "")
+TOKEN=$(echo "$LOGIN_RESPONSE" | jq -r '.access_token // empty' 2>/dev/null || echo "")
 if [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ]; then
   pass "Login — JWT token received"
 else
