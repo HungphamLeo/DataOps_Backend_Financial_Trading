@@ -29,6 +29,13 @@ INFLUXDB_TOKEN="${INFLUXDB_TOKEN:-PROD_SUPER_SECRET_INFLUXDB_AUTH_TOKEN}"
 INFLUXDB_ORG="${INFLUXDB_ORG:-binance-vps-platform}"
 INFLUXDB_BUCKET="${INFLUXDB_BUCKET:-market-data}"
 MINIO_BUCKET="${MINIO_BUCKET:-binance-datalake}"
+# Đọc credentials từ .env cùng cấp nếu chưa được set từ môi trường
+_ENV_FILE="$(dirname "$0")/../.env"
+if [ -f "$_ENV_FILE" ]; then
+  MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY:-$(grep -m1 '^AWS_ACCESS_KEY_ID=' "$_ENV_FILE" | cut -d= -f2-)}"
+  MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-$(grep -m1 '^AWS_SECRET_ACCESS_KEY=' "$_ENV_FILE" | cut -d= -f2-)}"
+fi
+# Final fallback nếu .env không có
 MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY:-minioadmin}"
 MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-minioadmin}"
 
@@ -248,9 +255,19 @@ fi
 
 delta_has_log() {
   # $1 = prefix dưới bucket, e.g. delta/silver/vwap_1m
-  curl -s --aws-sigv4 "aws:amz:us-east-1:s3" --user "$MINIO_ACCESS_KEY:$MINIO_SECRET_KEY" \
-    "$MINIO_URL/$MINIO_BUCKET?list-type=2&prefix=$1/_delta_log/&max-keys=1" 2>/dev/null \
-    | grep -q "<Key>"
+  # MinIO yêu cầu AWS4-HMAC-SHA256 — dùng docker run --rm với image minio/mc (đã có local
+  # cache từ minio-init), join cùng network với container minio để reach http://minio:9000.
+  local _net
+  _net=$(docker inspect dataops-minio \
+    --format '{{range $k,$_ := .NetworkSettings.Networks}}{{$k}}{{end}}' 2>/dev/null | head -1)
+  [ -z "$_net" ] && return 1
+  docker run --rm \
+    --network "$_net" \
+    --entrypoint mc \
+    minio/mc:latest \
+    --no-color ls \
+    "http://${MINIO_ACCESS_KEY}:${MINIO_SECRET_KEY}@minio:9000/${MINIO_BUCKET}/${1}/_delta_log/" \
+    2>/dev/null | grep -q "."
 }
 for tbl in delta/silver/vwap_1m delta/bronze/binance_candles_1d delta/bronze/tcbs_market_eod; do
   if delta_has_log "$tbl"; then
