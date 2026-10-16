@@ -5,6 +5,7 @@ package rest
 import (
 	"log"
 	"dataops-backend-api/configuration"
+	"dataops-backend-api/logging"
 	"dataops-backend-api/middlewares"
 	"dataops-backend-api/redis"
 	"dataops-backend-api/services"
@@ -15,6 +16,7 @@ import (
 // NewAPI khởi tạo Gin router với toàn bộ routes.
 //
 // Nhận vào logger chuẩn (*log.Logger) để ghi structured log thay vì fmt.Printf.
+// structuredLogger dùng cho TraceID + RequestLogger middleware.
 //
 // URL Structure:
 //
@@ -24,7 +26,11 @@ import (
 //	GET  /api/v1/vn-stocks/*        ← JWT required
 //	GET  /api/v1/tcbs/*             ← JWT required
 //	GET  /api/v1/admin/*            ← Admin only
+<<<<<<< HEAD
 func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Service, logger *log.Logger) *gin.Engine {
+=======
+func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Service, logger *log.Logger, structuredLogger ...*logging.Logger) *gin.Engine {
+>>>>>>> 20261010_data_processing
 	if logger != nil {
 		logger.Println("[API] Starting REST API")
 	}
@@ -33,7 +39,16 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	router := gin.Default() // Logger + Recovery middleware tự động
+	router := gin.New()
+	router.Use(gin.Recovery())
+
+	// TraceID: extract X-Trace-ID header hoặc tạo mới UUID — phải đứng đầu chain
+	router.Use(middlewares.TraceID())
+
+	// RequestLogger: structured JSON log mỗi request với trace_id
+	if len(structuredLogger) > 0 && structuredLogger[0] != nil {
+		router.Use(middlewares.RequestLogger(structuredLogger[0]))
+	}
 
 	// REUSE: market-maker-api/middlewares/security.go
 	router.Use(middlewares.Secure(cfg))
@@ -58,8 +73,16 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 	authHandler := &AuthHandler{AuthSvc: svc.AuthSvc}
 	authHandler.RegisterPublic(public)
 
-	// Crypto Analytics (Binance data)
-	cryptoHandler := &CryptoHandler{AnalyticsSvc: svc.CryptoSvc}
+	// Root health check endpoint for Docker container & load balancer probes
+	router.GET("/health", authHandler.Health)
+
+	// Crypto Analytics & Order Proxy (Binance data)
+	cryptoHandler := &CryptoHandler{
+		AnalyticsSvc:     svc.CryptoSvc,
+		CryptoAccountSvc: svc.CryptoAccountSvc,
+		PreTradeSvc:      svc.PreTradeSvc,
+		PreTradeEnable:   cfg.Risk.PreTradeEnforce,
+	}
 	cryptoHandler.Register(protected.Group("/crypto"))
 
 	// VN Stocks Analytics (VPS data)
@@ -72,9 +95,27 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 	tcbsHandler.Register(tcbsGroup)
 
 	// TCBS Account & Trading Proxy (Cash, Stock assets, Orders, Derivatives)
+<<<<<<< HEAD
 	tcbsAccountHandler := &TCBSAccountHandler{AccountSvc: svc.TCBSAccountSvc}
 	tcbsAccountHandler.Register(tcbsGroup.Group("/account"), tcbsGroup.Group("/derivative"))
 	tcbsAccountHandler.RegisterStockOrder(tcbsGroup.Group("/order"))
+=======
+	tcbsAccountHandler := &TCBSAccountHandler{
+		AccountSvc:     svc.TCBSAccountSvc,
+		PreTradeSvc:    svc.PreTradeSvc,
+		PreTradeEnable: cfg.Risk.PreTradeEnforce,
+	}
+	tcbsAccountHandler.Register(tcbsGroup.Group("/account"), tcbsGroup.Group("/derivative"))
+	tcbsAccountHandler.RegisterStockOrder(tcbsGroup.Group("/order"))
+
+	// Real-time Portfolio, NAV & Risk Engine (/api/v1/portfolio)
+	portfolioHandler := &PortfolioHandler{
+		PortfolioSvc: svc.PortfolioSvc,
+		RiskSvc:      svc.RiskSvc,
+		PreTradeSvc:  svc.PreTradeSvc,
+	}
+	portfolioHandler.Register(protected.Group("/portfolio"))
+>>>>>>> 20261010_data_processing
 
 	// Admin
 	adminHandler := &AdminHandler{Cfg: cfg}

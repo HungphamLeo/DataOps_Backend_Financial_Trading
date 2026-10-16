@@ -11,6 +11,11 @@ Chiến lược:
 Delta table: s3://binance-datalake/delta/bronze/binance_candles_1d
 Partition:   inst_type, symbol, year
 
+<<<<<<< HEAD
+=======
+Chỉ ingest Binance Spot (không dùng Futures).
+
+>>>>>>> 20261010_data_processing
 Schema: giống binance_candles_4h nhưng interval = "1d"
 """
 from __future__ import annotations
@@ -20,16 +25,23 @@ from typing import List
 
 import pyarrow as pa
 
+<<<<<<< HEAD
 from cli.ingestion.schema.models import BinanceCandleRecord
 from cli.ingestion.sources.client.binance_client import BinanceSpotClient, BinanceFuturesClient
 from cli.jobs._delta_writer import _table_path, write_records
 from cli.jobs._env import load_project_env
+=======
+from cli.ingestion.schema.canonical import from_binance_kline_row
+from cli.ingestion.sources.client.binance_client import BinanceSpotClient
+from cli.jobs._delta_writer import _table_path, write_records
+>>>>>>> 20261010_data_processing
 from cli.jobs.metrics import push_metrics, record_ingest
 from cli.flows.loader.load_config import load_exchange_config
 from log.logger_setup import logger_manager
 
 logger = logger_manager.get_logger(__name__)
 
+<<<<<<< HEAD
 # CloudFront 403 geo-block tại VN nodes (SGN*, HAN*) cho /fapi/v1/klines — bị chặn ở tầng CDN,
 # không phải lỗi code. Không tính vào errors counter; log WARN thay vì ERROR.
 _GEO_BLOCK_NODES = ("SGN", "HAN")
@@ -39,6 +51,8 @@ def _is_geo_blocked(exc: Exception) -> bool:
     msg = str(exc)
     return "403" in msg and "CloudFront" in msg
 
+=======
+>>>>>>> 20261010_data_processing
 _SCHEMA = pa.schema([
     pa.field("symbol",       pa.string(),  nullable=False),
     pa.field("inst_type",    pa.string(),  nullable=False),
@@ -61,6 +75,7 @@ _INTERVAL = "1d"
 
 
 def _parse_kline_row(row: list, symbol: str, inst_type: str, now_iso: str) -> dict | None:
+<<<<<<< HEAD
     try:
         rec = BinanceCandleRecord(
             inst_id   = symbol,
@@ -96,6 +111,12 @@ def _parse_kline_row(row: list, symbol: str, inst_type: str, now_iso: str) -> di
         "year":         year,
         "ingested_at":  now_iso,
     }
+=======
+    result = from_binance_kline_row(row, symbol, inst_type, _INTERVAL, now_iso)
+    if result is None:
+        logger.warning("_parse_kline_row: validation failed symbol=%s", symbol)
+    return result
+>>>>>>> 20261010_data_processing
 
 
 _CHUNK_DAYS = 900  # < 1000 max per Binance request, buffer để tránh off-by-one
@@ -108,9 +129,15 @@ def _fetch_chunked(client, symbol: str, inst_type: str, start_ms: int, end_ms: i
     Binance max 1000 candles/request — với interval 1d, chunk 900 ngày mỗi lần.
 
     Args:
+<<<<<<< HEAD
         client:    BinanceSpotClient hoặc BinanceFuturesClient.
         symbol:    e.g. "BTCUSDT".
         inst_type: "SPOT" | "FUTURES".
+=======
+        client:    BinanceSpotClient.
+        symbol:    e.g. "BTCUSDT".
+        inst_type: "SPOT".
+>>>>>>> 20261010_data_processing
         start_ms:  Unix ms — bắt đầu.
         end_ms:    Unix ms — kết thúc (exclusive).
         now_iso:   ISO8601 string cho ingested_at.
@@ -181,8 +208,12 @@ def run(from_date: str | None = None, to_date: str | None = None) -> dict:
     else:
         end_ms = int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
 
+<<<<<<< HEAD
     spot_symbols    = cfg["binance"]["instruments"]["spot"]
     futures_symbols = cfg["binance"]["instruments"]["futures"]
+=======
+    spot_symbols = cfg["binance"]["instruments"]["spot"]
+>>>>>>> 20261010_data_processing
 
     all_records: List[dict] = []
     errors, symbols_ok, symbols_err = 0, [], []
@@ -199,6 +230,7 @@ def run(from_date: str | None = None, to_date: str | None = None) -> dict:
             symbols_err.append(f"spot:{symbol}")
             errors += 1
 
+<<<<<<< HEAD
     futures_client = BinanceFuturesClient.from_env()
     for symbol in futures_symbols:
         try:
@@ -219,6 +251,8 @@ def run(from_date: str | None = None, to_date: str | None = None) -> dict:
                 symbols_err.append(f"futures:{symbol}")
                 errors += 1
 
+=======
+>>>>>>> 20261010_data_processing
     written = 0
     if all_records:
         # append-only — KHÔNG gọi apply_rolling_retention
@@ -233,6 +267,7 @@ def run(from_date: str | None = None, to_date: str | None = None) -> dict:
     return {"written": written, "errors": errors, "symbols_ok": symbols_ok, "symbols_err": symbols_err}
 
 
+<<<<<<< HEAD
 if __name__ == "__main__":
     import sys
     load_project_env()
@@ -240,3 +275,5 @@ if __name__ == "__main__":
     to_d   = sys.argv[2] if len(sys.argv) > 2 else None
     result = run(from_date=from_d, to_date=to_d)
     print(result)
+=======
+>>>>>>> 20261010_data_processing

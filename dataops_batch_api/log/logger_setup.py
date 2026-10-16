@@ -46,7 +46,11 @@ class JsonFormatter(logging.Formatter):
 
     Fields chuẩn: time, level, logger, message, module, line, process, thread.
     Extra fields được gắn vào record qua logger.info("msg", extra={...}):
-        run_id, component, operation, table, source, target
+        run_id, component, operation, table, source, target, correlation_id
+
+    correlation_id: UUID dùng để trace 1 job execution end-to-end qua tất cả log entries.
+    Cách dùng:
+        logger.info("job started", extra={"correlation_id": str(uuid.uuid4())})
     """
 
     def format(self, record: logging.LogRecord) -> str:
@@ -60,7 +64,8 @@ class JsonFormatter(logging.Formatter):
             "process": record.process,
             "thread":  record.threadName,
         }
-        for field in ("run_id", "component", "operation", "table", "source", "target"):
+        for field in ("run_id", "component", "operation", "table", "source", "target",
+                      "correlation_id"):
             value = getattr(record, field, None)
             if value is not None:
                 payload[field] = value

@@ -54,6 +54,7 @@ type LogEntry struct {
 	Timestamp string                 `json:"ts"`
 	Level     string                 `json:"level"`
 	Service   string                 `json:"service"`
+	TraceID   string                 `json:"trace_id,omitempty"` // X-Trace-ID header, propagated from gin.Context
 	Action    string                 `json:"action,omitempty"`
 	Message   string                 `json:"msg"`
 	Fields    map[string]interface{} `json:"fields,omitempty"`
@@ -64,6 +65,7 @@ type LogEntry struct {
 type Logger struct {
 	service   string
 	minLevel  Level
+	traceID   string     // propagated per-request trace ID
 	writers   []io.Writer // có thể write ra nhiều nơi (file + stdout)
 	stdLogger *log.Logger
 }
@@ -122,6 +124,7 @@ func (l *Logger) log(level Level, action, message string, fields map[string]inte
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Level:     level.String(),
 		Service:   l.service,
+		TraceID:   l.traceID,
 		Action:    action,
 		Message:   message,
 		Fields:    fields,
@@ -170,6 +173,18 @@ func (l *Logger) Fatal(action, msg string, fields ...map[string]interface{}) {
 // LEARN: Functional options pattern — trả về mới thay vì modify in-place
 func (l *Logger) WithFields(defaultFields map[string]interface{}) *FieldLogger {
 	return &FieldLogger{logger: l, defaults: defaultFields}
+}
+
+// WithTraceID trả về Logger mới với trace_id đã set — dùng per-request, không modify logger gốc.
+// Caller điển hình: TraceIDMiddleware extract header → logger.WithTraceID(id) → pass vào handler.
+func (l *Logger) WithTraceID(traceID string) *Logger {
+	return &Logger{
+		service:   l.service,
+		minLevel:  l.minLevel,
+		traceID:   traceID,
+		writers:   l.writers,
+		stdLogger: l.stdLogger,
+	}
 }
 
 // FieldLogger wrapper với default fields — dùng khi mọi log cùng context

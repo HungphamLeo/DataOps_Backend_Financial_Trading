@@ -219,17 +219,28 @@ class TestSchemaEnforcement(unittest.TestCase):
 
     @patch("cli.jobs._delta_writer.write_deltalake")
     def test_pa_table_built_from_records_with_schema(self, mock_write):
+<<<<<<< HEAD
         """PyArrow table được build từ records với schema đúng — types được enforce."""
         from cli.jobs._delta_writer import write_records
         import pyarrow as pa
 
         records = [{"symbol": "BTCUSDT", "close": "99999.5"}]   # close là string intentional
+=======
+        """PyArrow table được build từ records với schema đúng — float type preserved."""
+        from cli.jobs._delta_writer import write_records
+        import pyarrow as pa
+
+        # Production path: Pydantic đã validate trước → records chứa native Python types.
+        # pa.Table.from_pylist không auto-cast string → float; phải truyền đúng type.
+        records = [{"symbol": "BTCUSDT", "close": 99999.5}]
+>>>>>>> 20261010_data_processing
         schema = pa.schema([
             pa.field("symbol", pa.string()),
             pa.field("close",  pa.float64()),
         ])
 
         with patch.dict(os.environ, _ENV):
+<<<<<<< HEAD
             # pa.Table.from_pylist với schema sẽ cast string → float64
             result = write_records("s3://b/delta/bronze/t", records, schema)
 
@@ -237,6 +248,15 @@ class TestSchemaEnforcement(unittest.TestCase):
         # Lấy table được truyền vào write_deltalake để verify schema
         written_table: pa.Table = mock_write.call_args[0][1]
         self.assertEqual(written_table.schema.field("close").type, pa.float64())
+=======
+            result = write_records("s3://b/delta/bronze/t", records, schema)
+
+        self.assertEqual(result, 1)
+        # Verify schema của table truyền vào write_deltalake
+        written_table: pa.Table = mock_write.call_args[0][1]
+        self.assertEqual(written_table.schema.field("close").type, pa.float64())
+        self.assertAlmostEqual(written_table.column("close")[0].as_py(), 99999.5)
+>>>>>>> 20261010_data_processing
 
 
 if __name__ == "__main__":

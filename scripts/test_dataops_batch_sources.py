@@ -3,9 +3,14 @@
 test_dataops_batch_sources.py — Comprehensive Data Sources Test Suite for dataops_batch_api.
 
 Phạm vi kiểm thử:
+<<<<<<< HEAD
   1. Binance REST Client (Spot & USD-M Futures):
      - Spot: Klines (OHLCV), Exchange Info, Ticker 24h, Orderbook Depth, Recent Trades.
      - Futures: Klines, Exchange Info, Funding Rate, Mark Price, Open Interest.
+=======
+  1. Binance REST Client (Spot):
+     - Spot: Klines (OHLCV), Exchange Info, Ticker 24h, Orderbook Depth, Recent Trades.
+>>>>>>> 20261010_data_processing
      - Pydantic Validation: BinanceCandleRecord.
   2. TCBS iFlash REST Client:
      - Ticker Commons (by tickers & by index HOSE/VN30/HNX).
@@ -132,7 +137,11 @@ def _is_tcbs_endpoint_error(exc: Exception) -> bool:
 
 
 # ==============================================================================
+<<<<<<< HEAD
 # PHẦN 1: BINANCE SPOT & FUTURES TEST FUNCTIONS
+=======
+# PHẦN 1: BINANCE SPOT TEST FUNCTIONS
+>>>>>>> 20261010_data_processing
 # ==============================================================================
 
 def test_binance_spot_klines(verbose: bool = False) -> bool:
@@ -263,6 +272,7 @@ def test_binance_spot_orderbook(verbose: bool = False) -> bool:
         return False
 
 
+<<<<<<< HEAD
 def test_binance_futures_klines(verbose: bool = False) -> bool:
     """Test lấy nến USD-M Futures (BTCUSDT 4h, limit=5)."""
     start_time = time.perf_counter()
@@ -394,6 +404,8 @@ def test_binance_futures_open_interest(verbose: bool = False) -> bool:
         return False
 
 
+=======
+>>>>>>> 20261010_data_processing
 def test_binance_pydantic_validation(verbose: bool = False) -> bool:
     """Test validate raw candle data qua Pydantic BinanceCandleRecord."""
     start_time = time.perf_counter()
@@ -870,10 +882,13 @@ BINANCE_TESTS: Dict[str, Tuple[Callable[[bool], bool], str]] = {
     "test_binance_spot_exchange_info": (test_binance_spot_exchange_info, "Danh mục cặp giao dịch Spot"),
     "test_binance_spot_ticker_24hr": (test_binance_spot_ticker_24hr, "Biến động 24h Spot (BTCUSDT)"),
     "test_binance_spot_orderbook": (test_binance_spot_orderbook, "Sổ lệnh Orderbook Depth"),
+<<<<<<< HEAD
     "test_binance_futures_klines": (test_binance_futures_klines, "Nến OHLCV USD-M Futures (4h)"),
     "test_binance_futures_funding_rate": (test_binance_futures_funding_rate, "Lịch sử Funding Rate Futures"),
     "test_binance_futures_mark_price": (test_binance_futures_mark_price, "Mark Price & Index Price"),
     "test_binance_futures_open_interest": (test_binance_futures_open_interest, "Open Interest hợp đồng mở"),
+=======
+>>>>>>> 20261010_data_processing
     "test_binance_pydantic_validation": (test_binance_pydantic_validation, "Pydantic Schema Validation"),
 }
 
@@ -970,7 +985,11 @@ def main():
     print_section(f"BẮT ĐẦU TEST SUITE BATCH SOURCES (TARGET: {args.source.upper()})")
 
     if args.source in ("all", "binance"):
+<<<<<<< HEAD
         print_section("KIỂM THỬ NGUỒN BINANCE (SPOT & USD-M FUTURES)")
+=======
+        print_section("KIỂM THỬ NGUỒN BINANCE (SPOT)")
+>>>>>>> 20261010_data_processing
         for name, (fn, _) in BINANCE_TESTS.items():
             fn(args.verbose)
 

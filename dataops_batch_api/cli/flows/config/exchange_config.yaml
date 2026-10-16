@@ -17,10 +17,6 @@ binance:
       - "SOLUSDT"
       - "BNBUSDT"
       - "XRPUSDT"
-    futures:
-      - "BTCUSDT"
-      - "ETHUSDT"
-      - "SOLUSDT"
 
   intervals:
     default: "1m"
@@ -69,6 +65,16 @@ tcbs:
   # Intraday tick history: số trang tối đa mỗi ticker (1 page = 100 ticks)
   intraday_max_pages: 5
 
+  # Số tài khoản margin để ingest risk snapshot (tcbs_margin_job).
+  # Override bằng env TCBS_MARGIN_ACCOUNTS (comma-separated). Empty → skip.
+  margin_accounts: []
+
+  # Benchmark name → TCBS basket index (benchmark_index_job).
+  # TCBS OpenAPI không có index level → lưu basket aggregate.
+  benchmark_baskets:
+    VNINDEX: "HOSE"
+    VN30:    "VN30"
+
   # Token management
   token_refresh_threshold_sec: 3600   # Cảnh báo refresh khi token > 1h tuổi
 
@@ -77,7 +83,6 @@ delta:
   bucket: "binance-datalake"
   bronze:
     binance_spot:    "s3://binance-datalake/delta/bronze/binance_candles_spot"
-    binance_futures: "s3://binance-datalake/delta/bronze/binance_candles_futures"
     tcbs_market:     "s3://binance-datalake/delta/bronze/tcbs_market"
     tcbs_bsa:        "s3://binance-datalake/delta/bronze/tcbs_bsa"
     tcbs_intraday:   "s3://binance-datalake/delta/bronze/tcbs_intraday"

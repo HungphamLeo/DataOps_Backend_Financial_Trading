@@ -4,6 +4,10 @@ import (
 	"net/http"
 
 	"dataops-backend-api/models"
+<<<<<<< HEAD
+=======
+	"dataops-backend-api/services/risk"
+>>>>>>> 20261010_data_processing
 	tcbsaccount "dataops-backend-api/services/tcbs_account"
 
 	"github.com/gin-gonic/gin"
@@ -11,7 +15,13 @@ import (
 
 // TCBSAccountHandler xử lý các API endpoint liên quan đến tài khoản & giao dịch TCBS
 type TCBSAccountHandler struct {
+<<<<<<< HEAD
 	AccountSvc tcbsaccount.Service
+=======
+	AccountSvc     tcbsaccount.Service
+	PreTradeSvc    risk.PreTradeService // optional: nil = không kiểm tra pre-trade
+	PreTradeEnable bool
+>>>>>>> 20261010_data_processing
 }
 
 // Register đăng ký các routes cho TCBS Account & Trading proxy
@@ -24,11 +34,22 @@ func (h *TCBSAccountHandler) Register(accountGroup, derivGroup *gin.RouterGroup)
 	// Derivative Endpoints (/api/v1/tcbs/derivative/...)
 	derivGroup.GET("/positions", h.GetDerivativePositions)
 	derivGroup.POST("/order/place", h.PlaceDerivativeOrder)
+<<<<<<< HEAD
 }
 
 // RegisterStockOrder đăng ký route đặt lệnh cổ phiếu cơ sở (/api/v1/tcbs/order/place)
 func (h *TCBSAccountHandler) RegisterStockOrder(orderGroup *gin.RouterGroup) {
 	orderGroup.POST("/place", h.PlaceStockOrder)
+=======
+	derivGroup.DELETE("/order/:id", h.CancelDerivativeOrder)
+}
+
+// RegisterStockOrder đăng ký routes lệnh cổ phiếu cơ sở (/api/v1/tcbs/order)
+func (h *TCBSAccountHandler) RegisterStockOrder(orderGroup *gin.RouterGroup) {
+	orderGroup.POST("/place", h.PlaceStockOrder)
+	orderGroup.DELETE("/:id", h.CancelStockOrder)
+	orderGroup.PUT("/:id", h.ModifyStockOrder)
+>>>>>>> 20261010_data_processing
 }
 
 // GetCash lấy số dư tiền mặt tài khoản
@@ -91,6 +112,16 @@ func (h *TCBSAccountHandler) PlaceStockOrder(ctx *gin.Context) {
 		return
 	}
 
+<<<<<<< HEAD
+=======
+	if !enforcePreTrade(ctx, h.PreTradeSvc, h.PreTradeEnable, &models.PreTradeCheckRequest{
+		AccountNo: req.AccountNo, AssetType: "STOCK", Symbol: req.Symbol,
+		Side: req.Side, Quantity: req.Quantity, Price: req.Price,
+	}) {
+		return
+	}
+
+>>>>>>> 20261010_data_processing
 	resp, err := h.AccountSvc.PlaceStockOrder(ctx, &req)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -99,6 +130,48 @@ func (h *TCBSAccountHandler) PlaceStockOrder(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, resp)
 }
 
+<<<<<<< HEAD
+=======
+// CancelStockOrder hủy lệnh mua/bán cổ phiếu cơ sở
+// DELETE /api/v1/tcbs/order/:id?account_no=xxx
+func (h *TCBSAccountHandler) CancelStockOrder(ctx *gin.Context) {
+	orderID := ctx.Param("id")
+	accountNo := ctx.Query("account_no")
+	if orderID == "" || accountNo == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "order id and account_no are required"})
+		return
+	}
+
+	resp, err := h.AccountSvc.CancelStockOrder(ctx, accountNo, orderID)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, resp)
+}
+
+// ModifyStockOrder sửa giá / khối lượng lệnh cổ phiếu cơ sở
+// PUT /api/v1/tcbs/order/:id
+func (h *TCBSAccountHandler) ModifyStockOrder(ctx *gin.Context) {
+	orderID := ctx.Param("id")
+	var req models.TCBSModifyStockOrderRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "details": err.Error()})
+		return
+	}
+	if req.OrderNo == "" {
+		req.OrderNo = orderID
+	}
+
+	resp, err := h.AccountSvc.ModifyStockOrder(ctx, &req)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, resp)
+}
+
+>>>>>>> 20261010_data_processing
 // GetDerivativePositions lấy danh sách vị thế phái sinh đang mở
 // GET /api/v1/tcbs/derivative/positions?account_id=xxx
 func (h *TCBSAccountHandler) GetDerivativePositions(ctx *gin.Context) {
@@ -132,3 +205,24 @@ func (h *TCBSAccountHandler) PlaceDerivativeOrder(ctx *gin.Context) {
 	}
 	ctx.JSON(http.StatusOK, resp)
 }
+<<<<<<< HEAD
+=======
+
+// CancelDerivativeOrder hủy lệnh phái sinh VN30F
+// DELETE /api/v1/tcbs/derivative/order/:id?account_no=xxx
+func (h *TCBSAccountHandler) CancelDerivativeOrder(ctx *gin.Context) {
+	orderID := ctx.Param("id")
+	accountNo := ctx.Query("account_no")
+	if orderID == "" || accountNo == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "order id and account_no are required"})
+		return
+	}
+
+	resp, err := h.AccountSvc.CancelDerivativeOrder(ctx, accountNo, orderID)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, resp)
+}
+>>>>>>> 20261010_data_processing

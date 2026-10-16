@@ -1,15 +1,24 @@
 """
+<<<<<<< HEAD
 binance_client.py — BinanceSpotClient + BinanceFuturesClient assembled clients (thin facade).
 
 Phạm trù: Client Facade (Assembly)
 
 Hai class được tổng hợp từ domain mixins theo mixin pattern:
+=======
+binance_client.py — BinanceSpotClient assembled client (thin facade).
+
+Phạm trù: Client Facade (Assembly)
+
+Class được tổng hợp từ domain mixins theo mixin pattern:
+>>>>>>> 20261010_data_processing
 
     BinanceSpotClient:
         SpotMarketDataMixin   ← spot/market_data.py    Spot Market Data (public)
         SpotAccountMixin      ← spot/account.py        Spot Account & Trading (private)
         BinanceClientBase     ← http.py                HTTP Core: session, throttle, from_env
 
+<<<<<<< HEAD
     BinanceFuturesClient:
         FuturesMarketDataMixin ← future/market_data.py  UM Futures Market Data (public)
         FuturesAccountMixin    ← future/account.py      UM Futures Account & Trading (private)
@@ -25,6 +34,18 @@ SDK: binance-connector v3.13.0 (binance.spot.Spot)
 
 Usage:
     from cli.ingestion.sources.client.binance_client import BinanceSpotClient, BinanceFuturesClient
+=======
+Base URL:
+    Spot:        https://api.binance.com
+
+Dự án chỉ dùng Binance Spot — không hỗ trợ UM Futures.
+
+SDK: binance-connector v3.13.0 (binance.spot.Spot)
+    - Tự động sign private requests khi api_key + api_secret được set.
+
+Usage:
+    from cli.ingestion.sources.client.binance_client import BinanceSpotClient
+>>>>>>> 20261010_data_processing
 
     # Spot — public (không cần key)
     spot = BinanceSpotClient.from_env()
@@ -34,6 +55,7 @@ Usage:
     # Spot — private (cần BINANCE_API_KEY + BINANCE_SECRET_KEY)
     account = spot.get_account()
     trades  = spot.get_my_trades("BTCUSDT")
+<<<<<<< HEAD
 
     # UM Futures — public
     futures = BinanceFuturesClient.from_env()
@@ -45,12 +67,15 @@ Usage:
     # UM Futures — private
     positions = futures.get_positions("BTCUSDT")
     account   = futures.get_account()
+=======
+>>>>>>> 20261010_data_processing
 """
 from __future__ import annotations
 
 from cli.ingestion.sources.client.binance_client.http import (
     BinanceClientBase,
     _SPOT_BASE_URL,
+<<<<<<< HEAD
     _FUTURES_USDM_BASE_URL,
     _TESTNET_SPOT_BASE_URL,
     _TESTNET_FUTURES_URL,
@@ -61,6 +86,15 @@ from cli.ingestion.sources.client.binance_client.future.market_data import Futur
 from cli.ingestion.sources.client.binance_client.future.account import FuturesAccountMixin
 
 __all__ = ["BinanceSpotClient", "BinanceFuturesClient"]
+=======
+    _TESTNET_SPOT_BASE_URL,
+)
+from cli.ingestion.sources.client.binance_client.spot.market_data import SpotMarketDataMixin
+from cli.ingestion.sources.client.binance_client.spot.account import SpotAccountMixin
+
+
+__all__ = ["BinanceSpotClient"]
+>>>>>>> 20261010_data_processing
 
 
 class BinanceSpotClient(
@@ -106,6 +140,7 @@ class BinanceSpotClient(
             is_testnet=is_testnet,
             rate_limit_interval=float(os.getenv("BINANCE_RATE_LIMIT", "0.1")),
         )
+<<<<<<< HEAD
 
 
 class BinanceFuturesClient(
@@ -154,3 +189,5 @@ class BinanceFuturesClient(
             is_testnet=is_testnet,
             rate_limit_interval=float(os.getenv("BINANCE_RATE_LIMIT", "0.1")),
         )
+=======
+>>>>>>> 20261010_data_processing

@@ -1,23 +1,23 @@
-// symbols.go — Symbol registry và validation cho Binance và VPS Securities.
+// symbols.go — Symbol registry và validation cho Binance và TCBS Securities.
 //
 // Vấn đề cần giải quyết:
 //
 //	Binance dùng format "BTCUSDT", "ETHUSDT" (không có dấu '-')
-//	VPS dùng format "HPG", "VCB", "VNM" (mã chứng khoán thuần, HOSE)
+//	TCBS dùng format "HPG", "VCB", "VNM" (mã chứng khoán thuần, HOSE)
 //	Hai hệ thống có convention khác nhau → cần map tập trung để:
 //	  1. Validate symbol hợp lệ trước khi query InfluxDB
 //	  2. Chuẩn hóa format khi cần cross-reference (ví dụ alert từ Kafka → REST response)
 //	  3. Scale thêm symbols mà không sửa rải rác trong code
 //
-// Phạm vi VPS hiện tại:
+// Phạm vi TCBS hiện tại:
 //
-//	Chỉ hỗ trợ sàn HOSE (HNX và UPCOM không nằm trong scope).
-//	Khi cần mở rộng sang HNX/UPCOM, thêm key mới vào hoseSymbols.
+//	Hỗ trợ HOSE, HNX và UPCOM qua TCBS iFlash API.
+//	Khi cần mở rộng thêm mã mới, thêm key vào hoseSymbols.
 //
 // Cách thêm symbol mới:
 //   - Binance Spot:    thêm vào binanceSpotSymbols
 //   - Binance Futures: thêm vào binanceFuturesSymbols
-//   - VPS/HOSE:        thêm vào hoseSymbols
+//   - TCBS/HOSE:       thêm vào hoseSymbols
 //
 // Cách sử dụng:
 //

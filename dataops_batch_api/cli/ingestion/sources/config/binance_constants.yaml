@@ -5,7 +5,10 @@
 #
 # Reference:
 #   Spot: https://binance-docs.github.io/apidocs/spot/en/
+<<<<<<< HEAD
 #   Futures: https://binance-docs.github.io/apidocs/futures/en/
+=======
+>>>>>>> 20261010_data_processing
 #
 # Auth pattern (private endpoints):
 #   Header: X-MBX-APIKEY: <api_key>
@@ -14,16 +17,23 @@
 # ─── Base URLs ────────────────────────────────────────────────────────────────
 base_urls:
   spot:           "https://api.binance.com/api/v3"
+<<<<<<< HEAD
   futures_usdm:   "https://fapi.binance.com/fapi/v1"
   futures_coinm:  "https://dapi.binance.com/dapi/v1"
   testnet_spot:   "https://testnet.binance.vision/api/v3"
   testnet_futures: "https://testnet.binancefuture.com/fapi/v1"
+=======
+  testnet_spot:   "https://testnet.binance.vision/api/v3"
+>>>>>>> 20261010_data_processing
 
 # ─── WebSocket URLs ───────────────────────────────────────────────────────────
 websocket_urls:
   spot_stream:    "wss://stream.binance.com:9443/ws/stream"
   spot_stream_443: "wss://stream.binance.com:443/ws/stream"   # port 443 fallback
+<<<<<<< HEAD
   futures_stream: "wss://fstream.binance.com/stream"
+=======
+>>>>>>> 20261010_data_processing
 
 # ─── Public Endpoints (no auth required) ─────────────────────────────────────
 public_endpoints:
@@ -39,9 +49,13 @@ public_endpoints:
   ticker_24h:         "/ticker/24hr"
   ticker_book:        "/ticker/bookTicker"
   avg_price:          "/avgPrice"
+<<<<<<< HEAD
   mark_price:         "/premiumIndex"           # Futures only
   funding_rate:       "/fundingRate"            # Futures only
   open_interest:      "/openInterest"           # Futures only
+=======
+
+>>>>>>> 20261010_data_processing
 
 # ─── Private Endpoints (requires X-MBX-APIKEY + signature) ───────────────────
 private_endpoints:
@@ -106,10 +120,14 @@ ws_streams:
   kline_1h:         "@kline_1h"            # 1-hour kline updates
   mini_ticker:      "@miniTicker"          # 24hr mini ticker
   ticker:           "@ticker"              # 24hr rolling window ticker
+<<<<<<< HEAD
   mark_price:       "@markPrice"           # Mark price + funding rate (futures)
   mark_price_1s:    "@markPrice@1s"        # Mark price 1s update (futures)
   force_order:      "@forceOrder"          # Liquidation orders (futures)
   all_force_orders: "!forceOrder@arr"      # All symbol liquidations (futures)
+=======
+
+>>>>>>> 20261010_data_processing
 
 # ─── Trade Tick Field Mapping ─────────────────────────────────────────────────
 # Binance @trade stream message payload (combined stream: msg.data)
@@ -130,15 +148,22 @@ trade_tick_fields:
 # Binance dùng symbol không có dấu gạch ngang — khác OKX
 symbol_format:
   spot:    "BTCUSDT"        # uppercase, no hyphen
+<<<<<<< HEAD
   futures: "BTCUSDT"        # same as spot — khác nhau bởi domain (api vs fapi)
+=======
+>>>>>>> 20261010_data_processing
   # WS stream: lowercase + @stream → "btcusdt@trade"
 
 # ─── Instrument Types ─────────────────────────────────────────────────────────
 # Dùng cho inst_type field trong BinanceCandleRecord
 instrument_types:
   SPOT:    "Spot market"
+<<<<<<< HEAD
   FUTURES: "USD-M Perpetual/Quarterly Futures (fapi.binance.com)"
   COINM:   "Coin-M Futures (dapi.binance.com)"
+=======
+
+>>>>>>> 20261010_data_processing
 
 # ─── Rate Limits ──────────────────────────────────────────────────────────────
 rate_limits:

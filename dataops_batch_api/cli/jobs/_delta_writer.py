@@ -13,7 +13,11 @@ Design:
 Env vars bắt buộc:
     AWS_ACCESS_KEY_ID     — MinIO access key
     AWS_SECRET_ACCESS_KEY — MinIO secret key
+<<<<<<< HEAD
     AWS_ENDPOINT_URL      — MinIO endpoint reachable from this process
+=======
+    AWS_ENDPOINT_URL      — http://minio:9000
+>>>>>>> 20261010_data_processing
     AWS_REGION            — us-east-1 (bất kỳ, MinIO không check)
 """
 from __future__ import annotations
@@ -23,7 +27,18 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 import pyarrow as pa
+<<<<<<< HEAD
 from deltalake import DeltaTable, write_deltalake
+=======
+
+# Lazy import: allows tests to mock deltalake without requiring the package installed.
+# Production code always has deltalake available via requirements.txt.
+try:
+    from deltalake import DeltaTable, write_deltalake
+except ImportError:  # pragma: no cover
+    DeltaTable = None      # type: ignore[assignment,misc]
+    write_deltalake = None  # type: ignore[assignment]
+>>>>>>> 20261010_data_processing
 
 from log.logger_setup import logger_manager
 

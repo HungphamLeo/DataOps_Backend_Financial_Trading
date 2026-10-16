@@ -100,3 +100,28 @@
 # Kafka:       9092 (internal) / 29092 (external)
 # Grafana:     3000
 # Schema Registry: 8081
+<<<<<<< HEAD
+=======
+
+# ─── 6. Loki / Promtail — file-based logs của Python services (TASK-INF1) ─────
+#
+# `loki` + `promtail` đã có trong docker-compose.yml (scrape Docker stdout).
+# promtail-config.yaml nay có thêm job `dataops-python-logfiles` đọc
+# log_storage/*.log (JSON) của dataops_batch_api và dataops_processing.
+# Cần mount thêm 2 volume (read-only) vào service `promtail` trong docker-compose.yml:
+#
+#   promtail:
+#     volumes:
+#       - /var/lib/docker/containers:/var/lib/docker/containers:ro
+#       - /var/run/docker.sock:/var/run/docker.sock:ro
+#       - ./promtail-config.yaml:/etc/promtail/config.yaml:ro
+#       - ../dataops_batch_api/log/log_storage:/var/log/dataops/batch_api:ro     # NEW
+#       - ../dataops_processing/log/log_storage:/var/log/dataops/processing:ro   # NEW
+#
+# Query mẫu (Grafana Explore → Loki):
+#   {job="dataops-batch-api-file", level="ERROR"}
+#   {job="dataops-processing-file"} |= "order-flow"
+#
+# Lưu ý: nếu services chạy trong container và ghi log vào volume riêng, đổi nguồn mount
+# tương ứng; debug log không bị drop ở job file-based (chỉ job Docker stdout có drop DEBUG).
+>>>>>>> 20261010_data_processing

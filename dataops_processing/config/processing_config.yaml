@@ -1,0 +1,138 @@
+# =============================================================================
+# processing_config.yaml — Single source of truth cho dataops_processing
+#
+# Tất cả tham số tech stack (Spark, Kafka, InfluxDB, MinIO, job params)
+# đều khai báo ở đây. Không hardcode trong source code.
+#
+# Env vars chỉ dùng để OVERRIDE giá trị tại đây (12-Factor pattern).
+# Thứ tự ưu tiên: env var > yaml value > default trong code.
+#
+# Tham chiếu: docs/PROJECT_RESTRUCTURE_PLAN.md Sub-Task 3
+# =============================================================================
+
+# ─── Kafka ────────────────────────────────────────────────────────────────────
+kafka:
+  bootstrap_servers: "localhost:9092"    # override: env KAFKA_URL
+  topics:
+    binance_trade_ticks: "binance.trade.ticks"
+  consumer:
+    starting_offsets: "latest"
+    max_offsets_per_trigger: 10000
+    request_timeout_ms: 10000
+    session_timeout_ms: 30000
+    fail_on_data_loss: false             # tránh crash khi topic bị compact
+
+# ─── InfluxDB v2 ──────────────────────────────────────────────────────────────
+influxdb:
+  url: "http://localhost:8086"           # override: env INFLUXDB_URL
+  token: ""                              # override: env INFLUXDB_TOKEN (required)
+  org: "binance-vps-platform"           # override: env INFLUXDB_ORG
+  bucket: "market-data"                 # override: env INFLUXDB_BUCKET
+  write_precision: "ns"                 # nanosecond — khớp với Flux query backend
+
+# ─── MinIO / S3A ──────────────────────────────────────────────────────────────
+minio:
+  endpoint: "http://minio:9010"         # override: env MINIO_ENDPOINT
+  access_key: "minioadmin"              # override: env MINIO_ACCESS_KEY
+  secret_key: "minioadmin"             # override: env MINIO_SECRET_KEY
+  path_style_access: true
+  ssl_enabled: false
+
+# ─── Delta Lake ───────────────────────────────────────────────────────────────
+delta:
+  bucket: "binance-datalake"            # override: env DELTA_BUCKET
+  silver_base: "delta/silver"           # override: env DELTA_SILVER_BASE (suffix only)
+  tables:
+    vwap_1m: "vwap_1m"
+    volume_bars: "volume_bars"
+    indicator_matrix: "indicator_matrix"
+
+# ─── Spark Session ────────────────────────────────────────────────────────────
+spark:
+  app_name: "dataops-processing"        # override: env SPARK_APP_NAME
+  master: "local[*]"                    # override: env SPARK_MASTER
+  log_level: "WARN"
+  # Shuffle / parallelism — local mode defaults
+  shuffle_partitions: 8
+  default_parallelism: 4
+  # Graceful shutdown khi nhận SIGTERM
+  stop_gracefully_on_shutdown: true
+  # Checkpoint root dir — job-specific suffix appended at runtime
+  checkpoint_base: "/tmp/spark-checkpoints"  # override: env SPARK_CHECKPOINT_DIR
+  # Maven packages — versions phải khớp requirements.txt
+  packages:
+    kafka_connector: "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1"
+    delta_spark: "io.delta:delta-spark_2.12:3.1.0"
+    hadoop_aws: "org.apache.hadoop:hadoop-aws:3.3.4"
+    aws_sdk: "com.amazonaws:aws-java-sdk-bundle:1.12.262"
+
+# ─── VWAP Streaming Job ───────────────────────────────────────────────────────
+vwap_job:
+  window_duration: "5 minutes"
+  slide_duration: "1 minute"
+  watermark: "30 seconds"
+  trigger_interval: "30 seconds"
+  output_mode: "append"
+  influx_measurement: "vwap"
+  influx_interval_tag: "5m"
+  delta_table: "vwap_1m"               # → delta.tables.vwap_1m
+
+# ─── Market Breadth & Foreign Flow Batch Job (TASK-P3) ────────────────────────
+# Nguồn: Delta Bronze tcbs_market_eod (batch_api). Output: Delta Gold market_breadth.
+# Group tự động: ALL + từng exchange (HOSE/HNX/UPCOM); thêm baskets khai báo bên dưới.
+market_breadth_job:
+  source_table: "tcbs_market_eod"
+  gold_table: "market_breadth"
+  baskets:
+    VN30: ["ACB", "BCM", "BID", "BVH", "CTG", "FPT", "GAS", "GVR", "HDB", "HPG",
+           "MBB", "MSN", "MWG", "PLX", "POW", "SAB", "SHB", "SSB", "SSI", "STB",
+           "TCB", "TPB", "VCB", "VHM", "VIB", "VIC", "VJC", "VNM", "VPB", "VRE"]
+
+# ─── Order Flow / CVD Streaming Job ───────────────────────────────────────────
+# Mỗi window emit buy_volume / sell_volume / delta / imbalance.
+# CVD = cumulativeSum(delta) — tính ở tầng query (Flux), không giữ state trong Spark.
+order_flow_job:
+  window_duration: "1 minute"
+  watermark: "30 seconds"
+  trigger_interval: "30 seconds"
+  output_mode: "append"
+  influx_measurement: "order_flow"
+  influx_interval_tag: "1m"
+
+# ─── Volume Bars Batch Job ────────────────────────────────────────────────────
+volume_bars_job:
+  # Volume threshold per symbol — 1 bar = N units base asset
+  # Thresholds chọn để ~1-2 full bars/ngày
+  thresholds:
+    BTCUSDT: 500       # ~2-5 bars/ngày tại ~500 BTC/bar
+    ETHUSDT: 5000      # ~2-4 bars/ngày tại ~5000 ETH/bar
+    SOLUSDT: 50000     # ~2-4 bars/ngày tại ~50000 SOL/bar
+  source_table: "binance_candles_1d"   # Delta Bronze table
+  source_interval: "1d"
+  delta_table: "volume_bars"           # → delta.tables.volume_bars
+  overwrite_schema: true
+
+# ─── Indicator Matrix Batch Job (Multi-Timeframe EMA, ATR, RSI, BB) ───────────
+indicator_matrix_job:
+  symbols:
+    - "BTCUSDT"
+    - "ETHUSDT"
+    - "SOLUSDT"
+    - "VNINDEX"
+    - "VN30"
+    - "TCB"
+    - "FPT"
+    - "HPG"
+  intervals:
+    - "1d"
+    - "1h"
+  ema_periods: [20, 50, 200]
+  rsi_period: 14
+  atr_period: 14
+  bb_period: 20
+  bb_std: 2.0
+  source_table_binance_1d: "binance_candles_1d"
+  source_table_binance_1h: "binance_candles_1h"
+  source_table_tcbs_1d: "tcbs_market_snapshot"
+  delta_table: "indicator_matrix"
+  overwrite_schema: true
