@@ -1,0 +1,23 @@
+{
+  "type": "record",
+  "name": "TCBSDerivativeEvent",
+  "namespace": "com.tcbs.derivative.events",
+  "doc": "Real-time price update từ TCBS WSS /api/v1/derivatives/contracts — VN30F futures. Fields mirror DerivativeItem từ /tartarus/v1/derivatives REST endpoint.",
+  "fields": [
+    { "name": "symbol",     "type": "string", "doc": "Mã hợp đồng phái sinh, e.g. VN30F2410, VN30F2411" },
+    { "name": "ceilPrice",  "type": "double", "doc": "Giá trần",                             "default": 0.0 },
+    { "name": "floorPrice", "type": "double", "doc": "Giá sàn",                              "default": 0.0 },
+    { "name": "refPrice",   "type": "double", "doc": "Giá tham chiếu",                       "default": 0.0 },
+    { "name": "matchPrice", "type": "double", "doc": "Giá khớp lệnh hiện tại",               "default": 0.0 },
+    { "name": "matchQty",   "type": "double", "doc": "Khối lượng khớp lệnh",                 "default": 0.0 },
+    { "name": "bidPrice01", "type": "double", "doc": "Giá chào mua 1 (best bid)",            "default": 0.0 },
+    { "name": "bidQty01",   "type": "double", "doc": "Khối lượng chào mua 1",                "default": 0.0 },
+    { "name": "askPrice01", "type": "double", "doc": "Giá chào bán 1 (best ask)",            "default": 0.0 },
+    { "name": "askQty01",   "type": "double", "doc": "Khối lượng chào bán 1",                "default": 0.0 },
+    { "name": "change",     "type": "double", "doc": "Thay đổi giá tuyệt đối vs tham chiếu","default": 0.0 },
+    { "name": "changePct",  "type": "double", "doc": "Thay đổi giá phần trăm",              "default": 0.0 },
+    { "name": "totalVol",   "type": "double", "doc": "Tổng khối lượng giao dịch phiên",      "default": 0.0 },
+    { "name": "tsMs",       "type": "long",   "doc": "Unix timestamp milliseconds lúc event" },
+    { "name": "producedAtMs", "type": "long", "doc": "Unix timestamp milliseconds khi producer gửi lên Kafka" }
+  ]
+}

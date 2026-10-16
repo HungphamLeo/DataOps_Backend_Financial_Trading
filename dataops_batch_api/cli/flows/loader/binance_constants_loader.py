@@ -7,11 +7,23 @@ Single source of truth cho endpoints, enums, field indices, rate limits của Bi
 Không hardcode bất kỳ giá trị nào trong source code — đọc qua BinanceConstants class.
 
 Usage:
+<<<<<<< HEAD
     from cli.ingestion.sources.binance_constants import BinanceConstants
 
     base = BinanceConstants.base_url("spot")          # "https://api.binance.com/api/v3"
     path = BinanceConstants.public_endpoint("klines") # "/klines"
     idx  = BinanceConstants.kline_field_index("close") # 4
+=======
+    from cli.flows.loader.binance_constants_loader import BinanceConstants
+
+    base = BinanceConstants.base_url("spot")           # "https://api.binance.com/api/v3"
+    path = BinanceConstants.public_endpoint("klines")  # "/klines"
+    idx  = BinanceConstants.kline_field_index("close") # 4
+
+Note:
+    cli.ingestion.sources.binance_constants là backward-compat re-export.
+    Import trực tiếp từ đây (cli.flows.loader.binance_constants_loader) khi viết code mới.
+>>>>>>> 20261010_data_processing
 """
 from __future__ import annotations
 

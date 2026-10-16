@@ -9,6 +9,11 @@ Schedule:
     binance_1d_job  : cron "5 0 * * *"       (UTC) — 00:05 UTC hàng ngày
     tcbs_eod_job    : cron "15 8 * * 1-5"    (UTC) — 15:15 ICT, T2-T6
     tcbs_bsa_job    : cron "30 8 * * 1-5"    (UTC) — 15:30 ICT, T2-T6
+<<<<<<< HEAD
+=======
+    tcbs_margin_job : cron "45 8 * * 1-5"    (UTC) — 15:45 ICT, T2-T6
+    benchmark_index_job : cron "50 8 * * 1-5" (UTC) — 15:50 ICT, T2-T6
+>>>>>>> 20261010_data_processing
 
 Run:
     python -m cli.scheduler
@@ -27,8 +32,15 @@ import sys
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+<<<<<<< HEAD
 from cli.jobs import binance_4h_job, binance_1d_job, tcbs_eod_job, tcbs_bsa_job
 from cli.jobs._env import load_project_env
+=======
+from cli.jobs import (
+    binance_4h_job, binance_1d_job, tcbs_eod_job, tcbs_bsa_job,
+    tcbs_margin_job, benchmark_index_job,
+)
+>>>>>>> 20261010_data_processing
 from log.logger_setup import logger_manager
 
 logger = logger_manager.get_logger(__name__)
@@ -90,12 +102,42 @@ def build_scheduler() -> BlockingScheduler:
         misfire_grace_time=600,
     )
 
+<<<<<<< HEAD
+=======
+    # [15:45 ICT = 08:45 UTC, T2-T6] TCBS margin risk snapshot
+    scheduler.add_job(
+        lambda: _run_job("tcbs_margin", tcbs_margin_job.run),
+        CronTrigger(hour=8, minute=45, day_of_week="mon-fri"),
+        id="tcbs_margin",
+        name="TCBS margin risk snapshot",
+        max_instances=1,
+        misfire_grace_time=600,
+    )
+
+    # [15:50 ICT = 08:50 UTC, T2-T6] Benchmark index (VNINDEX, VN30, BTC.D proxy)
+    scheduler.add_job(
+        lambda: _run_job("benchmark_index", benchmark_index_job.run),
+        CronTrigger(hour=8, minute=50, day_of_week="mon-fri"),
+        id="benchmark_index",
+        name="Benchmark index daily",
+        max_instances=1,
+        misfire_grace_time=600,
+    )
+
+>>>>>>> 20261010_data_processing
     return scheduler
 
 
 def main() -> None:
+<<<<<<< HEAD
     load_project_env()
     logger.info("scheduler: starting — jobs: binance_4h, binance_1d, tcbs_eod, tcbs_bsa")
+=======
+    logger.info(
+        "scheduler: starting — jobs: binance_4h, binance_1d, tcbs_eod, tcbs_bsa, "
+        "tcbs_margin, benchmark_index"
+    )
+>>>>>>> 20261010_data_processing
     scheduler = build_scheduler()
 
     # Graceful shutdown on SIGTERM / SIGINT

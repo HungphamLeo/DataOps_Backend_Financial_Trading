@@ -29,7 +29,11 @@ from typing import List
 
 import pyarrow as pa
 
+<<<<<<< HEAD
 from cli.ingestion.schema.models import TCBSBSARecord
+=======
+from cli.ingestion.schema.canonical import from_tcbs_bsa_record
+>>>>>>> 20261010_data_processing
 from cli.ingestion.sources.client.tcbs_client import TCBSRestClient
 from cli.jobs._delta_writer import _table_path, write_records, apply_rolling_retention
 from cli.jobs.metrics import push_metrics, record_ingest
@@ -52,6 +56,7 @@ _INVESTOR_TYPES = ["sheep", "wolf", "shark", "all"]
 _RETENTION_DAYS = 730   # 2 năm
 
 
+<<<<<<< HEAD
 def _aggregate_bsa(bsa_points: list, investor_type: str) -> dict | None:
     """
     Aggregate list BSA points trong ngày → 1 summary record.
@@ -82,6 +87,15 @@ def _aggregate_bsa(bsa_points: list, investor_type: str) -> dict | None:
         return None
 
     return rec
+=======
+def _aggregate_bsa(bsa_points: list, ticker: str, investor_type: str, trading_date: str, now_iso: str) -> dict | None:
+    """
+    Aggregate list BSA points trong ngày → 1 canonical summary dict.
+
+    Delegates tới from_tcbs_bsa_record() trong canonical.py.
+    """
+    return from_tcbs_bsa_record(bsa_points, ticker, investor_type, trading_date, now_iso)
+>>>>>>> 20261010_data_processing
 
 
 def run() -> dict:
@@ -125,6 +139,7 @@ def run() -> dict:
                 else:
                     raw_points = []
 
+<<<<<<< HEAD
                 # Inject ticker vào mỗi point (API response không có field ticker)
                 for p in raw_points:
                     if isinstance(p, dict):
@@ -144,6 +159,14 @@ def run() -> dict:
                     logger.debug(
                         "tcbs_bsa_job: %s/%s bup=%.1f sdp=%.1f bsr=%.2f",
                         ticker, inv_type, summary.bup, summary.sdp, summary.bsr,
+=======
+                row = _aggregate_bsa(raw_points, ticker, inv_type, trading_date, now_iso)
+                if row:
+                    all_records.append(row)
+                    logger.debug(
+                        "tcbs_bsa_job: %s/%s bup=%.1f sdp=%.1f bsr=%.2f",
+                        ticker, inv_type, row["bup"], row["sdp"], row["bsr"],
+>>>>>>> 20261010_data_processing
                     )
                 else:
                     logger.warning("tcbs_bsa_job: no BSA data for %s/%s", ticker, inv_type)
@@ -174,8 +197,11 @@ def run() -> dict:
     return {"written": written, "errors": errors}
 
 
+<<<<<<< HEAD
 if __name__ == "__main__":
     from cli.jobs._env import load_project_env
     load_project_env()
     result = run()
     print(result)
+=======
+>>>>>>> 20261010_data_processing

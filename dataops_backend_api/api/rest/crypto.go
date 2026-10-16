@@ -1,49 +1,86 @@
 // crypto.go — Gin HTTP handlers cho Binance crypto analytics endpoints.
-//
-// Mỗi handler trong file này làm đúng 3 việc:
-//  1. Parse và validate query parameters (symbol, interval, from, to)
-//  2. Gọi CryptoService để query InfluxDB / Delta Lake
-//  3. Trả JSON response với format chuẩn
-//
-// Tất cả magic numbers (time ranges, defaults) được lấy từ constants/defaults.go.
-// Symbol validation dùng constants/symbols.go — không hardcode string trong handler.
 package rest
 
 import (
 	"net/http"
-	"dataops-backend-api/constants"
-	"dataops-backend-api/services/analytics"
 	"strconv"
 	"time"
+
+	"dataops-backend-api/constants"
+	"dataops-backend-api/models"
+	"dataops-backend-api/services/analytics"
+	cryptoaccount "dataops-backend-api/services/crypto_account"
+	"dataops-backend-api/services/risk"
 
 	"github.com/gin-gonic/gin"
 )
 
-// CryptoHandler xử lý các Binance analytics endpoints.
-// Tất cả routes đều yêu cầu JWT (đăng ký trong protected group).
-//
-// Dependencies được inject qua field AnalyticsSvc — dễ mock trong unit tests.
+// CryptoHandler xử lý các Binance analytics & order endpoints.
 type CryptoHandler struct {
-	AnalyticsSvc analytics.CryptoService
+	AnalyticsSvc     analytics.CryptoService
+	CryptoAccountSvc cryptoaccount.Service
+	PreTradeSvc      risk.PreTradeService // optional: nil = không kiểm tra pre-trade
+	PreTradeEnable   bool
 }
 
 // Register đăng ký tất cả crypto routes vào router group r.
-//
-// Routes (tất cả đều GET, JWT required):
-//
-//	/vwap         → Volume Weighted Average Price theo symbol + interval + time range
-//	/ohlcv        → OHLCV candles từ InfluxDB (real-time) hoặc Delta Lake (historical)
-//	/orderbook    → Real-time order book snapshot (top 5 bid/ask levels)
-//	/funding      → Funding rate history cho perpetual swaps
-//	/liquidations → Liquidation events (forced close) trong time range
 func (h *CryptoHandler) Register(r *gin.RouterGroup) {
 	r.GET("/ticker", h.GetTicker)
 	r.GET("/:symbol/ticker", h.GetTickerByParam)
 	r.GET("/vwap", h.GetVWAP)
 	r.GET("/ohlcv", h.GetOHLCV)
+	r.GET("/:symbol/signal", h.GetSignal)
 	r.GET("/orderbook", h.GetOrderBook)
 	r.GET("/funding", h.GetFundingRate)
 	r.GET("/liquidations", h.GetLiquidations)
+
+	// Crypto Order Management & Balance Proxy
+	r.GET("/balance", h.GetBalance)
+	r.GET("/orders", h.GetOrders)
+	r.POST("/order/place", h.PlaceOrder)
+	r.DELETE("/order/:id", h.CancelOrder)
+}
+
+// GetTicker trả về real-time ticker data từ Redis cache
+// GET /api/v1/crypto/ticker?symbol=BTCUSDT
+func (h *CryptoHandler) GetTicker(ctx *gin.Context) {
+	symbol := ctx.Query("symbol")
+	if symbol == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "symbol is required"})
+		return
+	}
+	if !constants.IsValidBinanceSymbol(symbol) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "unsupported symbol"})
+		return
+	}
+
+	data, err := h.AnalyticsSvc.GetTicker(ctx, symbol)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, data)
+}
+
+// GetTickerByParam trả về ticker theo path param
+// GET /api/v1/crypto/:symbol/ticker
+func (h *CryptoHandler) GetTickerByParam(ctx *gin.Context) {
+	symbol := ctx.Param("symbol")
+	if symbol == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "symbol is required"})
+		return
+	}
+	if !constants.IsValidBinanceSymbol(symbol) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "unsupported symbol"})
+		return
+	}
+
+	data, err := h.AnalyticsSvc.GetTicker(ctx, symbol)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, data)
 }
 
 // GetTicker trả về real-time ticker data từ Redis cache
@@ -284,6 +321,129 @@ func (h *CryptoHandler) GetLiquidations(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"symbol": symbol, "data": data})
+}
+
+
+// GetSignal tính RSI(14) + MA(20) signal cho 1 symbol.
+//
+// Path param:  symbol   — e.g. "BTCUSDT"
+// Query param: timeframe — default "5m"
+//
+// Response 200:
+//
+//	{ "symbol":"BTCUSDT", "signal":"BUY"|"SELL"|"HOLD"|"NEUTRAL",
+//	  "confidence":0.75, "rsi14":28.5, "timeframe":"5m" }
+//
+// GET /api/v1/crypto/:symbol/signal
+func (h *CryptoHandler) GetSignal(ctx *gin.Context) {
+	symbol := ctx.Param("symbol")
+	if symbol == "" || !constants.IsValidBinanceSymbol(symbol) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "unsupported symbol"})
+		return
+	}
+	timeframe := ctx.DefaultQuery("timeframe", constants.DefaultCryptoVWAPInterval)
+
+	sig, err := h.AnalyticsSvc.ComputeSignal(ctx, symbol, timeframe)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"symbol":     symbol,
+		"signal":     sig.SignalType,
+		"confidence": sig.Confidence,
+		"rsi14":      sig.Value,
+		"timeframe":  sig.Timeframe,
+	})
+}
+
+
+// GetBalance lấy số dư tài khoản Binance Spot
+// GET /api/v1/crypto/balance
+func (h *CryptoHandler) GetBalance(ctx *gin.Context) {
+	if h.CryptoAccountSvc == nil {
+		ctx.JSON(http.StatusOK, gin.H{"balances": []models.BinanceBalanceItem{}})
+		return
+	}
+	data, err := h.CryptoAccountSvc.GetAccountBalance(ctx)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, data)
+}
+
+// GetOrders lấy danh sách lệnh Binance Spot đang mở
+// GET /api/v1/crypto/orders?symbol=BTCUSDT
+func (h *CryptoHandler) GetOrders(ctx *gin.Context) {
+	symbol := ctx.Query("symbol")
+	if h.CryptoAccountSvc == nil {
+		ctx.JSON(http.StatusOK, gin.H{"orders": []models.BinanceOrderResponse{}})
+		return
+	}
+	data, err := h.CryptoAccountSvc.GetOpenOrders(ctx, symbol)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"orders": data})
+}
+
+// PlaceOrder đặt lệnh mua / bán Binance Spot
+// POST /api/v1/crypto/order/place
+func (h *CryptoHandler) PlaceOrder(ctx *gin.Context) {
+	var req models.BinancePlaceOrderRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "details": err.Error()})
+		return
+	}
+	if !constants.IsValidBinanceSymbol(req.Symbol) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "unsupported symbol"})
+		return
+	}
+	if h.CryptoAccountSvc == nil {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "crypto account service not available"})
+		return
+	}
+	if !enforcePreTrade(ctx, h.PreTradeSvc, h.PreTradeEnable, &models.PreTradeCheckRequest{
+		AssetType: "CRYPTO", Symbol: req.Symbol, Side: req.Side,
+		Quantity: req.Quantity, Price: req.Price,
+	}) {
+		return
+	}
+	resp, err := h.CryptoAccountSvc.PlaceOrder(ctx, &req)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, resp)
+}
+
+// CancelOrder hủy lệnh Binance Spot
+// DELETE /api/v1/crypto/order/:id?symbol=BTCUSDT
+func (h *CryptoHandler) CancelOrder(ctx *gin.Context) {
+	orderIDStr := ctx.Param("id")
+	symbol := ctx.Query("symbol")
+	if symbol == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "symbol is required"})
+		return
+	}
+	orderID, err := strconv.ParseInt(orderIDStr, 10, 64)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid order id"})
+		return
+	}
+	if h.CryptoAccountSvc == nil {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "crypto account service not available"})
+		return
+	}
+	resp, err := h.CryptoAccountSvc.CancelOrder(ctx, symbol, orderID)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, resp)
 }
 
 // parseTimestamp parse string query param → int64 Unix timestamp (giây).

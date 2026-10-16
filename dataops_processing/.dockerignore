@@ -1,0 +1,14 @@
+# .dockerignore for dataops_processing
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+tests/
+*.egg-info/
+dist/
+build/
+.env
+.env.*
+*.log

@@ -28,11 +28,13 @@ type AuthHandler struct {
 // Tất cả routes ở đây đều KHÔNG qua JwtAuthMiddleware.
 //
 // Routes:
+//   POST /register        → tạo user mới (public)
 //   POST /login           → đăng nhập, trả về access_token + refresh_token
 //   POST /refresh-token   → đổi refresh_token lấy access_token mới
 //   POST /logout          → vô hiệu hoá session trên Redis
 //   GET  /health          → health check, không cần auth
 func (h *AuthHandler) RegisterPublic(r *gin.RouterGroup) {
+	r.POST("/register", h.Register)
 	r.POST("/login", h.Login)
 	r.POST("/refresh-token", h.RefreshToken)
 	r.POST("/logout", h.Logout)
@@ -79,6 +81,36 @@ func (h *AuthHandler) Login(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, result)
+}
+
+// Register tạo user mới.
+//
+// Request body:
+//
+//	{ "username": "alice", "password": "secret", "email": "alice@example.com" }
+//
+// Response 201: { "message": "registered" }
+// Response 400: credentials không hợp lệ hoặc user đã tồn tại.
+//
+// POST /api/v1/register
+func (h *AuthHandler) Register(ctx *gin.Context) {
+	var args struct {
+		Username string `json:"username" binding:"required"`
+		Password string `json:"password" binding:"required"`
+		Email    string `json:"email" binding:"required"`
+	}
+
+	if err := ctx.ShouldBindJSON(&args); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.AuthSvc.Register(args.Username, args.Password, args.Email); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx.JSON(http.StatusCreated, gin.H{"message": "registered"})
 }
 
 // RefreshToken cấp access_token mới từ refresh_token còn hạn.

@@ -59,7 +59,16 @@ func NewServer() error {
 
 	// 4. Redis — REUSE 100%: trading-bot-api/redis/redis.go
 	redisDB0 := redis.NewServer(cfg, cfg.Redis.DB_0)
-	if !redisDB0.Ping() {
+	var redisConnected bool
+	for attempt := 1; attempt <= 10; attempt++ {
+		if redisDB0.Ping() {
+			redisConnected = true
+			break
+		}
+		logger.Warn("server.redis", fmt.Sprintf("Redis connection attempt %d/10 failed, retrying in 2s...", attempt), nil)
+		time.Sleep(2 * time.Second)
+	}
+	if !redisConnected {
 		return fmt.Errorf("[Redis] connection was down")
 	}
 
@@ -84,7 +93,7 @@ func NewServer() error {
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", constants.DefaultHTTPPort),
-		Handler: rest.NewAPI(svc, cfg, redisDB0, apiLogger),
+		Handler: rest.NewAPI(svc, cfg, redisDB0, apiLogger, logger),
 	}
 
 	go func() {

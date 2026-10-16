@@ -166,11 +166,14 @@ tests/test_delta_writer.py::TestSchemaEnforcement::test_pa_table_built_from_reco
 ### Bước 3: Kiểm thử Live Batch Ingestion Jobs (Tầng 2 - Cần container `dataops-minio`)
 
 Đảm bảo container `dataops-minio` đang chạy trên cổng `9010`.
+<<<<<<< HEAD
 Khi chạy job thủ công từ `dataops_batch_api/`, CLI tự nạp `.env` ở repository root
 cho credential MinIO. Host endpoint mặc định là `http://localhost:9010` (cổng publish
 của Compose); nếu đã export `AWS_ENDPOINT_URL` trong shell thì giá trị đó được ưu tiên.
 Để dùng host endpoint khác, đặt `MINIO_HOST_ENDPOINT` trong shell hoặc `.env`.
 Trong container, Compose tiếp tục dùng `http://minio:9000` trên Docker network.
+=======
+>>>>>>> 20261010_data_processing
 
 #### 3.1 Test Binance 1D Klines Job & Chunked Backfill
 Hỗ trợ lấy nến ngày của các cặp Spot & Futures (`BTCUSDT`, `ETHUSDT`, `SOLUSDT`, ...).

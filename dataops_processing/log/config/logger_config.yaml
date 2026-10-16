@@ -1,0 +1,147 @@
+# logger_config.yaml — Logger Routing Configuration cho dataops_processing
+#
+# Được load bởi log/logger_setup.py::LoggerManager.configure() một lần duy nhất.
+#
+# Pattern: logger name = __name__ của module → Python tự route theo hierarchy.
+#   dataops_processing.jobs.vwap_job        → khớp "dataops_processing.jobs"   → jobs_file
+#   dataops_processing.jobs.volume_bars_job → khớp "dataops_processing.jobs"   → jobs_file
+#   dataops_processing.config.spark_config  → khớp "dataops_processing.config" → config_file
+#   dataops_processing.config.settings      → khớp "dataops_processing.config" → config_file
+#   dataops_processing.models.trade         → khớp "dataops_processing.models" → models_file
+#
+# Thay đổi routing / level / handler → chỉ sửa file này, không đụng vào từng module.
+# Tất cả loggers có propagate: false để tránh double-logging lên root.
+
+version: 1
+disable_existing_loggers: false
+
+# ─── Formatters ──────────────────────────────────────────────────────────────
+formatters:
+  console:
+    format: "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
+    datefmt: "%Y-%m-%dT%H:%M:%S"
+
+  json:
+    # JsonFormatter định nghĩa trong log/logger_setup.py
+    # Serialize thành JSON cho Loki / Grafana / ELK log aggregation
+    (): dataops_processing.log.logger_setup.JsonFormatter
+    datefmt: "%Y-%m-%dT%H:%M:%SZ"
+
+# ─── Handlers ────────────────────────────────────────────────────────────────
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: console
+    stream: ext://sys.stdout
+
+  # application.log — tất cả events từ toàn pipeline (DEBUG+)
+  application_file:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: json
+    filename: log_storage/application.log    # patched → absolute bởi LoggerManager
+    maxBytes: 10485760   # 10 MB
+    backupCount: 5
+    encoding: utf-8
+
+  # error.log — chỉ ERROR+ để alert / postmortem
+  error_file:
+    class: logging.handlers.RotatingFileHandler
+    level: ERROR
+    formatter: json
+    filename: log_storage/error.log
+    maxBytes: 10485760   # 10 MB
+    backupCount: 3
+    encoding: utf-8
+
+  # jobs.log — vwap_job, volume_bars_job execution events
+  jobs_file:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: json
+    filename: log_storage/jobs.log
+    maxBytes: 10485760
+    backupCount: 5
+    encoding: utf-8
+
+  # spark.log — SparkSession init, streaming queries, Delta writes
+  spark_file:
+    class: logging.handlers.RotatingFileHandler
+    level: INFO
+    formatter: json
+    filename: log_storage/spark.log
+    maxBytes: 10485760
+    backupCount: 5
+    encoding: utf-8
+
+  # config.log — settings load, spark_config build
+  config_file:
+    class: logging.handlers.RotatingFileHandler
+    level: INFO
+    formatter: json
+    filename: log_storage/config.log
+    maxBytes: 5242880   # 5 MB
+    backupCount: 3
+    encoding: utf-8
+
+  # models.log — TradeEvent parse errors, data quality issues
+  models_file:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: json
+    filename: log_storage/models.log
+    maxBytes: 10485760
+    backupCount: 5
+    encoding: utf-8
+
+# ─── Loggers (route theo __name__ prefix hierarchy) ──────────────────────────
+loggers:
+
+  # ── Jobs layer: vwap_job, volume_bars_job, runner ────────────────────────────
+  # Khớp: dataops_processing.jobs.*
+  dataops_processing.jobs:
+    level: DEBUG
+    handlers: [console, jobs_file, error_file]
+    propagate: false
+
+  # ── Spark config layer ────────────────────────────────────────────────────────
+  # Khớp: dataops_processing.config.spark_config
+  # Override config để ghi thêm spark_file — isolate SparkSession logs
+  dataops_processing.config.spark_config:
+    level: INFO
+    handlers: [console, spark_file, config_file, error_file]
+    propagate: false
+
+  # ── Config layer: settings, spark_config ────────────────────────────────────
+  # Khớp: dataops_processing.config.*
+  dataops_processing.config:
+    level: INFO
+    handlers: [console, config_file, error_file]
+    propagate: false
+
+  # ── Models layer: trade, vwap ─────────────────────────────────────────────────
+  # Khớp: dataops_processing.models.*
+  dataops_processing.models:
+    level: DEBUG
+    handlers: [console, models_file, error_file]
+    propagate: false
+
+  # ── Root cho toàn module ──────────────────────────────────────────────────────
+  # Khớp: dataops_processing (bất kỳ sub-module nào không khớp logger cụ thể hơn)
+  dataops_processing:
+    level: INFO
+    handlers: [console, application_file, error_file]
+    propagate: false
+
+  # ── logger_setup self-logging ─────────────────────────────────────────────────
+  dataops_processing.log.logger_setup:
+    level: DEBUG
+    handlers: [console]
+    propagate: false
+
+# ─── Root Logger ──────────────────────────────────────────────────────────────
+# Nhận WARNING+ từ thư viện bên ngoài (pyspark, kafka, requests, urllib3, …)
+root:
+  level: WARNING
+  handlers: [console, application_file, error_file]

@@ -12,9 +12,17 @@ Chiến lược:
 Delta table: s3://binance-datalake/delta/bronze/binance_candles_4h
 Partition:   inst_type, symbol, year (string "2026")
 
+<<<<<<< HEAD
 Schema (PyArrow):
     symbol       string
     inst_type    string       "SPOT" | "FUTURES"
+=======
+Chỉ ingest Binance Spot (không dùng Futures).
+
+Schema (PyArrow):
+    symbol       string
+    inst_type    string       "SPOT"
+>>>>>>> 20261010_data_processing
     interval     string       "4h"
     ts_open_ms   int64        candle open time Unix ms
     ts_close_ms  int64        candle close time Unix ms
@@ -34,8 +42,13 @@ from typing import List
 
 import pyarrow as pa
 
+<<<<<<< HEAD
 from cli.ingestion.schema.models import BinanceCandleRecord
 from cli.ingestion.sources.client.binance_client import BinanceSpotClient, BinanceFuturesClient
+=======
+from cli.ingestion.schema.canonical import from_binance_kline_row
+from cli.ingestion.sources.client.binance_client import BinanceSpotClient
+>>>>>>> 20261010_data_processing
 from cli.jobs._delta_writer import _table_path, write_records, apply_rolling_retention
 from cli.jobs.metrics import push_metrics, record_ingest
 from cli.flows.loader.load_config import load_exchange_config
@@ -43,11 +56,14 @@ from log.logger_setup import logger_manager
 
 logger = logger_manager.get_logger(__name__)
 
+<<<<<<< HEAD
 def _is_geo_blocked(exc: Exception) -> bool:
     """True nếu exception là 403 do CloudFront geo-block (không phải lỗi code)."""
     msg = str(exc)
     return "403" in msg and "CloudFront" in msg
 
+=======
+>>>>>>> 20261010_data_processing
 # ── PyArrow schema ─────────────────────────────────────────────────────────────
 _SCHEMA = pa.schema([
     pa.field("symbol",       pa.string(),  nullable=False),
@@ -74,6 +90,7 @@ _CANDLES_PER_DAY = 6   # 24h / 4h
 
 def _parse_kline_row(row: list, symbol: str, inst_type: str, now_iso: str) -> dict | None:
     """Parse 1 Binance kline row → validated dict. Returns None nếu validation fail."""
+<<<<<<< HEAD
     try:
         rec = BinanceCandleRecord(
             inst_id   = symbol,
@@ -109,6 +126,12 @@ def _parse_kline_row(row: list, symbol: str, inst_type: str, now_iso: str) -> di
         "year":         year,
         "ingested_at":  now_iso,
     }
+=======
+    result = from_binance_kline_row(row, symbol, inst_type, _INTERVAL, now_iso)
+    if result is None:
+        logger.warning("_parse_kline_row: validation failed symbol=%s", symbol)
+    return result
+>>>>>>> 20261010_data_processing
 
 
 def run() -> dict:
@@ -128,8 +151,12 @@ def run() -> dict:
     start_ms = int((now - timedelta(hours=25)).timestamp() * 1000)
     end_ms   = int(now.timestamp() * 1000)
 
+<<<<<<< HEAD
     spot_symbols    = cfg["binance"]["instruments"]["spot"]
     futures_symbols = cfg["binance"]["instruments"]["futures"]
+=======
+    spot_symbols = cfg["binance"]["instruments"]["spot"]
+>>>>>>> 20261010_data_processing
 
     all_records: List[dict] = []
     errors, symbols_ok, symbols_err = 0, [], []
@@ -154,6 +181,7 @@ def run() -> dict:
             symbols_err.append(f"spot:{symbol}")
             errors += 1
 
+<<<<<<< HEAD
     # ── UM Futures ────────────────────────────────────────────────────────────
     futures_client = BinanceFuturesClient.from_env()
     for symbol in futures_symbols:
@@ -182,6 +210,8 @@ def run() -> dict:
                 symbols_err.append(f"futures:{symbol}")
                 errors += 1
 
+=======
+>>>>>>> 20261010_data_processing
     written = 0
     if all_records:
         written = write_records(path, all_records, _SCHEMA, mode="append", partition_by=["inst_type", "symbol", "year"])
@@ -200,8 +230,11 @@ def run() -> dict:
     return {"written": written, "errors": errors, "symbols_ok": symbols_ok, "symbols_err": symbols_err}
 
 
+<<<<<<< HEAD
 if __name__ == "__main__":
     from cli.jobs._env import load_project_env
     load_project_env()
     result = run()
     print(result)
+=======
+>>>>>>> 20261010_data_processing

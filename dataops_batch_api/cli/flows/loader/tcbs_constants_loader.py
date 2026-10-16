@@ -9,11 +9,22 @@ Single source of truth cho tất cả TCBS endpoint paths, enums, codes,
 field mappings và rate limits.
 
 Usage:
+<<<<<<< HEAD
     from cli.ingestion.sources.tcbs_constants_loader import TCBSConstants
+=======
+    from cli.flows.loader.tcbs_constants_loader import TCBSConstants
+>>>>>>> 20261010_data_processing
 
     path = TCBSConstants.endpoint("ticker_commons")  # "/tartarus/v1/tickerCommons"
     code = TCBSConstants.index_code("HOSE")           # 1
     TCBSConstants.validate_price_type("LO")           # raises ValueError nếu invalid
+<<<<<<< HEAD
+=======
+
+Note:
+    cli.ingestion.sources.tcbs_constants_loader là backward-compat re-export.
+    Import trực tiếp từ đây (cli.flows.loader.tcbs_constants_loader) khi viết code mới.
+>>>>>>> 20261010_data_processing
 """
 from __future__ import annotations
 

@@ -43,7 +43,7 @@ type ASSET_TYPE uint8
 
 const (
 	CRYPTO   ASSET_TYPE = 1 // tài sản tiền điện tử (Binance)
-	VN_STOCK ASSET_TYPE = 2 // cổ phiếu thị trường chứng khoán Việt Nam (VPS/HOSE)
+	VN_STOCK ASSET_TYPE = 2 // cổ phiếu thị trường chứng khoán Việt Nam (TCBS/HOSE)
 )
 
 // EXCHANGE là định danh chuỗi cho từng sàn giao dịch tích hợp.
@@ -53,9 +53,7 @@ type EXCHANGE string
 const (
 	BINANCE_FUTURE EXCHANGE = "binance_future" // Binance Perpetual Futures (USD-M)
 	BINANCE_SPOT   EXCHANGE = "binance_spot"   // Binance Spot market
-	VPS_STOCK      EXCHANGE = "vps_stock"      // VPS chứng khoán cơ sở (HOSE)
-	VPS_FUTURE     EXCHANGE = "vps_future"     // VPS phái sinh (VN30F)
-	TCBS_STOCK     EXCHANGE = "tcbs_stock"     // TCBS cổ phiếu cơ sở (HOSE, HNX, UPCOM)
+	TCBS_STOCK     EXCHANGE = "tcbs_stock"     // TCBS chứng khoán cơ sở (HOSE, HNX, UPCOM)
 	TCBS_FUTURE    EXCHANGE = "tcbs_future"    // TCBS phái sinh (VN30F derivatives)
 )
 

@@ -40,12 +40,21 @@ from typing import List
 
 import pyarrow as pa
 
+<<<<<<< HEAD
 from cli.ingestion.schema.models import TCBSMarketRecord
 from cli.ingestion.sources.client.tcbs_client import TCBSRestClient
 from cli.jobs._delta_writer import _table_path, write_records
 from cli.jobs.metrics import push_metrics, record_ingest
 from cli.flows.loader.load_config import load_exchange_config
 from cli.flows.loader.tcbs_constants_loader import TCBSConstants
+=======
+from cli.ingestion.schema.canonical import from_tcbs_ticker_record
+from cli.ingestion.sources.client.tcbs_client import TCBSRestClient
+from cli.ingestion.sources.tcbs_constants_loader import TCBSConstants
+from cli.jobs._delta_writer import _table_path, write_records
+from cli.jobs.metrics import push_metrics, record_ingest
+from cli.flows.loader.load_config import load_exchange_config
+>>>>>>> 20261010_data_processing
 from log.logger_setup import logger_manager
 
 logger = logger_manager.get_logger(__name__)
@@ -71,6 +80,7 @@ _SCHEMA = pa.schema([
 ])
 
 
+<<<<<<< HEAD
 def _tcbs_date_to_iso(tcbs_date: str) -> str:
     """
     Chuyển TCBS trading_date "dd/MM/yyyy" → "YYYY-MM-DD".
@@ -147,6 +157,15 @@ def _validate_and_map(raw: dict, now_iso: str) -> dict | None:
         "floor_price":      rec.floor_price,
         "ingested_at":      now_iso,
     }
+=======
+def _validate_and_map(raw: dict, now_iso: str) -> dict | None:
+    """Validate raw tickerCommons item → canonical row dict. Returns None nếu lỗi."""
+    fields = TCBSConstants.ticker_commons_fields()
+    result = from_tcbs_ticker_record(raw, fields, now_iso)
+    if result is None:
+        logger.warning("tcbs_eod_job: validation failed for %s", raw.get("symbol", "?"))
+    return result
+>>>>>>> 20261010_data_processing
 
 
 def run() -> dict:
@@ -210,8 +229,11 @@ def run() -> dict:
     return {"written": written, "errors": errors, "records_ok": written, "records_err": errors}
 
 
+<<<<<<< HEAD
 if __name__ == "__main__":
     from cli.jobs._env import load_project_env
     load_project_env()
     result = run()
     print(result)
+=======
+>>>>>>> 20261010_data_processing
