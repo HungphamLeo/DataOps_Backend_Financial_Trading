@@ -138,11 +138,3 @@ def run() -> dict:
     return {"written": written, "errors": errors}
 
 
-if __name__ == "__main__":
-    try:
-        from dotenv import find_dotenv, load_dotenv
-        load_dotenv(find_dotenv(usecwd=True), override=False)
-    except Exception:
-        pass
-    result = run()
-    print(result)

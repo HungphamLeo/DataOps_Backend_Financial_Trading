@@ -173,14 +173,3 @@ def run(from_date: str | None = None, to_date: str | None = None) -> dict:
     return {"written": written, "errors": errors, "symbols_ok": symbols_ok, "symbols_err": symbols_err}
 
 
-if __name__ == "__main__":
-    import sys
-    try:
-        from dotenv import find_dotenv, load_dotenv
-        load_dotenv(find_dotenv(usecwd=True), override=False)
-    except Exception:
-        pass
-    from_d = sys.argv[1] if len(sys.argv) > 1 else None
-    to_d   = sys.argv[2] if len(sys.argv) > 2 else None
-    result = run(from_date=from_d, to_date=to_d)
-    print(result)
