@@ -1,0 +1,30 @@
+# Normalize line endings
+* text=auto
+
+# --- GitHub Linguist: make Go and Python the primary languages ---
+# Force-count source files
+*.go linguist-language=Go
+*.py linguist-language=Python
+
+# Generated protobuf code should not skew language stats
+*_pb2.py linguist-generated=true
+*_pb2_grpc.py linguist-generated=true
+*.pb.go linguist-generated=true
+
+# Exclude non-core files from language statistics
+*.proto linguist-detectable=false
+*.avsc linguist-detectable=false
+*.sh linguist-detectable=false
+*.ps1 linguist-detectable=false
+*.json linguist-detectable=false
+*.yaml linguist-detectable=false
+*.yml linguist-detectable=false
+*.md linguist-documentation
+docs/** linguist-documentation
+grafana/** linguist-vendored
+github/** linguist-vendored
+infra_dataops_finance_trading/** linguist-vendored
+
+# Binaries
+*.exe binary
+*.pyc binary
