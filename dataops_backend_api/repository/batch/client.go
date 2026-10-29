@@ -1,3 +1,38 @@
+// Package batch — gRPC client của Backend API gọi sang dataops_batch_api (dữ liệu lịch sử).
+//
+// # ST16 — Connection Multiplexing (trạng thái HIỆN TẠI)
+//
+// grpc.ClientConn chạy trên HTTP/2: nhiều RPC đồng thời được multiplex trên MỘT TCP connection
+// (mỗi RPC là một stream), và ClientConn an toàn để dùng đồng thời từ nhiều goroutine.
+// Vì vậy batchClient giữ đúng một conn dùng chung cho mọi request HTTP — KHÔNG tạo conn mới
+// theo request. Tạo conn mỗi request sẽ tốn TCP + HTTP/2 handshake và cạn socket / ephemeral
+// port khi tải cao. Giới hạn cần nhớ: số stream đồng thời trên một conn bị chặn bởi
+// MAX_CONCURRENT_STREAMS của server (thường 100); vượt ngưỡng thì RPC xếp hàng chờ.
+//
+// # Timeout và Fail-fast
+//
+//   - Dial: chờ tối đa 3s (WithBlock + context timeout) lúc khởi động. Quá hạn → không lỗi cứng,
+//     trả về client ở "fallback mode" (conn=nil) để Backend API vẫn khởi động được khi
+//     Batch API chưa sẵn sàng; IsAvailable() báo false, các method trả lỗi ngay (fail-fast).
+//   - Từng RPC: client KHÔNG tự đặt deadline, deadline lấy từ ctx của caller. Caller phải truyền
+//     ctx có timeout (ví dụ c.Request.Context() kèm WithTimeout), nếu không một Batch API chậm
+//     sẽ giữ goroutine và request HTTP vô hạn.
+//   - Sau khi vào fallback mode, client KHÔNG tự thử kết nối lại; cần restart process hoặc tạo
+//     client mới. Đây là điểm yếu cần cải thiện nếu Batch API khởi động chậm hơn Backend API.
+//
+// # Retry, Backoff + Jitter, Thundering Herd (CHƯA triển khai)
+//
+// Hiện không có retry. Nếu thêm retry, KHÔNG dùng khoảng chờ cố định: khi Batch API restart,
+// mọi instance Backend API retry cùng nhịp → Thundering Herd làm server vừa dậy bị quá tải
+// lại. Dùng exponential backoff có jitter, ví dụ delay = rand(0, min(cap, base*2^attempt)),
+// kết hợp giới hạn số lần thử và chỉ retry mã lỗi idempotent/tạm thời (Unavailable,
+// DeadlineExceeded). Các RPC ở đây đều là read-only nên retry an toàn; gRPC cũng hỗ trợ khai
+// báo retryPolicy trong service config thay vì tự viết vòng lặp.
+//
+// # Bảo mật
+//
+// Dùng insecure.NewCredentials() (plaintext) — chấp nhận được trong mạng nội bộ Docker
+// Compose, nhưng cần TLS/mTLS khi ra khỏi network tin cậy (Zero-Trust, xem ST07).
 package batch
 
 import (
@@ -30,7 +65,11 @@ type batchClient struct {
 	target string
 }
 
-// NewClient tạo kết nối gRPC Client tới Batch API server
+// NewClient tạo kết nối gRPC Client tới Batch API server.
+//
+// Không bao giờ trả error: dial thất bại chỉ log Warn rồi trả client ở fallback mode
+// (xem package doc). target rỗng mặc định localhost:50051. Caller nên kiểm tra IsAvailable()
+// và gọi Close() khi shutdown để giải phóng connection.
 func NewClient(target string, logger *logging.Logger) (Client, error) {
 	if target == "" {
 		target = "localhost:50051"
@@ -70,6 +109,8 @@ func NewClient(target string, logger *logging.Logger) (Client, error) {
 	}, nil
 }
 
+// IsAvailable cho biết conn gRPC có được thiết lập hay không (false khi ở fallback mode).
+// Chỉ phản ánh trạng thái lúc dial, không health-check server theo thời gian thực.
 func (c *batchClient) IsAvailable() bool {
 	return c != nil && c.conn != nil && c.grpc != nil
 }

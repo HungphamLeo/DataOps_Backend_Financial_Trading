@@ -1,3 +1,39 @@
+// Package middlewares — Gin HTTP middlewares cho dataops-backend-api.
+//
+// ═══════════════════════════════════════════════════════════════════════════════
+// ST07 — ZERO-TRUST AUTH, TOKEN ROTATION & RATE LIMITING (PLAN_REPO03)
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Zero-Trust Architecture: KHÔNG giả định request nào là an toàn dù từ internal network.
+//   Mọi request phải được: (1) authenticate, (2) authorize, (3) rate-limited.
+//   "Never trust, always verify" — ngay cả service-to-service calls.
+//
+// Rate Limiting Strategy — Tại sao IP-based là không đủ:
+//   Vấn đề: Văn phòng lớn dùng NAT Gateway → 1000 nhân viên có chung 1 IP.
+//   IP-based limit → chặn nhầm toàn văn phòng khi 1 người abuse.
+//   Giải pháp tốt hơn: API Key/User Token-based rate limit (ST07 TODO).
+//
+// Thuật toán Fixed Window Counter:
+//   Mỗi "window" = khoảng thời gian cố định (e.g. 1 phút).
+//   window_id = Unix_epoch_seconds / window_size_seconds.
+//   Redis key: "ratelimit:{clientIP}:{window_id}" → INCR và Expire.
+//   Trade-off vs Sliding Window:
+//     Fixed window: O(1) memory, nhưng burst gấp đôi tại boundary
+//     (N requests cuối window + N requests đầu window tiếp theo).
+//     Sliding window log: chính xác hơn nhưng O(requests) memory.
+//     Token Bucket: smooth limiting, memory-efficient — ideal cho production (TODO).
+//
+// Fail Open (vs Fail Closed):
+//   Khi Redis unavailable → middleware cho phép request qua (fail open).
+//   Lý do: Redis tạm thời chết không nên kéo theo toàn bộ API down.
+//   Đánh đổi: trong window Redis outage, rate limit bị bypass.
+//   Production: alert khi Redis down + có fallback in-memory counter.
+//
+// HTTP Headers chuẩn (TODO ST07):
+//   X-RateLimit-Limit:     100      — max requests/window
+//   X-RateLimit-Remaining: 47       — còn lại
+//   X-RateLimit-Reset:     1700000  — epoch khi window reset
+//   Giúp client biết khi nào nên retry thay vì hammer server.
 package middlewares
 
 import (

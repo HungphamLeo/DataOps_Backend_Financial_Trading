@@ -52,13 +52,34 @@ func InitializeDatabase(cfg *configuration.Config) (*Gorm, error) {
 		return nil, err
 	}
 
-	// AutoMigrate: tự tạo/update tables từ structs
+	// AutoMigrate: tự tạo/update tables từ structs.
+	// ClusterConfig phải migrate trước User/UserSession để seed row có thể chạy ngay sau.
+	// Fencing Token table cần tồn tại trước khi bất kỳ write handler nào chạy.
 	err = DB.AutoMigrate(
+		&models.ClusterConfig{}, // ST01: Fencing Token — singleton row id=1
 		&models.User{},
 		&models.UserSession{},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("[Database] migrate error: %w", err)
+	}
+
+	// Seed ClusterConfig row (singleton id=1) nếu chưa tồn tại.
+	// FirstOrCreate: idempotent — safe để gọi lại nhiều lần (restart, redeploy).
+	// CLUSTER_ID "MkU3OEVBNTcwNTJENDM2Qk" phải khớp với CLUSTER_ID trong docker-compose.yml.
+	// CurrentToken khởi đầu = 1 (0 reserve cho "uninitialized" sentinel value).
+	var clusterCfg models.ClusterConfig
+	result := DB.FirstOrCreate(&clusterCfg, models.ClusterConfig{
+		ID:           1,
+		ClusterID:    "MkU3OEVBNTcwNTJENDM2Qk",
+		CurrentToken: 1,
+		LastLeaderID: 0,
+	})
+	if result.Error != nil {
+		return nil, fmt.Errorf("[Database] seed cluster_config error: %w", result.Error)
+	}
+	if result.RowsAffected > 0 {
+		log.Printf("[Database] cluster_config seeded: token=%d cluster=%s", clusterCfg.CurrentToken, clusterCfg.ClusterID)
 	}
 
 	fmt.Printf("%s [Database] Connected and migrated\n", utils.GetTimeNow())

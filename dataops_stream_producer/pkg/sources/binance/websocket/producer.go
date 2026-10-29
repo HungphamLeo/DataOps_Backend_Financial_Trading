@@ -1,5 +1,46 @@
-// Binance WebSocket Producer — CORE của T2 Stream Ingestion
-// Pattern: goroutine per trading pair, auto-reconnect on disconnect
+// Package websocket — Binance WebSocket Producer, CORE của T2 Stream Ingestion.
+// Pattern: goroutine per trading pair, auto-reconnect on disconnect.
+//
+// # ST15 — Push vs Pull và Backpressure (trạng thái HIỆN TẠI của code)
+//
+// Binance WebSocket là kiến trúc PUSH: sàn đẩy message với tốc độ của sàn, consumer
+// không thể yêu cầu "chậm lại". Kafka consumer thì ngược lại là PULL (tự kiểm soát tốc độ).
+// Producer này nằm giữa hai mô hình, nên phải tự xử lý chênh lệch tốc độ.
+//
+// Luồng hiện tại là đồng bộ, không có buffer trung gian:
+//
+//	conn.ReadMessage() → handleMessage() → producer.PublishTrade() (SyncProducer, chờ ack)
+//
+// Hệ quả: nếu Kafka chậm (ISR thu hẹp, leader election, acks=all chờ replica), PublishTrade
+// block → vòng đọc socket dừng → TCP receive buffer đầy → Binance thấy client chậm và có
+// thể ngắt kết nối. Đây là backpressure ngầm qua TCP, không có load shedding có kiểm soát.
+// Ví dụ production: Flash Crash làm tick rate tăng ~10x, đúng lúc broker bận → socket bị
+// drop → mất luôn dữ liệu của chính thời điểm biến động mạnh nhất.
+//
+// TODO(ST15): tách đọc và ghi bằng bounded channel / ring buffer:
+//   - Reader goroutine chỉ đọc socket và đẩy vào channel có dung lượng cố định.
+//   - Writer goroutine đọc channel và publish lên Kafka.
+//   - Khi channel đầy: drop-oldest (giữ tick mới nhất, phù hợp dữ liệu giá) hoặc drop-newest,
+//     kèm counter metric để cảnh báo. Không dùng unbounded queue vì sẽ OOM khi Flash Crash.
+//
+// # ST14 — Data Contract và Zero-Trust với dữ liệu Upstream (CHƯA triển khai)
+//
+// Sàn là một bên ngoài tổ chức (Organizational Byzantine Fault): không có gì đảm bảo payload
+// luôn đúng. Hiện tại handleMessage bỏ qua lỗi của strconv.ParseFloat (gán _), nên giá trị
+// hỏng sẽ thành price=0 / size=0 và được publish như dữ liệu hợp lệ → làm lệch VWAP và
+// volume bars ở downstream mà không có cảnh báo.
+//
+// TODO(ST14): validate trước khi publish, event sai đi vào DLQ thay vì Kafka topic chính:
+//   - price > 0, size > 0, side thuộc {buy, sell}.
+//   - |TradeTime - now| nằm trong ngưỡng drift cho phép (chặn timestamp tương lai / quá cũ).
+//   - trade_id không giảm đột ngột trong cùng symbol (phát hiện replay / out-of-order).
+//
+// # ST10 — Schema Contract
+//
+// TradeEvent / OrderBookEvent (pkg/producer/types.go) là hợp đồng với downstream (Spark,
+// InfluxDB). Thêm hoặc đổi field phải tuân thủ BACKWARD compatibility của Schema Registry
+// (xem schema_registry.go). Struct Binance* trong file này chỉ là schema của upstream sàn,
+// không được để lọt ra ngoài package.
 package websocket
 
 import (
@@ -36,7 +77,13 @@ func NewBinanceProducer(cfg *configuration.Config, prod producer.Producer, redis
 	}
 }
 
-// Start khởi động goroutine per trading pair
+// Start khởi động goroutine per trading pair.
+//
+// Mỗi symbol có một connection WebSocket riêng (1 goroutine / 1 connection) để lỗi của một
+// symbol không kéo theo symbol khác. Trade-off: số connection tăng tuyến tính theo số symbol;
+// Binance giới hạn số stream trên mỗi connection và số connection mới theo IP, nên danh sách
+// symbol lớn cần chuyển sang combined stream nhiều symbol/connection (connection multiplexing).
+// Start block cho đến khi mọi goroutine thoát (ctx bị huỷ).
 func (p *BinanceProducer) Start(ctx context.Context) error {
 	fmt.Printf("%s [BinanceProducer] Starting for symbols: %v\n", utils.GetTimeNow(), p.cfg.Binance.Symbols)
 
@@ -54,6 +101,11 @@ func (p *BinanceProducer) Start(ctx context.Context) error {
 
 // runPair chạy WebSocket stream cho 1 trading pair
 // Tự động reconnect khi mất kết nối
+//
+// Reconnect dùng độ trễ CỐ ĐỊNH 5s, không có jitter. Nếu Binance ngắt đồng loạt (bảo trì,
+// mất mạng), tất cả goroutine kết nối lại cùng một thời điểm → Thundering Herd, dễ dính
+// HTTP 429 / ban IP. Hướng cải thiện (ST16): exponential backoff có jitter, ví dụ
+// delay = rand(0, min(cap, base*2^attempt)) ("full jitter"), và reset attempt khi kết nối ổn định.
 func (p *BinanceProducer) runPair(ctx context.Context, symbol string) {
 	for {
 		select {
@@ -123,6 +175,11 @@ func (p *BinanceProducer) connectAndStream(ctx context.Context, symbol string) e
 }
 
 // handleMessage parse message và route đến đúng Kafka topic thông qua Producer với DLQ + Retry.
+//
+// Lỗi unmarshal envelope bị bỏ qua im lặng (return) — chấp nhận được với message không thuộc
+// combined stream, nhưng nên đếm bằng metric để phát hiện Binance đổi format (schema drift).
+// Lỗi PublishTrade/PublishOrderBook chỉ được log; việc retry và DLQ do Producer đảm nhiệm
+// (xem dlq.go), nên ở đây không retry thêm để tránh nhân đôi message.
 //
 // RANH GIỚI LAYER: Producer chỉ làm 1 việc — forward raw event lên Kafka.
 // Aggregation (VWAP, buyVol/sellVol accumulation) là trách nhiệm của dataops_processing (Spark).

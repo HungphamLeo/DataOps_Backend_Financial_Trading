@@ -1,10 +1,42 @@
-// REUSE: ~95% copied from trading-bot-api/redis/redis.go
-// LEARN: Interface + struct pattern — dependency injection trong Go
+// Package redis — Redis client wrapper cho dataops-backend-api.
 //
-// Tại sao dùng Interface cho Redis?
-//   - Dễ mock khi test: tạo MockRedis implement Service
-//   - Dễ swap implementation: có thể thay Redis bằng Memcached mà không sửa code khác
-//   - Dependency Inversion Principle (SOLID): code phụ thuộc vào abstraction, không phải concrete type
+// ═══════════════════════════════════════════════════════════════════════════════
+// ST06 — CACHE-ASIDE PATTERN & PACELC (PLAN_REPO03)
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Redis trong kiến trúc này đóng 3 vai trò:
+//
+//   [1] Cache-Aside Layer trước InfluxDB (ST06):
+//       PACELC - EL (Else + Latency): khi mạng bình thường, ưu tiên Latency thấp.
+//       Redis cache VWAP query results với TTL 30s → API latency < 1ms vs 20ms InfluxDB.
+//       Stale-While-Revalidate: client nhận data cũ ngay, background refresh cache mới.
+//       Key pattern: "vwap:{symbol}:{interval}:{ts_bucket}" (deterministic → high hit ratio).
+//
+//   [2] Real-time Ticker Snapshot (ST15):
+//       binance_{symbol}_ticker TTL 10s — snapshot mới nhất, không tích lũy state.
+//       tcbs_{symbol}_ticker    TTL 120s — TCBS poll mỗi 1 phút giờ giao dịch.
+//       KHÔNG dùng Redis để aggregate (buyVol, sellVol) — đó là việc của Spark (ST12).
+//
+//   [3] Session & Token Blacklist (ST07):
+//       JWT refresh token lưu với key "refresh:{user_id}" TTL 7 ngày.
+//       Token revocation blacklist "blacklist:token:{token}" — kiểm tra trước mỗi request.
+//       Rate limit counter "ratelimit:{ip}:{epoch_window}" — fixed window per IP.
+//
+// EVICTION POLICY PRODUCTION:
+//   Cấu hình Redis: maxmemory-policy allkeys-lru
+//   Khi RAM đầy → tự động xóa key ít dùng nhất (LRU) — không crash.
+//   Hệ quả: cache miss tăng tạm thời, InfluxDB chịu thêm load — chấp nhận được.
+//   Không dùng noeviction trong production (Redis crash khi full → toàn bộ API down).
+//
+// CONNECTION POOL:
+//   go-redis tự quản lý connection pool. Mặc định: PoolSize = 10 connections.
+//   Nếu API có 100 goroutines đồng thời → pool đủ dùng (goroutine chờ connection available).
+//   Monitor: redis_connected_clients > PoolSize * 0.8 → tăng PoolSize hoặc scale Redis.
+//
+// Interface pattern — tại sao dùng interface:
+//   Dễ mock khi test: tạo MockRedis implement Service (không cần Redis thật).
+//   Dễ swap implementation: có thể thay Redis bằng Valkey/DragonflyDB mà không sửa caller.
+//   Dependency Inversion Principle (SOLID-D): code phụ thuộc vào abstraction.
 
 package redis
 

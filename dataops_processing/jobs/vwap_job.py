@@ -14,6 +14,64 @@ Pipeline:
 Config & Paths đến từ:
     Dependency Injection từ ProcessingOrchestrator (Settings + PathResolver).
     KHÔNG có hardcode nào trong file này.
+
+═══════════════════════════════════════════════════════════════════════════════
+ST05 — SPARK WATERMARK & PERSISTENT CHECKPOINT (PLAN_REPO03)
+═══════════════════════════════════════════════════════════════════════════════
+
+VẤN ĐỀ — Late Data & Unbounded State:
+  Người dùng ở vùng 4G yếu — trade event lúc 10:00 đến server lúc 10:05 (5 phút trễ).
+  Nếu không có Watermark: Spark phải giữ state của MỌI window trong RAM.
+  Sau vài giờ → RAM cạn kiệt → executor OOMKilled → job crash.
+
+Watermark = Bounded Staleness:
+  .withWatermark("event_time", "30 seconds")
+  → Spark chỉ chấp nhận data trễ tối đa 30 giây.
+  → Watermark = max(event_time) - 30s.
+  → Khi watermark vượt qua window.end → window được "đóng" → state giải phóng.
+  → Data đến sau watermark → bị DROP (ghi vào DLQ nếu cần audit).
+
+  Trade-off quan trọng:
+    Watermark ngắn (10s): RAM thoải mái, nhưng drop nhiều late data.
+    Watermark dài (5m): Chấp nhận nhiều late data, nhưng state RAM lớn hơn.
+    Với Binance WebSocket (độ trễ < 200ms), 30s là conservative và an toàn.
+
+outputMode("append"):
+  Chỉ emit kết quả của window ĐÃ ĐÓNG (sau watermark).
+  Đảm bảo: InfluxDB không nhận cùng 1 window 2 lần (no partial-write then overwrite).
+  Đối lập "update": emit window sau mỗi trigger (bao gồm partial) → InfluxDB duplicate.
+  Đối lập "complete": emit TẤT CẢ windows → scan toàn bộ state → cực kỳ tốn RAM.
+
+Persistent Checkpoint (Chandy-Lamport):
+  checkpointLocation = s3a://bronze/checkpoints/vwap_job/
+  Spark lưu: (1) Kafka offset đang xử lý, (2) State của mọi open window.
+  Khi job crash và restart → đọc checkpoint → tiếp tục từ đúng offset.
+  Không có checkpoint → restart từ đầu → duplicate VWAP data trong InfluxDB.
+  Mỗi sink có checkpoint riêng (/influxdb và /delta) để independent recovery.
+
+═══════════════════════════════════════════════════════════════════════════════
+ST13 — END-TO-END IDEMPOTENCY & WRITE-AUDIT-PUBLISH (WAP) (PLAN_REPO03)
+═══════════════════════════════════════════════════════════════════════════════
+
+At-Least-Once Delivery (Kafka guarantee):
+  Khi Spark restart sau crash, nó có thể re-process 1 số messages từ checkpoint.
+  Nếu micro-batch B đã ghi vào InfluxDB rồi crash trước khi update checkpoint →
+  Batch B được xử lý lại → InfluxDB nhận cùng VWAP window 2 lần → volume tính đúp.
+
+foreachBatch + UPSERT = Idempotent Sink:
+  _write_to_influxdb() nhận mỗi batch với batch_id duy nhất.
+  InfluxDB Line Protocol: nếu cùng timestamp + measurement + tags → OVERWRITE.
+  → Ghi lại cùng window → InfluxDB thay thế giá trị cũ (không tích lũy).
+  → Đây là "Idempotent Sink" — chạy N lần cũng cho kết quả giống chạy 1 lần.
+
+WAP Pattern cho Delta Sink (TODO ST13):
+  Hiện tại: ghi thẳng vào delta_path (append mode) → không có audit step.
+  WAP chuẩn:
+    1. WRITE: ghi vào staging table (delta_path + "_staging").
+    2. AUDIT: chạy data quality checks (price > 0, volume > 0, timestamps hợp lý).
+    3. PUBLISH: MERGE staging → final table (atomic swap qua Delta transaction).
+  → Đảm bảo final table KHÔNG BAO GIỜ có partial/corrupt data.
+  → Xem ST13 TODO trong PLAN_REPO03.md để implement đầy đủ.
 """
 from __future__ import annotations
 

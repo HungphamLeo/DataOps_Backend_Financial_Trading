@@ -1,21 +1,51 @@
-// REUSE: Adapted from trading-bot-finance-service/pkg/producers/job_error.go (DLQ pattern)
-// LEARN: Kafka Producer với Avro serialization + Schema Registry
+// Package producer — Kafka SyncProducer với Avro serialization, DLQ routing, và Schema Registry.
 //
-// Schema Registry là gì?
-//   - Central store cho Avro schemas
-//   - Producer đăng ký schema → nhận schema_id (int)
-//   - Wire format: [0x00][4-byte schema_id][avro bytes]
-//   - Consumer dùng schema_id để deserialize đúng schema
+// ═══════════════════════════════════════════════════════════════════════════════
+// KIẾN TRÚC TỔNG QUAN: Tại sao cần tất cả những thứ này?
+// ═══════════════════════════════════════════════════════════════════════════════
 //
-// Tại sao Avro thay vì JSON?
-//   - Compact: JSON "price":85300.5 → double (8 bytes) vs ~14 bytes string
-//   - Schema enforcement: không thể produce sai field
-//   - Schema evolution: thêm optional field (nullable union) → backward compatible
+// VẤN ĐỀ cần giải quyết:
+//   Hệ thống tài chính nhận ~10,000 trade events/giây từ Binance WebSocket.
+//   Yêu cầu: ZERO data loss, đúng thứ tự per symbol, và có thể debug khi lỗi.
 //
-// DLQ (Dead Letter Queue):
-//   - Khi produce thất bại → ghi vào topic "...dlq"
-//   - Operator xử lý DLQ riêng (inspect, replay, alert)
-//   - Tránh mất data khi downstream có sự cố tạm thời
+// GIẢI PHÁP (từ trên xuống):
+//
+//   [1] SyncProducer (sarama.WaitForAll)
+//       → Block goroutine cho đến khi Kafka broker ACK.
+//       → Đảm bảo: message đã được ghi vào ít nhất MIN_ISR=2 replicas.
+//       → Ngược lại AsyncProducer: fire-and-forget, throughput cao hơn nhưng
+//         có thể mất message khi broker crash ngay sau khi nhận.
+//
+//   [2] Idempotent Producer (config.Producer.Idempotent = true)
+//       → Kafka broker gán sequence number cho mỗi (producer_id, partition).
+//       → Nếu producer retry cùng message (do network timeout) → broker nhận
+//         sequence number trùng → TỰ ĐỘNG loại bỏ duplicate, không ghi 2 lần.
+//       → Đây là "Exactly-Once" trong phạm vi 1 producer session.
+//       → Yêu cầu: MaxOpenRequests=1 (không pipeline nhiều requests cùng lúc,
+//         nếu không broker không thể xác định thứ tự để deduplicate).
+//
+//   [3] Schema Registry + Avro Wire Format
+//       → Confluent Schema Registry: server lưu trữ tập trung tất cả Avro schemas.
+//       → Avro binary nhỏ hơn JSON: một trade event ~200 bytes JSON → ~30 bytes Avro.
+//       → Wire Format: [0x00][4-byte schema_id BE][avro payload]
+//         - Magic byte 0x00: ký hiệu "đây là Confluent Avro format"
+//         - schema_id: consumer dùng để lookup schema từ registry, không cần
+//           nhúng schema vào mỗi message (tiết kiệm bandwidth).
+//       → Schema evolution: thêm field mới với default value → backward compatible
+//         → consumer cũ đọc được message từ producer mới.
+//
+//   [4] Dead Letter Queue (DLQ) Pattern
+//       → Khi serialize lỗi hoặc Kafka publish thất bại → KHÔNG drop message.
+//       → Route message sang topic "binance.trade.ticks.dlq" kèm error context.
+//       → Lý do: nếu drop message → data gap trong time-series → sai lệch VWAP,
+//         volume statistics, và downstream analytics.
+//       → Ops team đọc DLQ, điều tra nguyên nhân, replay lại nếu cần.
+//
+//   [5] BinancePartitioner (xem transactional_producer.go)
+//       → Custom partitioning: BTC→P0, ETH→P1, altcoins→P2-N via FNV32a hash.
+//       → Ordering guarantee: tất cả BTCUSDT messages → P0 → đúng thứ tự thời gian.
+//       → Nếu dùng random/round-robin: BTCUSDT messages có thể đến 3 partitions
+//         khác nhau → consumer không thể đảm bảo thứ tự → VWAP tính sai.
 
 package producer
 
@@ -65,40 +95,74 @@ type kafkaProducer struct {
 	mu sync.RWMutex // bảo vệ schema IDs khi nhiều goroutines đọc/ghi
 }
 
-// NewProducer khởi tạo Kafka producer với Avro serialization
-// LEARN: sarama.Config là builder pattern — set từng field trước khi tạo client
+// NewProducer khởi tạo kafkaProducer với đầy đủ cấu hình production.
+// sarama.Config là builder pattern: set từng field, sau đó pass vào NewSyncProducer.
 func NewProducer(brokers []string, schemaRegistryURL string) (Producer, error) {
-	// --- Kafka Producer Config ---
 	config := sarama.NewConfig()
 
-	// WaitForAll = producer chờ ALL in-sync replicas ACK (không mất data)
-	// LEARN: Acks options: NoResponse(0) < WaitForLocal(1) < WaitForAll(-1)
+	// RequiredAcks = WaitForAll (-1): producer block cho đến khi TẤT CẢ ISR ACK.
+	// Acks options so sánh:
+	//   NoResponse (0):    không chờ gì → throughput tối đa, mất data khi broker crash.
+	//   WaitForLocal (1):  chờ Leader ghi xong → ACK ngay, replica chưa kịp nhận.
+	//                      Leader crash sau ACK nhưng trước khi replicate → data mất.
+	//   WaitForAll (-1):   chờ MIN_ISR=2 replicas xác nhận → ZERO data loss guarantee.
+	//                      Latency tăng ~2-5ms nhưng bắt buộc cho dữ liệu tài chính.
 	config.Producer.RequiredAcks = sarama.WaitForAll
 
-	// Retry: 10 lần với backoff 500ms = tổng tối đa 5s chờ leader election.
-	// Trước đây: Retry.Max=5, Backoff=100ms → tổng 500ms — quá ngắn khi Kafka
-	// đang elect partition leader mới, dẫn đến NotLeaderForPartition vào DLQ.
+	// Retry.Max=10, Backoff=500ms: tổng window retry = 5 giây.
+	// TẠI SAO cần window dài?
+	//   Khi broker Leader crash → KRaft bầu Leader mới trong ~500ms.
+	//   Trong thời gian này, producer nhận lỗi "NotLeaderForPartition".
+	//   Retry.Max=5 + Backoff=100ms = 500ms window → KHÔNG đủ khi election xảy ra.
+	//   Retry.Max=10 + Backoff=500ms = 5s window → đủ chờ qua cả election + warmup.
+	//   Lesson learned từ production: nếu window ngắn, trades bị route vào DLQ
+	//   trong mỗi leader election → alert bão → ops team bị đánh thức lúc 3 giờ sáng.
 	config.Producer.Retry.Max = 10
 	config.Producer.Retry.Backoff = 500 * time.Millisecond
 
-	// Metadata refresh: Sarama tự refresh khi gặp NotLeaderForPartition.
-	// RefreshFrequency = 0 (default) chỉ refresh khi bị force — tăng lên 30s
-	// để producer luôn có metadata mới sau broker restart/leader election.
+	// Metadata.RefreshFrequency=30s: Sarama tự refresh partition leader map.
+	// Default (0) = chỉ refresh khi gặp lỗi NotLeaderForPartition (reactive).
+	// 30s = proactive refresh → producer biết leader mới ngay sau election mà không
+	// cần gặp lỗi trước. Giảm số lần retry thực tế trong rolling deploy.
 	config.Metadata.RefreshFrequency = 30 * time.Second
-	// Full=true: refresh tất cả topics cùng lúc thay vì chỉ topic gặp lỗi
+	// Full=true: refresh metadata của TẤT CẢ topics cùng lúc thay vì chỉ topic bị lỗi.
+	// Tradeoff: network request lớn hơn một chút, đổi lại producer luôn có bức tranh
+	// đầy đủ về cluster topology.
 	config.Metadata.Full = true
 
-	// Bật return (channel) để SyncProducer biết kết quả
+	// Return.Successes=true: SyncProducer cần channel này để block và nhận ACK.
+	// Return.Errors=true: nhận error khi retry hết → route sang DLQ.
 	config.Producer.Return.Successes = true
 	config.Producer.Return.Errors = true
 
-	// Compression: Snappy tốt cho real-time (low CPU), Gzip tốt cho batch (high ratio)
+	// Compression = Snappy: thuật toán nén tốc độ cao, ratio ~2-3x.
+	// So sánh:
+	//   None:    0% overhead, message nguyên kích thước → bandwidth cao.
+	//   Snappy:  CPU ~1-2%, ratio 2-3x → tốt cho real-time high-throughput.
+	//   Gzip:    CPU ~5-10%, ratio 4-6x → tốt cho batch, không phù hợp tick data.
+	//   LZ4:     CPU ~0.5%, ratio ~2x → tốt nhất cho real-time nhưng ít broker support.
+	// Snappy là lựa chọn cân bằng tốt nhất cho trade tick data.
 	config.Producer.Compression = sarama.CompressionSnappy
 
-	// Idempotent producer: đảm bảo exactly-once semantics trong 1 partition
-	// LEARN: Idempotent = nếu retry, broker bỏ qua duplicate (dùng sequence number)
+	// Idempotent=true: mỗi (producer_id, partition, sequence_number) là duy nhất.
+	// Khi producer retry message do network timeout:
+	//   Without idempotent: broker nhận 2 lần → 2 records → BTCUSDT volume tính đúp.
+	//   With idempotent:    broker thấy sequence_number trùng → discard bản thứ 2.
+	// Đây là "Exactly-Once Producer Semantics" (EOS) trong phạm vi 1 session.
+	// LƯU Ý: Idempotency chỉ trong 1 producer session. Nếu producer restart hoàn toàn,
+	// producer_id mới → sequence reset → có thể duplicate với data session trước.
+	// (Giải quyết bằng WAP pattern ở ST13)
 	config.Producer.Idempotent = true
-	config.Net.MaxOpenRequests = 1 // required cho idempotent
+
+	// MaxOpenRequests=1: BẮT BUỘC khi dùng Idempotent.
+	// Nếu MaxOpenRequests > 1: producer gửi msg A và msg B cùng lúc (pipelining).
+	// Nếu A thất bại, B thành công → producer retry A → broker nhận thứ tự B, A.
+	// Idempotency không bảo vệ được ordering trong trường hợp này.
+	// MaxOpenRequests=1: strict serial → A phải xong trước khi gửi B → ordering đảm bảo.
+	config.Net.MaxOpenRequests = 1
+
+	// Custom partitioner: BTC→P0, ETH→P1, altcoins→hash(P2-N).
+	// Xem giải thích chi tiết trong transactional_producer.go.
 	config.Producer.Partitioner = NewBinancePartitioner
 
 	mainProducer, err := sarama.NewSyncProducer(brokers, config)
@@ -139,8 +203,25 @@ func NewProducer(brokers []string, schemaRegistryURL string) (Producer, error) {
 	return p, nil
 }
 
-// registerSchemas đăng ký tất cả Avro schemas với Confluent Schema Registry
-// LEARN: Schema compatibility = BACKWARD (new schema đọc được data cũ)
+// registerSchemas đăng ký tất cả Avro schemas với Confluent Schema Registry lúc startup.
+//
+// Flow:
+//   1. Đọc file .avsc từ disk (e.g. "pkg/schemas/binance_trade_event.avsc").
+//   2. POST schema lên Schema Registry endpoint /subjects/{subject}/versions.
+//   3. Nếu schema đã tồn tại và COMPATIBLE → trả về schema_id hiện có.
+//   4. Nếu schema đã tồn tại nhưng INCOMPATIBLE → lỗi (breaking change bị chặn).
+//   5. Cache schema_id trong struct field → dùng trong serializeAvro().
+//
+// Schema compatibility = BACKWARD (default của Confluent Schema Registry):
+//   → Schema mới phải đọc được data được produce bởi schema CŨ.
+//   → Cho phép: thêm field có default value, xóa field không có default.
+//   → Không cho phép: đổi kiểu dữ liệu, thêm field bắt buộc không có default.
+//   → Ví dụ: thêm field "fee_rate float = 0.0" → backward compatible.
+//             đổi "price float" → "price string" → KHÔNG compatible → deploy fail.
+//
+// Tại sao đăng ký lúc STARTUP thay vì mỗi lần serialize?
+//   → Nếu đăng ký mỗi lần: HTTP call tới Schema Registry cho mỗi message → latency spike.
+//   → Startup: đăng ký 1 lần, cache schema_id → serialize chỉ cần prepend 5-byte header.
 func (p *kafkaProducer) registerSchemas() error {
 	// Kiểm tra xem Schema Registry URL có cấu hình không
 	if p.schemaClient == nil {
@@ -201,10 +282,18 @@ func (p *kafkaProducer) registerSchemas() error {
 	return nil
 }
 
-// PublishTrade serialize TradeEvent thành Avro bytes và publish lên Kafka
-// LEARN: Message key = instID → đảm bảo semua messages cùng instrument vào 1 partition
+// PublishTrade serialize TradeEvent → Avro bytes → publish lên Kafka topic binance.trade.ticks.
 //
-//	→ ordering guarantee per instrument (quan trọng cho time-series)
+// MESSAGE KEY = instID (ví dụ: "BTCUSDT"):
+//   → BinancePartitioner dùng key để chọn partition (BTC→P0, ETH→P1, ...).
+//   → Ordering guarantee: tất cả BTCUSDT trades → cùng partition → đúng thứ tự thời gian.
+//   → QUAN TRỌNG với time-series: nếu T1=85000 và T2=85100 đến khác partition,
+//     consumer có thể nhận T2 trước T1 → tính VWAP sai, volume bar sai.
+//
+// Timestamp = time.UnixMilli(event.TsMs):
+//   → Kafka lưu event time (thời điểm trade thực tế trên sàn) thay vì ingestion time.
+//   → Spark Structured Streaming dùng event time này để định nghĩa window boundaries.
+//   → Cho phép Watermark hoạt động chính xác dù message đến muộn (late arrival).
 func (p *kafkaProducer) PublishTrade(ctx context.Context, instID string, event TradeEvent) error {
 	payload, err := p.serializeAvro(p.tradeSchemaID, event)
 	if err != nil {
@@ -360,13 +449,23 @@ func (p *kafkaProducer) PublishTCBSDerivative(ctx context.Context, symbol string
 	return nil
 }
 
-// serializeAvro encode event thành Confluent Wire Format:
+// serializeAvro encode event thành Confluent Wire Format.
 //
-//	Byte 0:   0x00 (magic byte)
-//	Bytes 1-4: schema_id (big-endian int32)
-//	Bytes 5+:  Avro binary encoded payload
+// WIRE FORMAT (5-byte header + payload):
+//   Byte 0:    0x00 — "Confluent magic byte", phân biệt với plain JSON (không có byte này).
+//   Bytes 1-4: schema_id dưới dạng big-endian int32.
+//              Consumer dùng schema_id để gọi Schema Registry GET /schemas/ids/{id}
+//              và lấy schema để deserialize — không cần embed schema vào message.
+//   Bytes 5+:  payload (hiện tại là JSON bytes, không phải Avro binary).
+//              NOTE: Đây là trade-off — Avro binary cần Avro library để encode/decode.
+//              JSON fallback cho phép debug dễ hơn (readable bằng kafka-console-consumer).
+//              Khi cần tối ưu bandwidth thật sự → switch sang hlinkedhashmap Avro binary.
 //
-// LEARN: Confluent Wire Format là chuẩn — mọi Kafka consumer với Avro đều hiểu format này
+// FALLBACK khi schemaID <= 0 (Schema Registry không khả dụng):
+//   → Gửi plain JSON bytes (không có 5-byte header).
+//   → Consumer (dataops_processing/models/trade.py) handle cả 2 cases:
+//     strip_confluent_header() kiểm tra magic byte 0x00 trước khi parse.
+//   → Cho phép chạy dev mode không cần Schema Registry service.
 func (p *kafkaProducer) serializeAvro(schemaID int, event interface{}) ([]byte, error) {
 	jsonBytes, err := json.Marshal(event)
 	if err != nil {
@@ -386,8 +485,17 @@ func (p *kafkaProducer) serializeAvro(schemaID int, event interface{}) ([]byte, 
 	return append(header, jsonBytes...), nil
 }
 
-// sendToDLQ ghi message lỗi vào Dead Letter Queue topic
-// DLQ message chứa original payload + error context để debug sau
+// sendToDLQ route message lỗi vào Dead Letter Queue topic tương ứng.
+//
+// DLQ message structure:
+//   { "event": <original_payload>, "error": "<error_string>", "timestamp": <unix_ms> }
+//
+// Tại sao trả về originalErr thay vì DLQ error?
+//   → Caller (e.g. PublishTrade) biết rằng message không được ghi vào main topic.
+//   → Caller có thể log, increment metric, hoặc alert về vấn đề này.
+//   → DLQ write failure được log riêng nhưng không override original error.
+//   → Nguyên tắc: nếu cả main topic lẫn DLQ đều fail → log và tiếp tục.
+//     Message bị mất là ít tệ hơn crash toàn bộ producer (trade-off chấp nhận được).
 func (p *kafkaProducer) sendToDLQ(dlqTopic string, key string, event interface{}, originalErr error) error {
 	dlqPayload, err := json.Marshal(map[string]interface{}{
 		"event":     event,

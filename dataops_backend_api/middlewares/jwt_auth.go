@@ -1,12 +1,39 @@
-// Package middlewares cung cấp các Gin middleware dùng chung trong dataops-backend-api:
-//   - jwt_auth.go   : JWT authentication + Redis blacklist (struct-based, dùng go-redis/v9)
-//   - auth_tiers.go : JWT + Redis session, role và status check (function-based)
-//   - rate_limiter.go: IP-based fixed-window rate limiting qua Redis
-//   - security.go   : CORS headers cho production và development
+// Package middlewares — JWT Authentication cho dataops-backend-api.
 //
-// Hai file jwt_auth.go và auth_tiers.go phục vụ cùng mục đích nhưng theo hai
-// interface khác nhau. jwt_auth.go dùng AuthMiddleware struct (dễ inject mock trong test),
-// auth_tiers.go dùng closure function (nhẹ hơn, phù hợp route-level middleware).
+// ═══════════════════════════════════════════════════════════════════════════════
+// ST07 — ZERO-TRUST: JWT SHORT-LIVED TOKENS & REFRESH TOKEN ROTATION (PLAN_REPO03)
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// JWT Lifecycle (Zero-Trust Security Model):
+//   Access Token:  exp=15 phút — ngắn hạn, nếu bị đánh cắp thiệt hại giới hạn.
+//   Refresh Token: exp=7 ngày, lưu Redis "refresh:{user_id}:{token_hash}".
+//   Rotation: mỗi lần dùng Refresh Token → phát Access + Refresh mới → invalidate cái cũ.
+//   → Nếu attacker đánh cắp Refresh Token và dùng trước user → user detect ngay khi
+//     Refresh Token của họ bị reject → trigger security alert.
+//
+// Token Blacklist (Redis):
+//   Khi user logout: lưu Access Token vào "blacklist:token:{token}" với TTL = remaining_exp.
+//   jwt_auth.go kiểm tra blacklist trước mỗi authorized request.
+//   Vấn đề JWT stateless: token valid theo crypto nhưng user đã logout.
+//   Blacklist = compromise: thêm 1 Redis lookup (~0.5ms) để có revocation capability.
+//
+// HMAC-SHA256 Signing:
+//   Dùng symmetric key (secret) — cả ký và verify bằng cùng key.
+//   Phù hợp cho single-service (backend_api tự ký và tự verify).
+//   Khi cần multi-service: chuyển sang RSA/ECDSA (asymmetric).
+//   KHÔNG BAO GIỜ dùng algorithm "none" (JWT spec gotcha — bypass auth hoàn toàn).
+//
+// RBAC (Role-Based Access Control):
+//   Role hierarchy: USER < ADMIN < SUPER_ADMIN.
+//   RequireRole() → SUPER_ADMIN luôn pass mọi role check (God mode).
+//   Claims trong JWT: user_id, username, role — tránh lưu sensitive info trong token.
+//   JWT là BASE64-encoded, không encrypted — bất kỳ ai cũng decode được payload!
+//
+// Middleware files trong package:
+//   jwt_auth.go    : struct-based AuthMiddleware (dễ inject mock trong test)
+//   auth_tiers.go  : closure-based (nhẹ hơn, phù hợp route-level)
+//   rate_limiter.go: IP-based fixed-window rate limiting qua Redis
+//   security.go    : CORS headers cho production và development
 package middlewares
 
 import (

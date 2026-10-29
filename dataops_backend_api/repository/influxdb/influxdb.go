@@ -1,14 +1,46 @@
-// REUSE: NEW — không có trong các repos cũ (InfluxDB v2 là mới với project này)
-// LEARN: Repository Pattern — tách biệt "truy vấn data" khỏi "business logic"
+// Package influxdb — InfluxDB v2 Repository cho dataops-backend-api.
 //
-// InfluxDB là time-series database:
-//   - Tối ưu cho dữ liệu có timestamp (price ticks, trades, metrics)
-//   - Dùng Flux query language (giống SQL nhưng cho time-series)
-//   - Tổ chức: Organization → Bucket → Measurement → Fields + Tags
+// ═══════════════════════════════════════════════════════════════════════════════
+// ST06 — INFLUXDB BUFFER POOL DEFENSE + CACHE-ASIDE PATTERN (PLAN_REPO03)
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// VẤN ĐỀ — Buffer Pool LRU Pollution:
+//   InfluxDB (như mọi time-series DB) quản lý Data Pages trong RAM qua thuật toán LRU.
+//   Khi API dashboard chạy query phân tích lịch sử 30 ngày (large scan):
+//     → Kéo hàng GB pages từ disk lên RAM.
+//     → Đẩy sạch "hot pages" (VWAP 5 phút gần nhất) ra khỏi RAM.
+//     → Query real-time API tiếp theo phải đọc lại từ disk → latency tăng 10-100x.
+//   Đây là hiện tượng "Cache Eviction Pollution" — analytics query làm hỏng OLTP cache.
+//
+// GIẢI PHÁP — Redis Cache-Aside (PACELC: EL - Latency Optimization):
+//   Trong điều kiện mạng bình thường (Else), ưu tiên giảm Latency (L):
+//     1. API nhận request: check Redis với key "vwap:{symbol}:{interval}:{ts_bucket}".
+//     2. Cache HIT: trả về ngay từ RAM Redis (<1ms). Không đụng InfluxDB.
+//     3. Cache MISS: query InfluxDB → cache kết quả với TTL=30s → trả về client.
+//   Target: Cache Hit Ratio > 80% cho VWAP queries (dashboard refresh mỗi 5-30s).
+//
+// KEY DESIGN (deterministic & cache-friendly):
+//   "vwap:{symbol}:{interval}:{timestamp_bucket}"
+//   timestamp_bucket = Unix epoch / TTL_seconds → cùng bucket trong 1 TTL window.
+//   Ví dụ: TTL=30s, ts=1700000060 → bucket = 1700000060/30 = 56666668.
+//   → Tất cả requests trong 30s sẽ hit cùng cache key → high hit ratio.
+//
+// CARDINALITY WARNING:
+//   InfluxDB có giới hạn Time Series Cardinality (~1-10M series tùy phiên bản).
+//   Cardinality = unique combinations của (measurement, tags).
+//   Nếu thêm user_id vào tag → cardinality × num_users → RAM InfluxDB cạn → crash.
+//   Rule: KHÔNG BAO GIỜ dùng high-cardinality fields (UUID, user_id) làm InfluxDB tag.
+//   Monitor: influxdb_tsdb_series_total > 500K → alert → cleanup old series.
+//
+// REPOSITORY PATTERN:
+//   Services không gọi InfluxDB trực tiếp — chỉ qua interface Repository.
+//   Cho phép: swap implementation (mock trong test), thêm cache layer sau mà không
+//   thay đổi business logic, dễ add observability (metrics, tracing) ở 1 chỗ.
 //
 // So sánh với MySQL:
 //   MySQL: Database → Table → Row → Columns
 //   InfluxDB: Org → Bucket → Measurement → (Fields=values, Tags=indexed labels)
+//   Flux query language: functional pipeline — from() |> range() |> filter() |> aggregateWindow()
 
 package influxdb
 

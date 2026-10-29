@@ -11,6 +11,50 @@ Usage:
 
     spark = build_spark_session("dataops-vwap-job")
     kafka_opts = get_kafka_options()
+
+═══════════════════════════════════════════════════════════════════════════════
+KIẾN TRÚC SPARK PRODUCTION — ST02, ST12 (PLAN_REPO03)
+═══════════════════════════════════════════════════════════════════════════════
+
+ST02 — Kafka Static Membership & Rebalance Storm Prevention:
+  Vấn đề: Consumer pod bị Stop-The-World GC Pause (Java/JVM overhead).
+  Group Coordinator thấy heartbeat miss → đánh dấu pod "chết" → kích hoạt
+  TOÀN BỘ cụm Stop-The-World Rebalance (tất cả consumers ngừng xử lý).
+  Pod "hồi sinh" sau GC → Rebalance lại → vòng lặp vô tận.
+
+  Kafka Consumer Configs phải đặt trong SparkSession Kafka options:
+    kafka.session.timeout.ms=45000     — chịu GC pause dài đến 45s (default thường 10s)
+    kafka.heartbeat.interval.ms=15000  — heartbeat mỗi 15s (phải < session.timeout/3)
+    kafka.max.poll.interval.ms=300000  — 5 phút cho Spark micro-batch nặng
+
+  Static Membership (Kafka 2.3+):
+    kafka.group.instance.id={hostname}-{app_name}  — định danh cố định per consumer.
+    Khi pod restart trong session.timeout → Coordinator KHÔNG rebalance,
+    giữ nguyên partition assignment → pipeline tiếp tục trong suốt.
+
+ST12 — Spark RocksDB State Store & Hot-Key Skew Defense:
+  Vấn đề: Window Aggregation giữ state trong JVM Heap.
+  BTC chiếm ~40% volume → toàn bộ BTC windows dồn vào 1 executor → OOMKilled.
+
+  RocksDB State Backend:
+    spark.sql.streaming.stateStore.providerClass = RocksDBStateStoreProvider
+    RocksDB (LSM-Tree) xả State từ JVM Heap xuống NVMe disk cục bộ của executor.
+    Chỉ cache working set lên RAM → loại bỏ JVM GC pressure từ State management.
+    LSM-Tree: write → MemTable (RAM) → immutable SSTable (disk) → Compaction.
+
+  Adaptive Query Execution (AQE) — Spark 3.x:
+    spark.sql.adaptive.enabled = true
+    spark.sql.adaptive.skewJoin.enabled = true
+    AQE phát hiện Skew Partition tại RUNTIME (khi data đã có) thay vì plan time.
+    Tự động chia nhỏ partition lớn (BTC) → distribute đều sang nhiều executors.
+    advisoryPartitionSizeInBytes = 128MB → mỗi partition tối đa 128MB trước khi split.
+
+  Two-Phase Aggregation (Salting):
+    Khi AQE không đủ (extreme skew), dùng Salting:
+    Thêm random suffix (0-N) vào partition key → BTC chia thành N sub-groups.
+    Phase 1: Local aggregation (mỗi executor tính VWAP riêng).
+    Phase 2: Global merge (gom kết quả N sub-groups lại).
+    Xem vwap_job.py để thấy implementation.
 """
 from __future__ import annotations
 
@@ -34,6 +78,16 @@ def build_spark_session(app_name: str | None = None):
 
     Returns:
         pyspark.sql.SparkSession
+
+    Production notes (ST12):
+        - Để bật RocksDB State Backend, thêm vào builder:
+          .config("spark.sql.streaming.stateStore.providerClass",
+                  "org.apache.spark.sql.execution.streaming.state.RocksDBStateStoreProvider")
+        - Để bật AQE:
+          .config("spark.sql.adaptive.enabled", "true")
+          .config("spark.sql.adaptive.skewJoin.enabled", "true")
+          .config("spark.sql.adaptive.advisoryPartitionSizeInBytes", "134217728")  # 128MB
+        Các config này chưa bật mặc định vì cần test trên cluster trước (ST12 TODO).
     """
     try:
         from pyspark.sql import SparkSession
@@ -100,6 +154,25 @@ def get_kafka_options(topic: str | None = None) -> dict[str, str]:
 
     Returns:
         Dict options để truyền vào .options(**opts).
+
+    ST02 — Static Membership & Timeout Tuning:
+        maxOffsetsPerTrigger kiểm soát tốc độ consume — quan trọng khi catchup sau outage.
+        Nếu để không giới hạn: Spark kéo hàng triệu records vào 1 micro-batch → executor OOM.
+
+        kafka.session.timeout.ms: thời gian Group Coordinator chờ heartbeat trước khi
+        đánh dấu consumer "chết". Phải đủ dài để qua Stop-The-World GC Pause (JVM).
+        Default Kafka: 10000ms (10s) — quá ngắn cho JVM workloads (GC có thể kéo dài 30s+).
+
+        kafka.heartbeat.interval.ms: tần suất gửi heartbeat.
+        Quy tắc: heartbeat.interval < session.timeout / 3 (để có ít nhất 3 cơ hội trước khi timeout).
+
+        kafka.max.poll.interval.ms: khoảng thời gian tối đa giữa 2 lần poll().
+        Spark micro-batch xử lý nặng có thể mất vài phút → phải đặt cao hơn thời gian processing.
+        Nếu micro-batch kéo dài hơn max.poll.interval.ms → Coordinator kick consumer → Rebalance.
+
+        Static Membership (TODO ST02):
+        Thêm "kafka.group.instance.id": f"{socket.gethostname()}-vwap-job"
+        để prevent Rebalance khi pod restart trong window session.timeout.
     """
     from dataops_processing.config.settings import get_settings
     cfg = get_settings()

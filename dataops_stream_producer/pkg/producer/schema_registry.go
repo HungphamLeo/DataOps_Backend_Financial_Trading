@@ -1,11 +1,38 @@
-// LEARN: Schema Registry Client — giao tiếp với Confluent Schema Registry REST API
+// Package producer — Confluent Schema Registry HTTP Client.
 //
-// Confluent Schema Registry REST API:
+// ═══════════════════════════════════════════════════════════════════════════════
+// ST08 — DISTRIBUTED TRACING HOOKS & ST10 — SCHEMA GOVERNANCE (PLAN_REPO03)
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// ST10 — Schema Registry là gì và tại sao cần:
+//   Vấn đề: team Backend đổi kiểu field "price" từ float → string.
+//   Không có Schema Registry: Producer gửi message mới, Consumer cũ crash khi deserialize.
+//   Với Schema Registry + BACKWARD compatibility:
+//     → CI gate chạy "buf breaking" hoặc schema compatibility check.
+//     → Nếu breaking change → deploy bị block ngay tại PR stage.
+//     → Downstream pipeline không bao giờ nhận data không đọc được.
+//
+//   Schema Evolution Rules (BACKWARD compatibility):
+//     ✅ Thêm field mới với default value → backward compatible.
+//     ✅ Xóa field có default value → backward compatible.
+//     ❌ Đổi kiểu dữ liệu (float → string) → BREAKING, bị chặn.
+//     ❌ Thêm field bắt buộc không có default → BREAKING, bị chặn.
+//
+//   Schema ID caching: đăng ký 1 lần lúc startup, cache schema_id.
+//   → Serialize chỉ cần prepend 5-byte header: [0x00][4-byte schema_id].
+//   → Không có HTTP call per message → zero overhead trong hot path.
+//
+// ST08 — Distributed Tracing Integration (TODO):
+//   Khi implement OTel (OpenTelemetry) trong ST08, inject trace context tại đây:
+//   RegisterSchema() và GetSchemaByID() nên tạo child span → đo thời gian HTTP call.
+//   Thêm attribute: schema.subject, schema.id → visible trong Jaeger/Tempo.
+//   Pattern: tracer.Start(ctx, "schema_registry.register") → deferred span.End().
+//
+// Schema Registry REST API:
 //   POST /subjects/{subject}/versions    → register schema, trả về schema_id
 //   GET  /schemas/ids/{id}               → lấy schema theo ID
 //   GET  /subjects/{subject}/versions/latest → lấy schema mới nhất
-//
-// Subject naming convention: {topic-name}-value (cho value), {topic-name}-key (cho key)
+//   Subject naming convention: {topic-name}-value (value), {topic-name}-key (key)
 
 package producer
 

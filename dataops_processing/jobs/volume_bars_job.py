@@ -12,6 +12,53 @@ Volume Bars (De Prado simplified):
 Config & Paths đến từ:
     Dependency Injection từ ProcessingOrchestrator (Settings + PathResolver).
     KHÔNG có hardcode nào trong file này.
+
+═══════════════════════════════════════════════════════════════════════════════
+ST11 — LAKEHOUSE COMPACTION, VACUUM & COPY-ON-WRITE DEFENSE (PLAN_REPO03)
+═══════════════════════════════════════════════════════════════════════════════
+
+VẤN ĐỀ — Small Files Problem:
+  Streaming pipeline (Kafka → Spark → Delta) ghi liên tục → hàng nghìn file Parquet 10KB/phút.
+  Sau 3 tháng: hàng triệu file nhỏ trên MinIO/S3.
+
+  Khi Spark/Trino query bảng volume_bars:
+    → Engine phải gọi S3 LIST API (hàng nghìn round trips).
+    → Đọc footer metadata của từng file Parquet (HTTP GET × hàng triệu).
+    → Thời gian "metadata overhead" > thời gian đọc data thật.
+    → SELECT count(*) FROM table mất 30 phút thay vì 30 giây.
+
+  Columnar Storage (Parquet) write penalty:
+    Ghi 1 Parquet file: Spark phải buffer dữ liệu trong RAM → transpose rows→columns
+    → encode (RLE, Dictionary) → compress (Snappy) → flush xuống disk.
+    → Mỗi micro-batch streaming = 1 tiny Parquet file. File nhỏ không amortize overhead.
+
+GIẢI PHÁP — Compaction Job (chạy định kỳ giờ thấp điểm):
+  Delta Lake OPTIMIZE command: gom hàng nghìn file nhỏ → vài file lớn 256MB-512MB.
+  Z-ORDER BY (symbol, event_time): sắp xếp lại data trong file → Predicate Pushdown.
+    Ví dụ: query WHERE symbol='BTCUSDT' → skip ngay các row groups không có BTC.
+    Min/Max statistics trong Parquet footer → engine biết file nào cần đọc → ít I/O.
+
+  VACUUM (Garbage Collection):
+    Delta Lake giữ snapshot cũ để time-travel queries.
+    Sau 7 ngày → snapshot cũ không cần thiết → VACUUM xóa file vật lý.
+    retention_hours=168 (7 ngày): đủ cho backfill/reprocessing mà không tốn quá nhiều storage.
+    CẢNH BÁO: VACUUM với retention=0 → xóa ngay → nếu có job đang chạy → FileNotFound crash.
+    Production rule: retention >= 7 ngày, VACUUM chỉ chạy khi không có batch job đang chạy.
+
+COPY-ON-WRITE (CoW) Write Amplification:
+  Delta Lake dùng Copy-on-Write cho UPDATE/DELETE:
+    1 row UPDATE trong file 256MB → đọc toàn bộ 256MB lên RAM.
+    → Sửa 1 row. → Ghi lại file 256MB mới. → Xóa file cũ (được VACUUM sau).
+    → 1 row change = 256MB I/O write amplification!
+  Khi nào xảy ra: replay pipeline với data correction → update nhiều rows → I/O spike.
+  Giải pháp: dùng Merge-on-Read (MOR) cho write-heavy workload (Delta streaming writer).
+
+Batch Job Partitioning Strategy:
+  .partitionBy("symbol"): mỗi symbol có thư mục riêng trên MinIO.
+    → Query WHERE symbol='BTCUSDT' → đọc đúng 1 thư mục (partition pruning).
+    → Không có partition = full scan toàn bộ volume_bars table cho mỗi query.
+  overwrite mode với overwriteSchema: mỗi lần chạy batch → replace toàn bộ (idempotent).
+    → Chạy lại không tạo duplicate. Trade-off: không có partial update, đổi schema tự động.
 """
 from __future__ import annotations
 

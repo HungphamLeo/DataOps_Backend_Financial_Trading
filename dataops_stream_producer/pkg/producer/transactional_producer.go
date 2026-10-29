@@ -1,3 +1,8 @@
+// Package producer — phần 2: BinancePartitioner và TransactionalProducer.
+//
+// File này chứa 2 thành phần độc lập:
+//   - BinancePartitioner: custom partitioning logic dựa trên symbol.
+//   - TransactionalProducer: wrapper dùng cho Exactly-Once Semantics (EOS) với Transactional ID.
 package producer
 
 import (
@@ -11,17 +16,29 @@ import (
 	"go.uber.org/zap"
 )
 
-// BinancePartitioner là custom Kafka partitioner dành riêng cho Binance & VPS instruments.
+// BinancePartitioner là custom Kafka partitioner dành riêng cho Binance & TCBS instruments.
 //
-// Chiến lược phân vùng (partition routing):
-//   - Partition 0: tất cả BTC* instruments (BTCUSDT...)
-//   - Partition 1: tất cả ETH* instruments (ETHUSDT...)
-//   - Partition 2..N-1: các instruments còn lại, hash đều bằng FNV32a
+// VẤN ĐỀ với default partitioner (round-robin hoặc hash trên toàn key):
+//   BTC chiếm ~40% total crypto volume, ETH ~20%.
+//   Nếu dùng consistent hash đơn thuần: với 6 partitions, BTC và ETH vẫn có thể
+//   hash vào cùng 1 partition → partition đó nhận 60% tổng traffic → DATA SKEW.
+//   Consumer đọc partition đó bị quá tải, các partition còn lại nhàn rỗi.
 //
-// Lý do cần dedicated partitions cho BTC/ETH:
-//   - BTC và ETH chiếm ~60-70% khối lượng giao dịch crypto
-//   - Dedicated partition → consumer có thể đọc riêng BTC mà không bị ảnh hưởng bởi altcoins
-//   - Ordering guarantee: tất cả BTC messages đến đúng thứ tự trong partition 0
+// GIẢI PHÁP: Dedicated partitions cho high-volume symbols:
+//   Partition 0: BTC* (1 dedicated slot cho top-1 volume)
+//   Partition 1: ETH* (1 dedicated slot cho top-2 volume)
+//   Partition 2..N-1: tất cả còn lại phân phối đều qua FNV32a hash
+//
+// Lợi ích:
+//   1. Load balancing: BTC và ETH không cạnh tranh partition với altcoins.
+//   2. Dedicated consumer: Spark executor chuyên đọc P0 (BTC) không bị interrupt bởi P1+ traffic.
+//   3. Ordering per symbol: BTCUSDT messages → P0 → tất cả consumers thấy đúng thứ tự thời gian.
+//      (VWAP, volume bar, order flow phụ thuộc vào ordering này)
+//
+// FNV32a hash cho altcoins:
+//   FNV (Fowler-Noll-Vo) là non-cryptographic hash, rất nhanh (~1ns/call).
+//   Distribution tốt: "SOLUSDT" và "BNBUSDT" ít khi hash vào cùng partition.
+//   Không cần crypto hash (SHA256) vì mục đích là distribute, không phải bảo mật.
 type BinancePartitioner struct{}
 
 // NewBinancePartitioner là factory function theo chuẩn sarama.PartitionerConstructor.
@@ -71,15 +88,25 @@ func (p *BinancePartitioner) RequiresConsistency() bool {
 
 // TransactionalProducer gửi events lên Kafka với Exactly-Once Semantics (EOS).
 //
-// EOS đảm bảo mỗi message được ghi đúng 1 lần dù có broker failures hay retries.
-// Đạt được thông qua:
-//   - Idempotent producer: broker track sequence number, reject duplicates
-//   - Transactional ID: cho phép producer resume sau crash mà không duplicate
-//   - acks=all + MaxOpenRequests=1: required conditions cho idempotent mode
+// EOS (Exactly-Once Semantics) — 3 điều kiện bắt buộc:
+//   1. Idempotent producer: broker track (producer_id, sequence_number) per partition.
+//      Retry cùng message → broker reject duplicate → không ghi 2 lần.
+//   2. Transactional ID: định danh cố định cho producer.
+//      Nếu producer crash và restart, Kafka tìm "transactional ID" này → abort
+//      transaction đang dở → resume từ trạng thái sạch → không duplicate với session cũ.
+//   3. acks=all + MaxOpenRequests=1: đảm bảo ordering trong pipeline (giải thích ở producer.go).
 //
-// Headers được tự động gắn vào mỗi message để traceability:
-//   - produced_at: thời điểm producer gửi (RFC3339Nano)
-//   - source: "dataops-stream-producer" (giúp phân biệt khi có nhiều producers)
+// SO SÁNH với kafkaProducer (producer.go):
+//   kafkaProducer:         Idempotent=true, KHÔNG có TransactionalID → EOS trong 1 session.
+//   TransactionalProducer: Idempotent=true + TransactionalID → EOS qua nhiều sessions/restarts.
+//
+// Headers tự động gắn vào mỗi message:
+//   produced_at: RFC3339Nano timestamp khi producer gọi SendMessage.
+//     → Dùng để đo end-to-end latency: produced_at đến consumer processing time.
+//     → Phân biệt với event.TsMs (thời điểm trade thực tế trên sàn).
+//   source: "dataops-stream-producer"
+//     → Cho phép consumer biết message đến từ service nào (quan trọng khi có nhiều producers).
+//     → Dùng cho distributed tracing (ST08 trong PLAN_REPO03).
 type TransactionalProducer struct {
 	producer sarama.SyncProducer
 	logger   *zap.Logger
