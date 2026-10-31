@@ -20,7 +20,6 @@ if TYPE_CHECKING:
 
 logger = logger_manager.get_logger(__name__)
 
-
 class BaseProcessingJob(ABC):
     """
     Abstract base class định nghĩa contract cho mọi job xử lý dữ liệu (batch & streaming).
@@ -71,14 +70,45 @@ class BaseProcessingJob(ABC):
             Kết quả tính toán (dict với batch job, hoặc streaming query/None với streaming job).
         """
         pass
+    
+    def route_to_dlq(self, topic: str, key: str, payload: Any, error: Exception) -> None:
+        try:
+            from kafka import KafkaProducer
+
+            producer = KafkaProducer(
+                bootstrap_servers=self.settings.kafka.brokers,
+                acks="all",
+                retries=3,
+                value_serializer=lambda v: json.dumps(v, default=str).encode("utf-8"),
+                key_serializer=lambda k: str(k).encode("utf-8"),
+            )
+
+            msg = {
+                "source_topic": topic,
+                "key": key,
+                "payload": payload if isinstance(payload, (dict, list, str, int, float, bool)) else str(payload),
+                "failure_reason": str(error),
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+                "job": self.name,
+            }
+
+            producer.send(f"{topic}.dlq", key=key, value=msg)
+            producer.flush()
+            producer.close()
+            logger.warning("Routed poison message to DLQ topic=%s key=%s reason=%s", f"{topic}.dlq", key, error)
+        except Exception as dlq_exc:
+            logger.exception("CRITICAL: Failed to write message into DLQ: %s", dlq_exc)
+
 
     def run(self, spark: Optional["SparkSession"] = None, **kwargs: Any) -> Any:
-        """
-        Template method điều khiển vòng đời chạy job:
-        1. Validate tham số
-        2. Ghi nhận log khởi động
-        3. Thực thi execute()
-        """
-        self.validate_params(**kwargs)
-        logger.info("Executing job '%s' (type=%s)", self.name, self.job_type)
-        return self.execute(spark=spark, **kwargs)
+        try:
+            self.validate_params(**kwargs)
+            logger.info("Executing job '%s' (type=%s)", self.name, self.job_type)
+            return self.execute(spark=spark, **kwargs)
+        except Exception as exc:
+            topic = kwargs.get("topic", self.name)
+            key = kwargs.get("key", "unknown")
+            payload = kwargs.get("payload", {})
+            self.route_to_dlq(topic, key, payload, exc)
+            logger.exception("Poison pill isolated by DLQ for job=%s topic=%s", self.name, topic)
+            return None
