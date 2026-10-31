@@ -99,7 +99,7 @@ log "=== Creating HIGH-VOLUME topics (partitions=12) ==="
 # binance.trade.ticks — real-time trade events từ Binance WebSocket
 # Key = symbol (BTC, ETH...) → BinancePartitioner đảm bảo per-symbol ordering.
 # Consumer: Spark VWAP job (vwap_job.py), volume bars job (volume_bars_job.py).
-create_topic "binance.trade.ticks" 12 3 \
+create_topic "binance.trade.ticks" 6 3 \
     "retention.ms=7200000" \
     "segment.ms=1800000" \
     "compression.type=snappy" \
@@ -108,7 +108,7 @@ create_topic "binance.trade.ticks" 12 3 \
 # binance.orderbook.snapshot — order book snapshot từ Binance depth stream
 # (tên khớp constants.TopicBinanceOrderBookSnapshot, KHÔNG có "s" ở cuối).
 # retention.ms=1800000 (30m): order book stale nhanh → không cần giữ lâu.
-create_topic "binance.orderbook.snapshot" 12 3 \
+create_topic "binance.orderbook.snapshot" 6 3 \
     "retention.ms=1800000" \
     "segment.ms=600000" \
     "compression.type=snappy" \

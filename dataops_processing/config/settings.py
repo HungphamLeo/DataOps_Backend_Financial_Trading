@@ -47,6 +47,9 @@ class KafkaSettings:
     max_offsets_per_trigger: int
     request_timeout_ms: int
     session_timeout_ms: int
+    heartbeat_interval_ms: int
+    max_poll_interval_ms: int
+    group_instance_id_enabled: bool
     fail_on_data_loss: bool
 
 
@@ -240,9 +243,11 @@ def get_settings() -> ProcessingSettings:
         starting_offsets= kc.get("starting_offsets", "latest"),
         max_offsets_per_trigger=int(kc.get("max_offsets_per_trigger", 10000)),
         request_timeout_ms=     int(kc.get("request_timeout_ms", 10000)),
-        session_timeout_ms=     int(kc.get("session_timeout_ms", 30000)),
-        fail_on_data_loss=      bool(kc.get("fail_on_data_loss", False)),
-    )
+        session_timeout_ms=     int(kc.get("session_timeout_ms", 45000)),
+        heartbeat_interval_ms=  int(kc.get("heartbeat_interval_ms", 15000)),
+        max_poll_interval_ms=   int(kc.get("max_poll_interval_ms", 300000)),
+        group_instance_id_enabled= bool(kc.get("group_instance_id_enabled", False)),
+        fail_on_data_loss=      bool(kc.get("fail_on_data_loss", False)),)
 
     i = cfg.get("influxdb", {})
     influxdb = InfluxDBSettings(

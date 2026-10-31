@@ -19,7 +19,10 @@ kafka:
     starting_offsets: "latest"
     max_offsets_per_trigger: 10000
     request_timeout_ms: 10000
-    session_timeout_ms: 30000
+    session_timeout_ms: 45000
+    heartbeat_interval_ms: 15000
+    max_poll_interval_ms: 300000
+    group_instance_id_enabled: true
     fail_on_data_loss: false             # tránh crash khi topic bị compact
 
 # ─── InfluxDB v2 ──────────────────────────────────────────────────────────────

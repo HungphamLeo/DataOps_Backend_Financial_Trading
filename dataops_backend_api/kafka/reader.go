@@ -7,6 +7,8 @@
 package kafka
 
 import (
+	"time"
+
 	kafka "github.com/segmentio/kafka-go"
 )
 
@@ -18,10 +20,13 @@ import (
 //   - MaxBytes: giới hạn size mỗi fetch request (10MB = safe default)
 func GetReader(kafkaBrokers []string, groupID string, topics []string) *kafka.Reader {
 	return kafka.NewReader(kafka.ReaderConfig{
-		Brokers:     kafkaBrokers,
-		GroupID:     groupID,
-		GroupTopics: topics,
-		MaxBytes:    10e6, // 10MB
+		Brokers:           kafkaBrokers,
+		GroupID:           groupID,
+		GroupTopics:       topics,
+		MaxBytes:          10e6, // 10MB
+		SessionTimeout:    45 * time.Second,
+		HeartbeatInterval: 15 * time.Second,
+		RebalanceTimeout:  300 * time.Second,
 	})
 }
 

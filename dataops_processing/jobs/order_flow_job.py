@@ -248,7 +248,7 @@ class OrderFlowStreamingJob(BaseProcessingJob):
         raw_stream = (
             spark.readStream
             .format("kafka")
-            .options(**get_kafka_options())
+            .options(**get_kafka_options(job_name="order-flow-job"))
             .load()
         )
 

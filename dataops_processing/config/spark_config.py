@@ -57,7 +57,7 @@ ST12 — Spark RocksDB State Store & Hot-Key Skew Defense:
     Xem vwap_job.py để thấy implementation.
 """
 from __future__ import annotations
-
+import socket
 import logging
 
 from dataops_processing.log.logger_setup import logger_manager
@@ -145,7 +145,7 @@ def build_spark_session(app_name: str | None = None):
     return spark
 
 
-def get_kafka_options(topic: str | None = None) -> dict[str, str]:
+def get_kafka_options(topic: str | None = None, job_name: str = "vwap-job") -> dict[str, str]:
     """
     Trả về Kafka read options cho spark.readStream.format("kafka").
 
@@ -180,12 +180,17 @@ def get_kafka_options(topic: str | None = None) -> dict[str, str]:
 
     resolved_topic = topic or k.topic_trade_ticks
 
-    return {
-        "kafka.bootstrap.servers":   k.bootstrap_servers,
-        "subscribe":                 resolved_topic,
-        "startingOffsets":           k.starting_offsets,
-        "maxOffsetsPerTrigger":      str(k.max_offsets_per_trigger),
-        "kafka.request.timeout.ms":  str(k.request_timeout_ms),
-        "kafka.session.timeout.ms":  str(k.session_timeout_ms),
-        "failOnDataLoss":            str(k.fail_on_data_loss).lower(),
+    opts = {
+        "kafka.bootstrap.servers":     k.bootstrap_servers,
+        "subscribe":                   resolved_topic,
+        "startingOffsets":             k.starting_offsets,
+        "maxOffsetsPerTrigger":        str(k.max_offsets_per_trigger),
+        "kafka.request.timeout.ms":    str(k.request_timeout_ms),
+        "kafka.session.timeout.ms":    str(k.session_timeout_ms),
+        "kafka.heartbeat.interval.ms": str(k.heartbeat_interval_ms),
+        "kafka.max.poll.interval.ms":  str(k.max_poll_interval_ms),
+        "failOnDataLoss":              str(k.fail_on_data_loss).lower(),
     }
+    if k.group_instance_id_enabled:
+        opts["kafka.group.instance.id"] = f"{socket.gethostname()}-{job_name}"
+    return opts
