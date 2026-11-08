@@ -52,7 +52,9 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 
 	// REUSE: market-maker-api/middlewares/security.go
 	router.Use(middlewares.Secure(cfg))
-
+	    // ST07: Prometheus endpoint.
+    // Expose /metrics so Prometheus can scrape Gin app metrics.
+    router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	// ─── Route Groups ────────────────────────────────────────────
 	api := router.Group("/api/v1")
 

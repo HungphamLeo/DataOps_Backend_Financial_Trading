@@ -235,6 +235,9 @@ class OrderFlowStreamingJob(BaseProcessingJob):
         cfg = self.settings.order_flow_job
         correlation_id = str(uuid.uuid4())
         logger.info("order_flow_job.start correlation_id=%s", correlation_id)
+                # ── ST05: late-data hardening ─────────────────────────────────────────
+        # Hạn chế state tăng vô hạn: data quá cũ so với watermark => drop.
+        late_data_cutoff = F.expr("INTERVAL 30 MINUTES")
 
         if spark is None:
             spark = build_spark_session("dataops-order-flow-job")
@@ -283,7 +286,23 @@ class OrderFlowStreamingJob(BaseProcessingJob):
         )
 
         order_flow = (
-            parsed
+        parsed = (
+            raw_stream
+            .select(parse_trade_udf(F.col("value")).alias("trade"))
+            .filter(F.col("trade").isNotNull())
+            .filter(is_buy | is_sell)
+            .select(
+                F.col("trade.symbol").alias("symbol"),
+                F.col("trade.size").alias("size"),
+                is_buy.alias("is_buy"),
+                F.col("trade.ts_ms").cast("long").alias("ts_ms"),
+            )
+            .filter(F.col("size") > 0)
+            .withColumn("event_time", (F.col("ts_ms") / 1000).cast(TimestampType()))
+            .filter(F.col("event_time").isNotNull())
+            # ST05: ngăn late rows bám quá lâu trong state
+            .filter(F.col("event_time") >= F.current_timestamp() - late_data_cutoff)
+            )
             .withWatermark("event_time", cfg.watermark)
             .groupBy(
                 F.window("event_time", cfg.window_duration).alias("window"),

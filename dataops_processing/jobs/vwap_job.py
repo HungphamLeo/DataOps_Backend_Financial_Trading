@@ -181,6 +181,12 @@ class VWAPStreamingJob(BaseProcessingJob):
         correlation_id = str(uuid.uuid4())
         logger.info("vwap_job.start correlation_id=%s", correlation_id)
 
+                # ── ST05: bounded state + late-data policy ─────────────────────────────
+        # Dùng event_time thực sự của message (ts_ms), không dùng ingestion time.
+        # Nếu event_time quá cũ hoặc không hợp lệ thì không để state tăng vô hạn.
+        # Dữ liệu trễ quá watermark nên bị drop hoặc viết sang DLQ nếu cần.
+        # Đây là "bounded state" policy của production stream.
+        late_data_cutoff = F.expr("INTERVAL 30 MINUTES")
         if spark is None:
             spark = build_spark_session("dataops-vwap-job")
 
@@ -190,8 +196,11 @@ class VWAPStreamingJob(BaseProcessingJob):
         logger.info(
             "VWAP job config — topic=%s window=%s/%s watermark=%s checkpoint=%s delta=%s",
             self.settings.kafka.topic_trade_ticks,
-            vwap_cfg.window_duration, vwap_cfg.slide_duration,
-            vwap_cfg.watermark, checkpoint_base, delta_path,
+            vwap_cfg.window_duration, 
+            vwap_cfg.slide_duration,
+            vwap_cfg.watermark, 
+            checkpoint_base, 
+            delta_path,
         )
 
         # ── 1. Đọc từ Kafka ───────────────────────────────────────────────────
@@ -230,19 +239,41 @@ class VWAPStreamingJob(BaseProcessingJob):
                 (F.col("trade.ts_ms") / 1000).cast(TimestampType()).alias("event_time"),
                 (F.col("trade.price") * F.col("trade.size")).alias("notional"),
             )
+            .filter(F.col("price") > 0)
+            parsed = (
+            raw_stream
+            .select(parse_trade_udf(F.col("value")).alias("trade"))
+            .filter(F.col("trade").isNotNull())
+            .select(
+                F.col("trade.symbol").alias("symbol"),
+                F.col("trade.price").alias("price"),
+                F.col("trade.size").alias("size"),
+                F.col("trade.side").alias("side"),
+                F.col("trade.ts_ms").cast("long").alias("ts_ms"),
+            )
+            .filter(F.col("price") > 0)
+            .filter(F.col("size") > 0)
+            .withColumn("event_time", (F.col("ts_ms") / 1000).cast(TimestampType()))
+            .filter(F.col("event_time").isNotNull())
+            # ST05: ngăn state bị tăng vô hạn với data quá trễ
+            .filter(F.col("event_time") >= F.current_timestamp() - late_data_cutoff)
+        )
+            .filter(F.col("size") > 0)
+            .withColumn("event_time", (F.col("ts_ms") / 1000).cast(TimestampType()))
+            .filter(F.col("event_time").isNotNull())
+        
         )
 
         # ── 3. Watermark + Window aggregation ────────────────────────────────
-        with_watermark = parsed.withWatermark("event_time", vwap_cfg.watermark)
-
-        vwap_agg = (
-            with_watermark
+         windowed = (
+            parsed
+            .withWatermark("event_time", vwap_cfg.watermark)
             .groupBy(
                 F.window("event_time", vwap_cfg.window_duration, vwap_cfg.slide_duration).alias("window"),
                 F.col("symbol"),
             )
             .agg(
-                (F.sum("notional") / F.sum("size")).alias("vwap"),
+                (F.sum(F.col("price") * F.col("size")) / F.sum("size")).alias("vwap"),
                 F.sum("size").alias("total_volume"),
                 F.count("*").alias("num_trades"),
             )
@@ -258,6 +289,9 @@ class VWAPStreamingJob(BaseProcessingJob):
         )
 
         # ── 4. Dual sink ──────────────────────────────────────────────────────
+        # ST05: query lifecycle / checkpoint health
+        # queryName giúp dễ trace trên Spark UI; checkpointLocation là durable recovery.
+        # Nếu stream bị stall, checkpoint stale/idle sẽ dễ phát hiện.
         # Sink A: InfluxDB
         influx_query = (
             vwap_agg
@@ -286,6 +320,11 @@ class VWAPStreamingJob(BaseProcessingJob):
         spark.streams.awaitAnyTermination()
         logger.info("VWAP job terminated correlation_id=%s", correlation_id)
 
+        # 5. Query lifecycle / monitoring
+        # Avoid unbounded state: watermark + append mode + per-window closure
+        # late rows beyond watermark = dropped automatically
+        influx_query.start()
+        delta_query.awaitTermination()
 
 def run(spark: Optional["SparkSession"] = None) -> None:
     """Backward-compatible functional entry point."""

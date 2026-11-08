@@ -40,9 +40,10 @@ type Config struct {
 	InfluxDB   InfluxDBConfig
 	MinIO      MinIOConfig
 	JWT        JWTConfig
-	VPS        VPSConfig
+	TCBS        TCBSConfig
 	BINANCE    BINANCEConfig
 	Monitoring MonitoringConfig
+	Cache  CacheConfig
 }
 
 type AppConfig struct {
@@ -94,7 +95,7 @@ type JWTConfig struct {
 	RefreshTTL int    // refresh token TTL tính bằng ngày (e.g. 7)
 }
 
-type VPSConfig struct {
+type TCBSConfig struct {
 	Username string // SENSITIVE: VPS trading account
 	Password string // SENSITIVE
 	BaseURL  string // VPS API base URL (override cho staging/prod)
@@ -111,8 +112,15 @@ type MonitoringConfig struct {
 	LagAlertThreshold     int64 // Kafka consumer lag alert threshold
 	SlowResponseThreshold int   // milliseconds (từ CheckProviderSlowResponse pattern)
 	MetricsPort           int   // Prometheus metrics port (nếu có)
+	
 }
 
+type CacheConfig struct {
+    InfluxVWAPTTLSeconds int
+    InfluxOHLCVTTLSeconds int
+    Enabled bool
+    CardinalityAlertSeries int
+}
 // Load đọc config từ environment variables + optional .env file
 // LEARN: godotenv.Load() — load .env file vào os.Environ()
 //
@@ -170,10 +178,10 @@ func Load() (*Config, error) {
 			TTLMinutes: getEnvInt("JWT_TTL_MINUTES", 60),
 			RefreshTTL: getEnvInt("JWT_REFRESH_TTL_DAYS", 7),
 		},
-		VPS: VPSConfig{
-			Username: getEnv("VPS_USERNAME", ""),
-			Password: getEnv("VPS_PASSWORD", ""),
-			BaseURL:  getEnv("VPS_BASE_URL", "https://bgapidatafeed.vps.com.vn"),
+		TCBS: TCBSConfig{
+			Username: getEnv("TCBS_USERNAME", ""),
+			Password: getEnv("TCBS_PASSWORD", ""),
+			BaseURL:  getEnv("TCBS_BASE_URL", ""),
 		},
 		BINANCE: BINANCEConfig{
 			APIKey:       getEnv("BINANCE_API_KEY", ""),

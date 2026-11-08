@@ -113,10 +113,42 @@ func JwtAuthMiddleware(jwtSecret string, redis redisService.Service) gin.Handler
 			c.Abort()
 			return
 		}
+		        // ST07: Zero-trust JWT validation
+        // - verify signature, expiry, blacklist
+        // - reject if refresh token/session revoked
+        claims := &JWTClaims{}
+        token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
+            if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+                return nil, jwt.ErrSignatureInvalid
+            }
+            return []byte(jwtSecret), nil
+        })
+        if err != nil || !token.Valid {
+            c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+            c.Abort()
+            return
+        }
 
+        // ST07: revoke access token if blacklisted
+        blacklistKey := "blacklist:token:" + tokenStr
+        if redis.Get(blacklistKey) != "" {
+            c.JSON(http.StatusUnauthorized, gin.H{"error": "token revoked"})
+            c.Abort()
+            return
+        }
+
+        // ST07: check session active on Redis for logout / force revoke
+        sessionKey := "session:" + claims.UserID
+        if redis.Get(sessionKey) == "" {
+            c.JSON(http.StatusUnauthorized, gin.H{"error": "session expired"})
+            c.Abort()
+            return
+        }
 		// Bước 7: Lưu user vào context cho handlers downstream
 		// LEARN: c.Set — lưu arbitrary data vào request context
 		//        c.MustGet/c.Get — lấy lại trong handler
+		c.Set("user_id", user.UserID)
+        c.Set("trace_id", c.GetString(middlewares.TraceIDKey))
 		c.Set(CtxKeyUser, user)
 		c.Set(CtxKeyToken, tokenStr)
 		c.Next() // tiếp tục chuỗi middleware / handler

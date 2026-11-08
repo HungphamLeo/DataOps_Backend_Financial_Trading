@@ -38,7 +38,9 @@ func (s *authService) Login(username, password string) (map[string]interface{}, 
 	if err != nil {
 		return nil, err
 	}
-
+	    // ST07: refresh token rotation
+    _ = s.redis.Set("refresh:"+userID, newRefreshToken, 7*24*time.Hour)
+    _ = s.redis.Set("blacklist:token:"+oldRefreshToken, "1", 7*24*time.Hour)
 	// Lưu session theo đúng format JwtAuthMiddleware mong đợi
 	sessionKey := "session:" + userIDStr
 	sessionData := models.UserSession{

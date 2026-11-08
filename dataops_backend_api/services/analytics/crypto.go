@@ -76,9 +76,24 @@ func (s *cryptoService) GetTicker(ctx context.Context, symbol string) (*models.B
 	}, nil
 }
 
+func (s *cryptoService) buildVWAPCacheKey(symbol, interval string, from int64) string {
+    bucket := from / int64(s.cfg.Cache.InfluxVWAPTTLSeconds)
+    return fmt.Sprintf("vwap:%s:%s:%d", strings.ToUpper(symbol), interval, bucket)
+}
 // GetVWAP query VWAP từ InfluxDB
 // InfluxDB bucket: "market-data", measurement: "vwap"
 func (s *cryptoService) GetVWAP(ctx context.Context, symbol, interval string, from, to int64) ([]*models.VWAPPoint, error) {
+	if s.redis != nil && s.cfg.Cache.Enabled {
+    cacheKey := s.buildVWAPCacheKey(symbol, interval, from)
+    if cached := s.redis.Get(cacheKey); cached != "" {
+        var cachedPoints []*models.VWAPPoint
+        if err := json.Unmarshal([]byte(cached), &cachedPoints); err == nil && len(cachedPoints) > 0 {
+            // hit counter
+            return cachedPoints, nil
+        }
+    }
+    // miss counter
+}
 	queryAPI := s.client.QueryAPI(s.cfg.InfluxDB.Org)
 
 	// Flux query — ngôn ngữ query của InfluxDB 2.x
@@ -112,7 +127,10 @@ func (s *cryptoService) GetVWAP(ctx context.Context, symbol, interval string, fr
 		}
 		points = append(points, point)
 	}
-
+	if s.redis != nil && s.cfg.Cache.Enabled && len(points) > 0 {
+    payload, _ := json.Marshal(points)
+    _ = s.redis.Set(cacheKey, string(payload), time.Duration(s.cfg.Cache.InfluxVWAPTTLSeconds)*time.Second)
+}
 	return points, nil
 }
 

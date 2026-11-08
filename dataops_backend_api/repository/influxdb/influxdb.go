@@ -46,10 +46,13 @@ package influxdb
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"dataops-backend-api/configuration"
 	"dataops-backend-api/models"
+	"dataops-backend-api/redis"
 	"time"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
@@ -65,6 +68,7 @@ type Repository interface {
 	QueryBinanceOrderBook(ctx context.Context, instID string) (*models.OrderBookSnapshot, error)
 	QueryFundingRates(ctx context.Context, instID string, from, to time.Time) ([]models.FundingRate, error)
 	QueryLiquidations(ctx context.Context, instID string, from, to time.Time) ([]models.Liquidation, error)
+	QueryVWAP(ctx context.Context, symbol, interval string, from, to time.Time) ([]models.VWAPPoint, error)
 
 	// TCBS Vietnam Stock queries
 	QueryTCBSTopMovers(ctx context.Context, exchange string, limit int) ([]models.TopMover, error)
@@ -83,6 +87,64 @@ type influxRepo struct {
 	bucket   string
 }
 
+type CacheAwareInfluxRepository struct {
+	repo     Repository
+	redis    redis.Service
+	cacheTTL time.Duration
+}
+
+func NewCacheAwareInfluxRepository(repo Repository, r redis.Service, ttl time.Duration) *CacheAwareInfluxRepository {
+	if ttl <= 0 {
+		ttl = 30 * time.Second
+	}
+	return &CacheAwareInfluxRepository{
+		repo:     repo,
+		redis:    r,
+		cacheTTL: ttl,
+	}
+}
+
+func (r *CacheAwareInfluxRepository) QueryVWAP(
+	ctx context.Context,
+	symbol string,
+	interval string,
+	from time.Time,
+	to time.Time,
+) ([]models.VWAPPoint, error) {
+	if r.cacheTTL <= 0 {
+		r.cacheTTL = 30 * time.Second
+	}
+
+	key := fmt.Sprintf("vwap:%s:%s:%d",
+		strings.ToUpper(symbol),
+		interval,
+		from.Unix()/int64(r.cacheTTL.Seconds()),
+	)
+
+	if r.redis != nil {
+		cached := r.redis.Get(key)
+		if cached != "" {
+			var out []models.VWAPPoint
+			if err := json.Unmarshal([]byte(cached), &out); err == nil && len(out) > 0 {
+				return out, nil
+			}
+		}
+	}
+
+	vwap, err := r.repo.QueryVWAP(ctx, symbol, interval, from, to)
+	if err != nil {
+		return nil, err
+	}
+
+	if r.redis != nil && len(vwap) > 0 {
+		payload, err := json.Marshal(vwap)
+		if err == nil {
+			_ = r.redis.Set(key, string(payload), r.cacheTTL)
+		}
+	}
+
+	return vwap, nil
+}
 // NewRepository khởi tạo kết nối InfluxDB
 // LEARN: influxdb2.NewClient trả về client (không connect ngay — lazy connection)
 func NewRepository(cfg *configuration.Config) Repository {

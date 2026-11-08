@@ -81,28 +81,52 @@ func (r *RateLimiterMiddleware) Limit() gin.HandlerFunc {
 			return
 		}
 
-		clientIP := c.ClientIP()
-		key := fmt.Sprintf("ratelimit:%s:%d", clientIP, time.Now().Unix()/(int64(r.window.Seconds())))
+		// ST07: prefer API key / user token over IP
+        apiKey := c.GetHeader("X-API-Key")
+        if apiKey == "" {
+            apiKey = c.GetHeader("Authorization")
+            if strings.HasPrefix(apiKey, "Bearer ") {
+                apiKey = strings.TrimPrefix(apiKey, "Bearer ")
+            }
+        }
+        if apiKey == "" {
+            c.Next()
+            return
+        }
 
-		ctx := c.Request.Context()
-		count, err := r.redisClient.Incr(ctx, key).Result()
-		if err != nil {
-			c.Next() // fail open on redis error
-			return
-		}
+        windowID := time.Now().Unix() / int64(r.window.Seconds())
+        key := fmt.Sprintf("ratelimit:%s:%d", apiKey, windowID)
 
-		if count == 1 {
-			r.redisClient.Expire(ctx, key, r.window)
-		}
+        ctx := c.Request.Context()
+        count, err := r.redisClient.Incr(ctx, key).Result()
+        if err != nil {
+            c.Next()
+            return
+        }
+        if count == 1 {
+            _ = r.redisClient.Expire(ctx, key, r.window).Err()
+        }
 
-		if count > r.limit {
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
-				"error":       "Too Many Requests",
-				"retry_after": r.window.Seconds(),
-			})
-			return
-		}
+        limit := int64(100)
+        remaining := limit - count
+        if remaining < 0 {
+            remaining = 0
+        }
 
-		c.Next()
-	}
+        reset := (time.Now().Unix() / int64(r.window.Seconds()) + 1) * int64(r.window.Seconds())
+
+        c.Header("X-RateLimit-Limit", strconv.FormatInt(limit, 10))
+        c.Header("X-RateLimit-Remaining", strconv.FormatInt(remaining, 10))
+        c.Header("X-RateLimit-Reset", strconv.FormatInt(reset, 10))
+
+        if count > limit {
+            c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+                "error":       "rate limit exceeded",
+                "retry_after": r.window.Seconds(),
+            })
+            return
+        }
+
+        c.Next()
+    }
 }
