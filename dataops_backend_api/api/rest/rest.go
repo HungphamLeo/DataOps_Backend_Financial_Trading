@@ -4,13 +4,16 @@ package rest
 
 import (
 	"log"
+
 	"dataops-backend-api/configuration"
 	"dataops-backend-api/logging"
 	"dataops-backend-api/middlewares"
+	"dataops-backend-api/observability"
 	"dataops-backend-api/redis"
 	"dataops-backend-api/services"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // NewAPI khởi tạo Gin router với toàn bộ routes.
@@ -26,11 +29,7 @@ import (
 //	GET  /api/v1/vn-stocks/*        ← JWT required
 //	GET  /api/v1/tcbs/*             ← JWT required
 //	GET  /api/v1/admin/*            ← Admin only
-<<<<<<< HEAD
-func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Service, logger *log.Logger) *gin.Engine {
-=======
 func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Service, logger *log.Logger, structuredLogger ...*logging.Logger) *gin.Engine {
->>>>>>> 20261010_data_processing
 	if logger != nil {
 		logger.Println("[API] Starting REST API")
 	}
@@ -45,6 +44,9 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 	// TraceID: extract X-Trace-ID header hoặc tạo mới UUID — phải đứng đầu chain
 	router.Use(middlewares.TraceID())
 
+	// OpenTelemetry Distributed Tracing (W3C traceparent context extraction)
+	router.Use(observability.GinTracingMiddleware("dataops-backend-api"))
+
 	// RequestLogger: structured JSON log mỗi request với trace_id
 	if len(structuredLogger) > 0 && structuredLogger[0] != nil {
 		router.Use(middlewares.RequestLogger(structuredLogger[0]))
@@ -52,9 +54,11 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 
 	// REUSE: market-maker-api/middlewares/security.go
 	router.Use(middlewares.Secure(cfg))
-	    // ST07: Prometheus endpoint.
-    // Expose /metrics so Prometheus can scrape Gin app metrics.
-    router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
+	// ST07: Prometheus endpoint.
+	// Expose /metrics so Prometheus can scrape Gin app metrics.
+	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
 	// ─── Route Groups ────────────────────────────────────────────
 	api := router.Group("/api/v1")
 
@@ -97,11 +101,6 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 	tcbsHandler.Register(tcbsGroup)
 
 	// TCBS Account & Trading Proxy (Cash, Stock assets, Orders, Derivatives)
-<<<<<<< HEAD
-	tcbsAccountHandler := &TCBSAccountHandler{AccountSvc: svc.TCBSAccountSvc}
-	tcbsAccountHandler.Register(tcbsGroup.Group("/account"), tcbsGroup.Group("/derivative"))
-	tcbsAccountHandler.RegisterStockOrder(tcbsGroup.Group("/order"))
-=======
 	tcbsAccountHandler := &TCBSAccountHandler{
 		AccountSvc:     svc.TCBSAccountSvc,
 		PreTradeSvc:    svc.PreTradeSvc,
@@ -117,7 +116,6 @@ func NewAPI(svc *services.Services, cfg *configuration.Config, redisDB0 redis.Se
 		PreTradeSvc:  svc.PreTradeSvc,
 	}
 	portfolioHandler.Register(protected.Group("/portfolio"))
->>>>>>> 20261010_data_processing
 
 	// Admin
 	adminHandler := &AdminHandler{Cfg: cfg}

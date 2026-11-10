@@ -82,12 +82,31 @@ from typing import TYPE_CHECKING, Any, Optional
 from dataops_processing.core.base_job import BaseProcessingJob
 from dataops_processing.core.registry import JobRegistry
 from dataops_processing.log.logger_setup import logger_manager
+from dataops_processing.core.telemetry import trace
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
 logger = logger_manager.get_logger(__name__)
 
+def process_micro_batch(batch_df, batch_id):
+    tracer = trace.get_tracer("dataops-processing-vwap")
+    
+    # Đọc headers từ Kafka stream DataFrame (cột `headers`)
+    rows = batch_df.collect()
+    for row in rows:
+        parent_ctx = extract_trace_context(getattr(row, "headers", None))
+        with tracer.start_as_current_span(
+            "process_trade_record",
+            context=parent_ctx,
+            attributes={
+                "symbol": row.symbol,
+                "batch_id": batch_id,
+                "spark.job": "vwap_job"
+            }
+        ) as span:
+            # Logic tính toán và ghi sang InfluxDB / Delta Lake
+            write_to_influx(row, trace_id=format(span.get_span_context().trace_id, "032x"))
 
 # =============================================================================
 # InfluxDB sink — foreachBatch pattern (không có native Spark connector)

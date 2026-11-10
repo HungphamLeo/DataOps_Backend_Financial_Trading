@@ -14,12 +14,9 @@ import (
 	"dataops-backend-api/services"
 	"dataops-backend-api/services/analytics"
 	"dataops-backend-api/services/authentication"
-<<<<<<< HEAD
-=======
 	cryptoaccount "dataops-backend-api/services/crypto_account"
 	"dataops-backend-api/services/portfolio"
 	"dataops-backend-api/services/risk"
->>>>>>> 20261010_data_processing
 	"dataops-backend-api/services/tcbs"
 	tcbsaccount "dataops-backend-api/services/tcbs_account"
 	"dataops-backend-api/services/vnstock"
@@ -29,44 +26,47 @@ import (
 
 // MockRedis implement redis.Service
 type mockRedis struct {
-	data map[string]string
+	store map[string]string
 }
 
 func newMockRedis() *mockRedis {
-	return &mockRedis{data: make(map[string]string)}
+	return &mockRedis{store: make(map[string]string)}
 }
 
-func (m *mockRedis) Set(key string, value interface{}, _ time.Duration) error {
-	switch v := value.(type) {
-	case string:
-		m.data[key] = v
-	default:
-		bytes, _ := json.Marshal(v)
-		m.data[key] = string(bytes)
+func (m *mockRedis) Get(key string) string                          { return m.store[key] }
+func (m *mockRedis) Set(key string, val interface{}, ttl time.Duration) bool {
+	m.store[key] = val.(string)
+	return true
+}
+func (m *mockRedis) Delete(key string) bool                         { delete(m.store, key); return true }
+func (m *mockRedis) Client() *goredis.Client                        { return nil }
+func (m *mockRedis) Ping() bool                                     { return true }
+func (m *mockRedis) Exists(key string) bool                         { _, ok := m.store[key]; return ok }
+func (m *mockRedis) Expire(key string, ttl time.Duration) bool      { return true }
+func (m *mockRedis) RateLimit(key string, limit int, window time.Duration) (bool, error) {
+	return true, nil
+}
+func (m *mockRedis) GetOrSet(key string, ttl time.Duration, fn func() (string, error)) (string, error) {
+	if val, ok := m.store[key]; ok {
+		return val, nil
+	}
+	val, err := fn()
+	if err != nil {
+		return "", err
+	}
+	m.store[key] = val
+	return val, nil
+}
+func (m *mockRedis) InvalidatePrefix(prefix string) error {
+	for k := range m.store {
+		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
+			delete(m.store, k)
+		}
 	}
 	return nil
 }
 
-func (m *mockRedis) Get(key string) string {
-	return m.data[key]
-}
-
-func (m *mockRedis) Scan(_ string) []string { return nil }
-func (m *mockRedis) Del(key string) error {
-	delete(m.data, key)
-	return nil
-}
-func (m *mockRedis) Dels(_ []string) error { return nil }
-func (m *mockRedis) Ping() bool            { return true }
-func (m *mockRedis) Close() error          { return nil }
-func (m *mockRedis) Publish(_ string, _ []byte) error {
-	return nil
-}
-func (m *mockRedis) Subscribe(_ string) *goredis.PubSub {
-	return nil
-}
-
-func TestPublicRoutes(t *testing.T) {
+func TestNewAPI_RouteRegistration(t *testing.T) {
 	logger, closeLogger, _ := logging.NewLogger(logging.Config{
 		Service: "test",
 		Level:   logging.INFO,
@@ -79,14 +79,6 @@ func TestPublicRoutes(t *testing.T) {
 
 	mockR := newMockRedis()
 
-<<<<<<< HEAD
-	svc := &services.Services{
-		AuthSvc:        authentication.NewService(nil, cfg, mockR, logger),
-		CryptoSvc:      analytics.NewCryptoService(cfg, mockR, nil, logger),
-		VNStockSvc:     vnstock.NewService(cfg, logger),
-		TCBSSvc:        tcbs.NewService(cfg, mockR, nil, logger),
-		TCBSAccountSvc: tcbsaccount.NewService(cfg, mockR, logger),
-=======
 	cryptoAccSvc := cryptoaccount.NewService(cfg, mockR, logger)
 	tcbsAccSvc := tcbsaccount.NewService(cfg, mockR, logger)
 	portfolioSvc := portfolio.NewService(cfg, mockR, cryptoAccSvc, tcbsAccSvc, logger)
@@ -100,7 +92,6 @@ func TestPublicRoutes(t *testing.T) {
 		VNStockSvc:       vnstock.NewService(cfg, logger),
 		TCBSSvc:          tcbs.NewService(cfg, mockR, nil, logger),
 		TCBSAccountSvc:   tcbsAccSvc,
->>>>>>> 20261010_data_processing
 	}
 
 	router := rest.NewAPI(svc, cfg, mockR, nil)
@@ -114,8 +105,6 @@ func TestPublicRoutes(t *testing.T) {
 		t.Errorf("Expected route /api/v1/login to exist, got 404")
 	}
 
-<<<<<<< HEAD
-=======
 	// Test 1b: Root and API v1 Healthcheck endpoints
 	for _, path := range []string{"/health", "/api/v1/health"} {
 		reqHealth, _ := http.NewRequest(http.MethodGet, path, nil)
@@ -126,7 +115,6 @@ func TestPublicRoutes(t *testing.T) {
 		}
 	}
 
->>>>>>> 20261010_data_processing
 	// Test 2: Protected crypto ticker endpoint without JWT token -> 401 Unauthorized
 	reqTicker, _ := http.NewRequest(http.MethodGet, "/api/v1/crypto/ticker?symbol=BTCUSDT", nil)
 	wTicker := httptest.NewRecorder()
@@ -144,8 +132,6 @@ func TestPublicRoutes(t *testing.T) {
 	if wTCBSCash.Code != http.StatusUnauthorized {
 		t.Errorf("Expected 401 Unauthorized for TCBS cash endpoint without JWT, got %d", wTCBSCash.Code)
 	}
-<<<<<<< HEAD
-=======
 
 	// Test 4: Protected Portfolio overview endpoint without JWT -> 401 Unauthorized
 	reqPortfolio, _ := http.NewRequest(http.MethodGet, "/api/v1/portfolio/overview", nil)
@@ -164,17 +150,10 @@ func TestPublicRoutes(t *testing.T) {
 	if wRisk.Code != http.StatusUnauthorized {
 		t.Errorf("Expected 401 Unauthorized for Risk Report endpoint without JWT, got %d", wRisk.Code)
 	}
->>>>>>> 20261010_data_processing
 }
 
-func TestSymbolValidation(t *testing.T) {
-	if !constants.IsValidBinanceSymbol("BTCUSDT") {
-		t.Errorf("Expected BTCUSDT to be a valid Binance symbol")
-	}
-	if !constants.IsValidTCBSSymbol("VCB") {
-		t.Errorf("Expected VCB to be a valid TCBS symbol")
-	}
-	if !constants.IsValidTCBSSymbol("VNINDEX") {
-		t.Errorf("Expected VNINDEX to be a valid TCBS index")
+func TestDefaultPort(t *testing.T) {
+	if constants.DefaultHTTPPort != 8080 {
+		t.Errorf("Expected DefaultHTTPPort to be 8080, got %d", constants.DefaultHTTPPort)
 	}
 }

@@ -34,3 +34,8 @@ require (
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/net v0.59.0 // indirect
 )
+// go get go.opentelemetry.io/otel@v1.24.0 \
+//        go.opentelemetry.io/otel/sdk@v1.24.0 \
+//        go.opentelemetry.io/otel/trace@v1.24.0 \
+//        go.opentelemetry.io/otel/propagation@v1.24.0 \
+//        go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc@v1.24.0
