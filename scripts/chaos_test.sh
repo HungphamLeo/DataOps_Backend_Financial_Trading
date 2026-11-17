@@ -9,7 +9,7 @@ set -e
 KAFKA_BROKER_1="kafka1"
 KAFKA_BROKER_2="kafka2"
 KAFKA_BROKER_3="kafka3"
-TOPIC_NAME="okx.trade.ticks"
+TOPIC_NAME="binance.trade.ticks"
 CONSUMER_GROUP="spark-streaming-group"
 
 echo "=== [CHAOS TEST] BẮT ĐẦU KIỂM TRA CHỊU LỖI HẠ TẦNG KAFKA CLUSTER ==="
