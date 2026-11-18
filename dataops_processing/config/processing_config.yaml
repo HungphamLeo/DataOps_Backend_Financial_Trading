@@ -82,6 +82,9 @@ spark:
     delta_spark: "io.delta:delta-spark_2.12:3.1.0"
     hadoop_aws: "org.apache.hadoop:hadoop-aws:3.3.4"
     aws_sdk: "com.amazonaws:aws-java-sdk-bundle:1.12.262"
+      # ST12: state store trên RocksDB thay vì JVM heap mặc định.
+  # Cần checkpoint bền vững để khôi phục state khi job restart.
+    state_store_provider_class: "org.apache.spark.sql.execution.streaming.state.RocksDBStateStoreProvider"
 
 # ─── VWAP Streaming Job ───────────────────────────────────────────────────────
 vwap_job:
@@ -93,6 +96,12 @@ vwap_job:
   influx_measurement: "vwap"
   influx_interval_tag: "5m"
   delta_table: "vwap_1m"               # → delta.tables.vwap_1m
+  # ST12: chỉ salt những symbol có skew cao.
+  # Kafka partition + offset tạo salt ổn định khi cùng record được replay.
+  salting:
+    enabled: true
+    buckets: 8
+    hot_symbols: ["BTCUSDT", "ETHUSDT"]
 
 # ─── Market Breadth & Foreign Flow Batch Job (TASK-P3) ────────────────────────
 # Nguồn: Delta Bronze tcbs_market_eod (batch_api). Output: Delta Gold market_breadth.

@@ -113,6 +113,7 @@ class SparkSettings:
     stop_gracefully_on_shutdown: bool
     checkpoint_base: str
     packages: Dict[str, str]
+    state_store_provider_class: str
 
     def spark_packages_str(self) -> str:
         """Trả về comma-separated Maven coordinates cho spark.jars.packages."""
@@ -133,6 +134,10 @@ class VWAPJobSettings:
     influx_measurement: str
     influx_interval_tag: str
     delta_table: str
+        # ST12: chia hot symbols thành nhiều nhóm partial aggregation.
+    salting_enabled: bool
+    salt_buckets: int
+    hot_symbols: list[str]
 
 
 @dataclass(frozen=True)
@@ -295,18 +300,30 @@ def get_settings() -> ProcessingSettings:
         stop_gracefully_on_shutdown=bool(s.get("stop_gracefully_on_shutdown", True)),
         checkpoint_base=           _env("SPARK_CHECKPOINT_DIR", s.get("checkpoint_base", "/tmp/spark-checkpoints")),
         packages=                  s.get("packages", {}),
+        state_store_provider_class=s.get(
+            "state_store_provider_class",
+            "org.apache.spark.sql.execution.streaming.state.RocksDBStateStoreProvider",
+        ),
+        
     )
 
     v = cfg.get("vwap_job", {})
+    salting = v.get("salting", {})
     vwap_job = VWAPJobSettings(
-        window_duration=  v.get("window_duration",   "5 minutes"),
-        slide_duration=   v.get("slide_duration",    "1 minute"),
-        watermark=        v.get("watermark",         "30 seconds"),
-        trigger_interval= v.get("trigger_interval",  "30 seconds"),
-        output_mode=      v.get("output_mode",       "append"),
+        window_duration=v.get("window_duration", "5 minutes"),
+        slide_duration=v.get("slide_duration", "1 minute"),
+        watermark=v.get("watermark", "30 seconds"),
+        trigger_interval=v.get("trigger_interval", "30 seconds"),
+        output_mode=v.get("output_mode", "append"),
         influx_measurement=v.get("influx_measurement", "vwap"),
         influx_interval_tag=v.get("influx_interval_tag", "5m"),
-        delta_table=      v.get("delta_table",       "vwap_1m"),
+        delta_table=v.get("delta_table", "vwap_1m"),
+        salting_enabled=bool(salting.get("enabled", False)),
+        salt_buckets=int(salting.get("buckets", 8)),
+        hot_symbols=[
+            str(symbol).upper()
+            for symbol in salting.get("hot_symbols", ["BTCUSDT", "ETHUSDT"])
+        ],
     )
 
     of = cfg.get("order_flow_job", {})

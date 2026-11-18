@@ -137,7 +137,7 @@ def _write_to_influxdb(df_pandas, batch_id: int) -> None:
         from influxdb_client.domain.write_precision import WritePrecision
     except ImportError as exc:  # pragma: no cover
         logger.error("influxdb-client not installed: %s", exc, exc_info=True)
-        return
+        raise RuntimeError("influxdb-client is required for the VWAP sink") from exc
 
     client = InfluxDBClient(url=cfg.url, token=cfg.token, org=cfg.org)
     write_api = client.write_api(write_options=SYNCHRONOUS)
@@ -164,9 +164,114 @@ def _write_to_influxdb(df_pandas, batch_id: int) -> None:
         logger.info("batch_id=%d: wrote %d VWAP points to InfluxDB", batch_id, len(records))
     except Exception as exc:
         logger.error("batch_id=%d: InfluxDB write failed — %s", batch_id, exc, exc_info=True)
+        raise
     finally:
         client.close()
 
+def _merge_vwap_salt_partials(partials_df, interval: str):
+    """
+    ST12: Gộp VWAP partial aggregates từ các salt bucket thành kết quả cuối.
+
+    Mỗi partial phải có tổng notional (sum(price * size)), tổng volume,
+    số trade và window/symbol tương ứng. VWAP cuối được tính bằng tổng
+    notional chia tổng volume; không được lấy trung bình các VWAP partial.
+
+    Args:
+        partials_df: Spark DataFrame có các cột symbol, window_start,
+            window_end, partial_notional, partial_volume và partial_trades.
+        interval: Nhãn interval được ghi cùng kết quả VWAP.
+
+    Returns:
+        Spark DataFrame có một hàng cho mỗi symbol/window, với các cột
+        window_start, window_end, interval, vwap, total_volume, num_trades.
+    """
+    from pyspark.sql import functions as F
+
+    merged = (
+        partials_df
+        .groupBy("symbol", "window_start", "window_end")
+        .agg(
+            F.sum("partial_notional").alias("total_notional"),
+            F.sum("partial_volume").alias("total_volume"),
+            F.sum("partial_trades").alias("num_trades"),
+        )
+        .withColumn(
+            "vwap",
+            F.col("total_notional") / F.col("total_volume"),
+        )
+        .withColumn("interval", F.lit(interval))
+    )
+
+    return merged.select(
+        "symbol",
+        "window_start",
+        "window_end",
+        "interval",
+        "vwap",
+        "total_volume",
+        "num_trades",
+    )
+
+
+def _write_vwap_batch(
+    batch_df,
+    batch_id: int,
+    delta_path: str,
+    interval: str,
+) -> None:
+    """
+    ST12: Gộp salt partials trong micro-batch rồi ghi VWAP vào Delta và InfluxDB.
+
+    Bước gộp diễn ra trên DataFrame batch thông thường (không phải một
+    streaming aggregation thứ hai). Delta transaction options giúp tránh
+    append lại cùng batch khi Spark retry với cùng checkpoint và batch ID.
+
+    Args:
+        batch_df: Spark DataFrame chứa kết quả partial aggregation đã đóng
+            theo watermark.
+        batch_id: ID micro-batch do Structured Streaming cấp.
+        delta_path: Đường dẫn Delta Silver của bảng VWAP.
+        interval: Nhãn interval dùng trong output và InfluxDB.
+
+    Raises:
+        Exception: Truyền tiếp lỗi ghi Delta hoặc lỗi sink để Spark không
+            đánh dấu batch thất bại là thành công.
+    """
+    import pandas as pd
+
+    if not batch_df.take(1):
+        return
+
+    final_df = _merge_vwap_salt_partials(batch_df, interval)
+
+    # ST13: txnAppId phải ổn định khi dùng lại cùng checkpoint.
+    # Nếu tạo checkpoint mới, hãy đổi txnAppId để batch ID bắt đầu lại không bị bỏ qua.
+    (
+        final_df.write
+        .format("delta")
+        .mode("append")
+        .option("txnAppId", "vwap-job-st12")
+        .option("txnVersion", batch_id)
+        .save(delta_path)
+    )
+
+    rows: list[dict[str, Any]] = []
+    chunk_size = 500
+
+    for row in final_df.toLocalIterator():
+        rows.append(row.asDict(recursive=True))
+        if len(rows) >= chunk_size:
+            _write_to_influxdb(
+                pd.DataFrame.from_records(rows),
+                batch_id=batch_id,
+            )
+            rows.clear()
+
+    if rows:
+        _write_to_influxdb(
+            pd.DataFrame.from_records(rows),
+            batch_id=batch_id,
+        )
 
 # =============================================================================
 # Concrete Strategy: VWAP Streaming Job
@@ -187,42 +292,66 @@ class VWAPStreamingJob(BaseProcessingJob):
         return "streaming"
 
     def execute(self, spark: Optional["SparkSession"] = None, **kwargs: Any) -> None:
-        """Thực thi Spark Structured Streaming pipeline cho VWAP."""
+        """
+        ST12: Chạy VWAP Structured Streaming với RocksDB và hot-key salting.
+
+        Mỗi trade của hot symbol được gán salt ổn định từ Kafka partition/offset.
+        Pha streaming chỉ giữ partial sums theo window, symbol và salt.
+        _write_vwap_batch() gộp các partial sums trước khi ghi sink.
+
+        Args:
+            spark: SparkSession có sẵn; nếu không truyền, tạo session từ cấu hình.
+
+        Raises:
+            ValueError: Nếu salting bật nhưng bucket count hoặc hot symbols không hợp lệ.
+        """
         from pyspark.sql import functions as F
         from pyspark.sql.types import (
-            DoubleType, LongType, StringType, StructField, StructType, TimestampType,
+            DoubleType,
+            LongType,
+            StringType,
+            StructField,
+            StructType,
+            TimestampType,
         )
 
-        from dataops_processing.config.spark_config import build_spark_session, get_kafka_options
+        from dataops_processing.config.spark_config import (
+            build_spark_session,
+            get_kafka_options,
+        )
         from dataops_processing.models.trade import TradeEvent
 
         vwap_cfg = self.settings.vwap_job
+
+        if vwap_cfg.salting_enabled:
+            if vwap_cfg.salt_buckets < 2:
+                raise ValueError("ST12 salting requires at least 2 salt buckets")
+            if not vwap_cfg.hot_symbols:
+                raise ValueError("ST12 salting requires at least one hot symbol")
+
         correlation_id = str(uuid.uuid4())
         logger.info("vwap_job.start correlation_id=%s", correlation_id)
 
-                # ── ST05: bounded state + late-data policy ─────────────────────────────
-        # Dùng event_time thực sự của message (ts_ms), không dùng ingestion time.
-        # Nếu event_time quá cũ hoặc không hợp lệ thì không để state tăng vô hạn.
-        # Dữ liệu trễ quá watermark nên bị drop hoặc viết sang DLQ nếu cần.
-        # Đây là "bounded state" policy của production stream.
-        late_data_cutoff = F.expr("INTERVAL 30 MINUTES")
         if spark is None:
             spark = build_spark_session("dataops-vwap-job")
 
         checkpoint_base = self.paths.checkpoint_path("vwap_job")
-        delta_path      = self.paths.delta_silver_path(vwap_cfg.delta_table)
+        delta_path = self.paths.delta_silver_path(vwap_cfg.delta_table)
 
         logger.info(
-            "VWAP job config — topic=%s window=%s/%s watermark=%s checkpoint=%s delta=%s",
+            "VWAP job config — topic=%s window=%s/%s watermark=%s "
+            "checkpoint=%s delta=%s salting=%s buckets=%d",
             self.settings.kafka.topic_trade_ticks,
-            vwap_cfg.window_duration, 
+            vwap_cfg.window_duration,
             vwap_cfg.slide_duration,
-            vwap_cfg.watermark, 
-            checkpoint_base, 
+            vwap_cfg.watermark,
+            checkpoint_base,
             delta_path,
+            vwap_cfg.salting_enabled,
+            vwap_cfg.salt_buckets,
         )
 
-        # ── 1. Đọc từ Kafka ───────────────────────────────────────────────────
+        # Kafka partition/offset được giữ lại để tạo salt ổn định khi replay.
         raw_stream = (
             spark.readStream
             .format("kafka")
@@ -230,17 +359,17 @@ class VWAPStreamingJob(BaseProcessingJob):
             .load()
         )
 
-        # ── 2. Deserialize — UDF gọi TradeEvent.from_kafka_bytes() ───────────
         trade_schema = StructType([
-            StructField("symbol", StringType(),  nullable=False),
-            StructField("price",  DoubleType(),  nullable=False),
-            StructField("size",   DoubleType(),  nullable=False),
-            StructField("side",   StringType(),  nullable=True),
-            StructField("ts_ms",  LongType(),    nullable=False),
+            StructField("symbol", StringType(), nullable=False),
+            StructField("price", DoubleType(), nullable=False),
+            StructField("size", DoubleType(), nullable=False),
+            StructField("side", StringType(), nullable=True),
+            StructField("ts_ms", LongType(), nullable=False),
         ])
 
         @F.udf(returnType=trade_schema)
         def parse_trade_udf(raw: bytes):
+            """ST12: Deserialize một Kafka payload thành các field trade chuẩn."""
             event = TradeEvent.from_kafka_bytes(raw)
             if event is None:
                 return None
@@ -248,102 +377,101 @@ class VWAPStreamingJob(BaseProcessingJob):
 
         parsed = (
             raw_stream
-            .select(parse_trade_udf(F.col("value")).alias("trade"))
-            .filter(F.col("trade").isNotNull())
             .select(
-                F.col("trade.symbol").alias("symbol"),
-                F.col("trade.price").alias("price"),
-                F.col("trade.size").alias("size"),
-                F.col("trade.side").alias("side"),
-                (F.col("trade.ts_ms") / 1000).cast(TimestampType()).alias("event_time"),
-                (F.col("trade.price") * F.col("trade.size")).alias("notional"),
+                F.col("partition").alias("kafka_partition"),
+                F.col("offset").alias("kafka_offset"),
+                parse_trade_udf(F.col("value")).alias("trade"),
             )
-            .filter(F.col("price") > 0)
-            parsed = (
-            raw_stream
-            .select(parse_trade_udf(F.col("value")).alias("trade"))
             .filter(F.col("trade").isNotNull())
             .select(
+                "kafka_partition",
+                "kafka_offset",
                 F.col("trade.symbol").alias("symbol"),
                 F.col("trade.price").alias("price"),
                 F.col("trade.size").alias("size"),
-                F.col("trade.side").alias("side"),
                 F.col("trade.ts_ms").cast("long").alias("ts_ms"),
             )
             .filter(F.col("price") > 0)
             .filter(F.col("size") > 0)
-            .withColumn("event_time", (F.col("ts_ms") / 1000).cast(TimestampType()))
+            .withColumn(
+                "event_time",
+                (F.col("ts_ms") / F.lit(1000.0)).cast(TimestampType()),
+            )
             .filter(F.col("event_time").isNotNull())
-            # ST05: ngăn state bị tăng vô hạn với data quá trễ
-            .filter(F.col("event_time") >= F.current_timestamp() - late_data_cutoff)
-        )
-            .filter(F.col("size") > 0)
-            .withColumn("event_time", (F.col("ts_ms") / 1000).cast(TimestampType()))
-            .filter(F.col("event_time").isNotNull())
-        
+            .withColumn(
+                "notional",
+                F.col("price") * F.col("size"),
+            )
         )
 
-        # ── 3. Watermark + Window aggregation ────────────────────────────────
-         windowed = (
+        # ST12: chỉ chia tải cho hot symbols; các symbol còn lại dùng salt 0.
+        if vwap_cfg.salting_enabled:
+            parsed = parsed.withColumn(
+                "salt",
+                F.when(
+                    F.col("symbol").isin(*vwap_cfg.hot_symbols),
+                    F.pmod(
+                        F.xxhash64("kafka_partition", "kafka_offset"),
+                        F.lit(vwap_cfg.salt_buckets),
+                    ),
+                )
+                .otherwise(F.lit(0))
+                .cast("int"),
+            )
+        else:
+            parsed = parsed.withColumn("salt", F.lit(0))
+
+        # Pha 1 ST12: giữ sum chứ không giữ VWAP trung bình từng salt.
+        partials = (
             parsed
             .withWatermark("event_time", vwap_cfg.watermark)
             .groupBy(
-                F.window("event_time", vwap_cfg.window_duration, vwap_cfg.slide_duration).alias("window"),
+                F.window(
+                    "event_time",
+                    vwap_cfg.window_duration,
+                    vwap_cfg.slide_duration,
+                ).alias("window"),
                 F.col("symbol"),
+                F.col("salt"),
             )
             .agg(
-                (F.sum(F.col("price") * F.col("size")) / F.sum("size")).alias("vwap"),
-                F.sum("size").alias("total_volume"),
-                F.count("*").alias("num_trades"),
+                F.sum("notional").alias("partial_notional"),
+                F.sum("size").alias("partial_volume"),
+                F.count("*").alias("partial_trades"),
             )
             .select(
-                F.col("symbol"),
+                "symbol",
                 F.col("window.start").alias("window_start"),
                 F.col("window.end").alias("window_end"),
-                F.lit(vwap_cfg.influx_interval_tag).alias("interval"),
-                F.col("vwap"),
-                F.col("total_volume"),
-                F.col("num_trades"),
+                "partial_notional",
+                "partial_volume",
+                "partial_trades",
             )
         )
 
-        # ── 4. Dual sink ──────────────────────────────────────────────────────
-        # ST05: query lifecycle / checkpoint health
-        # queryName giúp dễ trace trên Spark UI; checkpointLocation là durable recovery.
-        # Nếu stream bị stall, checkpoint stale/idle sẽ dễ phát hiện.
-        # Sink A: InfluxDB
-        influx_query = (
-            vwap_agg
-            .writeStream
-            .outputMode(vwap_cfg.output_mode)
+        # Một streaming query dùng một checkpoint; foreachBatch gộp salt rồi ghi cả hai sink.
+        query = (
+            partials.writeStream
+            .outputMode("append")
             .trigger(processingTime=vwap_cfg.trigger_interval)
-            .foreachBatch(_write_to_influxdb)
-            .option("checkpointLocation", f"{checkpoint_base}/influxdb")
-            .queryName("vwap_to_influxdb")
+            .foreachBatch(
+                lambda batch_df, batch_id: _write_vwap_batch(
+                    batch_df,
+                    batch_id,
+                    delta_path,
+                    vwap_cfg.influx_interval_tag,
+                )
+            )
+            .option("checkpointLocation", f"{checkpoint_base}/vwap-st12")
+            .queryName("vwap_st12_rocksdb_salted")
             .start()
         )
 
-        # Sink B: Delta Silver
-        delta_query = (
-            vwap_agg
-            .writeStream
-            .outputMode(vwap_cfg.output_mode)
-            .trigger(processingTime=vwap_cfg.trigger_interval)
-            .format("delta")
-            .option("checkpointLocation", f"{checkpoint_base}/delta")
-            .partitionBy("symbol")
-            .start(delta_path)
+        logger.info(
+            "VWAP ST12 stream started — correlation_id=%s",
+            correlation_id,
         )
-
-        logger.info("VWAP job streams started — awaiting termination correlation_id=%s", correlation_id)
-        spark.streams.awaitAnyTermination()
-        logger.info("VWAP job terminated correlation_id=%s", correlation_id)
-
-        # 5. Query lifecycle / monitoring
-        # Avoid unbounded state: watermark + append mode + per-window closure
-        # late rows beyond watermark = dropped automatically
-        influx_query.start()
-        delta_query.awaitTermination()
+        query.awaitTermination()
 
 def run(spark: Optional["SparkSession"] = None) -> None:
     """Backward-compatible functional entry point."""
@@ -351,3 +479,13 @@ def run(spark: Optional["SparkSession"] = None) -> None:
     from dataops_processing.config.settings import get_settings
     job = VWAPStreamingJob(settings=get_settings(), paths=get_path_resolver())
     job.run(spark=spark)
+
+
+# python3 -m py_compile \
+#   dataops_processing/config/settings.py \
+#   dataops_processing/config/spark_config.py \
+#   dataops_processing/jobs/vwap_job.py
+
+# python3 -m pytest -q \
+#   dataops_processing/tests/test_st12_vwap_skew.py \
+#   dataops_processing/tests/test_vwap_job.py

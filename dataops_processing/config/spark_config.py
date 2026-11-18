@@ -136,6 +136,15 @@ def build_spark_session(app_name: str | None = None):
         # ── Shuffle / parallelism (local mode tuning) ───────────────────────
         .config("spark.sql.shuffle.partitions", str(s.shuffle_partitions))
         .config("spark.default.parallelism",    str(s.default_parallelism))
+                # ST12: lưu streaming aggregation state bằng RocksDB StateStore.
+        .config(
+            "spark.sql.streaming.stateStore.providerClass",
+            s.state_store_provider_class,
+        )
+            # ST12: AQE dành cho batch joins; không phải giải pháp hot-key streaming aggregation.
+        .config("spark.sql.adaptive.enabled", "true")
+        .config("spark.sql.adaptive.skewJoin.enabled", "true")
+        .config("spark.sql.adaptive.advisoryPartitionSizeInBytes", "134217728")
     )
 
     spark = configure_spark_with_delta_pip(builder).getOrCreate()
