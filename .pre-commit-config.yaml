@@ -1,0 +1,20 @@
+# ST10: Catch incompatible schema edits before commit; CI remains mandatory because hooks can be bypassed.
+repos:
+  - repo: local
+    hooks:
+      # ST10: Run schema lint only when a .proto file changes to catch invalid
+      # definitions early without slowing unrelated commits.
+      - id: buf-lint
+        name: Lint Protobuf schemas
+        entry: buf lint dataops_protobuf
+        language: system
+        files: ^dataops_protobuf/.*\.proto$
+        pass_filenames: false
+      # ST10: Compare against main to catch incompatible schema edits before
+      # push; the same check also runs in CI as the non-bypassable merge gate.
+      - id: buf-breaking
+        name: Check Protobuf backward compatibility
+        entry: buf breaking dataops_protobuf --against .git#branch=main,subdir=dataops_protobuf
+        language: system
+        files: ^dataops_protobuf/.*\.proto$
+        pass_filenames: false

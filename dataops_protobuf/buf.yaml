@@ -1,0 +1,16 @@
+# ST10: Enforce schema style and compatibility before downstream consumers break.
+version: v1
+
+lint:
+  use:
+    # ST10: Apply Buf's standard naming and syntax rules consistently to all schemas.
+    - DEFAULT
+  except:
+    # ST10: Keep current hyphenated directories without weakening other lint rules.
+    - PACKAGE_DIRECTORY_MATCH
+
+breaking:
+  # ST10: Compare each schema file with main so breaking edits are rejected
+  # without coupling unrelated Protobuf packages to one another.
+  use:
+    - FILE

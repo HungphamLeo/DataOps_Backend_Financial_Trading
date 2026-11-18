@@ -1,0 +1,148 @@
+# ST10: Block incompatible Protobuf changes before merge and verify multi-arch
+# service images after changes reach main.
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  # ST10: Validate all Protobuf contracts on pull requests and main pushes.
+  proto-check:
+    name: Protobuf schema check
+    runs-on: ubuntu-latest
+    steps:
+      # ST10: Fetch history and branches so Buf can resolve the main baseline.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # ST10: Buf needs main's history to detect backward-incompatible schema edits.
+          fetch-depth: 0
+
+      # ST10: Pin the CLI version so local and CI schema checks behave consistently.
+      - name: Install Buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          version: 1.47.2
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ST10: Reject schemas that violate the shared Protobuf conventions.
+      - name: Lint Protobuf schemas
+        run: buf lint dataops_protobuf
+
+      # ST10: Reject changes that would break existing downstream readers.
+      - name: Check backward compatibility
+        run: buf breaking dataops_protobuf --against '.git#branch=main,subdir=dataops_protobuf'
+
+  # ST10: Test Go services on PRs so schema or application changes cannot
+  # merge while their consumers fail to compile or pass tests.
+  go-test:
+    name: Go tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - dataops_stream_producer
+          - dataops_backend_api
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      # ST10: Run each module's full Go test suite against the proposed change.
+      - name: Run Go tests
+        working-directory: ${{ matrix.module }}
+        run: go test ./...
+
+  # ST10: Test Python services because they also consume the shared contracts.
+  python-test:
+    name: Python tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - dataops_batch_api
+          - dataops_processing
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: ${{ matrix.module }}/requirements.txt
+
+      - name: Set up Java for PySpark tests
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r "${{ matrix.module }}/requirements.txt"
+
+      # ST10: Verify the affected module's tests after installing its declared dependencies.
+      - name: Run Python tests
+        working-directory: ${{ matrix.module }}
+        run: python -m pytest tests
+
+  # ST10: Build deployment images only after merge and only when every schema
+  # and application check succeeds.
+  docker-multiarch:
+    # Building images on PRs is unnecessary; this runs for main branch updates only.
+    name: Multi-architecture Docker build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - proto-check
+      - go-test
+      - python-test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: stream-producer
+            context: dataops_stream_producer
+          - name: backend-api
+            context: dataops_backend_api
+          - name: batch-api
+            context: dataops_batch_api
+          - name: processing
+            context: dataops_processing
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ST10: Validate that each service builds on both common server architectures.
+      # push=false avoids publishing images without an explicit registry/release policy.
+      - name: Build ${{ matrix.name }} for both architectures
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.context }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
