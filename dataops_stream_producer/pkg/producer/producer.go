@@ -80,6 +80,8 @@ type Producer interface {
 // kafkaProducer concrete implementation dùng Sarama (IBM/sarama — official Go Kafka client)
 type kafkaProducer struct {
 	producer     sarama.SyncProducer // synchronous producer — block cho đến khi broker ACK
+	resilience   *KafkaResilience
+    // schemaClient *SchemaRegistryClient
 	schemaClient *SchemaRegistryClient
 	dlqProducer  sarama.SyncProducer // Dead Letter Queue producer
 
@@ -193,7 +195,7 @@ func NewProducer(brokers []string, schemaRegistryURL string) (Producer, error) {
 		schemaClient: srClient,
 		dlqProducer:  dlqProducer,
 	}
-
+	p.resilience = NewKafkaResilience(mainProducer, DefaultBufferCapacity)
 	// Đăng ký tất cả schemas lúc khởi động nếu schema registry client tồn tại
 	if err := p.registerSchemas(); err != nil {
 		log.Printf("[Producer] Warning during schema registration: %v", err)
@@ -308,11 +310,11 @@ func (p *kafkaProducer) PublishTrade(ctx context.Context, instID string, event T
 		Timestamp: time.UnixMilli(event.TsMs),
 	}
 
-	_, _, err = p.producer.SendMessage(msg)
-	if err != nil {
-		log.Printf("[Producer] SendMessage trade %s error: %v — routing to DLQ", instID, err)
-		return p.sendToDLQ(constants.TopicBinanceTradesDLQ, instID, event, err)
+	if err := p.sendWithResilience(msg); err != nil {
+    log.Printf("[Producer] load shedding topic=%s error=%v", msg.Topic, err)
+    return err
 	}
+
 	return nil
 }
 
@@ -523,8 +525,27 @@ func (p *kafkaProducer) sendToDLQ(dlqTopic string, key string, event interface{}
 }
 
 func (p *kafkaProducer) Close() error {
-	if err := p.producer.Close(); err != nil {
-		return err
-	}
-	return p.dlqProducer.Close()
+    if p.resilience != nil {
+        p.resilience.Close()
+    }
+
+    var closeErr error
+    if err := p.producer.Close(); err != nil {
+        closeErr = err
+    }
+
+    if err := p.dlqProducer.Close(); err != nil && closeErr == nil {
+        closeErr = err
+    }
+
+    return closeErr
+}
+
+func (p *kafkaProducer) sendWithResilience(msg *sarama.ProducerMessage) error {
+    if p.resilience == nil {
+        _, _, err := p.producer.SendMessage(msg)
+        return err
+    }
+
+    return p.resilience.Send(msg)
 }
