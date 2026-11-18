@@ -50,6 +50,20 @@ delta:
     volume_bars: "volume_bars"
     indicator_matrix: "indicator_matrix"
 
+  maintenance:
+    target_file_size_bytes: 536870912  # 512 MiB; mục tiêu, không đảm bảo mọi file đạt đúng cỡ này
+    vacuum_retention_hours: 168         # 7 ngày; không giảm dưới ngưỡng này
+    tables:
+      vwap_1m:
+        partition_by: ["symbol"]
+        zorder_by: ["window_end"]
+      volume_bars:
+        partition_by: ["symbol"]
+        zorder_by: ["bar_close_ts"]
+      indicator_matrix:
+        partition_by: ["symbol", "interval"]
+        zorder_by: ["timestamp"]
+
 # ─── Spark Session ────────────────────────────────────────────────────────────
 spark:
   app_name: "dataops-processing"        # override: env SPARK_APP_NAME

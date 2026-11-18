@@ -21,10 +21,10 @@ Usage:
 from __future__ import annotations
 
 import os
+from typing import Any, Dict, List
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict
 
 import yaml
 
@@ -76,6 +76,9 @@ class DeltaSettings:
     bucket: str
     silver_base: str
     tables: Dict[str, str]
+    maintenance_target_file_size_bytes: int
+    maintenance_vacuum_retention_hours: int
+    maintenance_tables: Dict[str, Dict[str, List[str]]]
 
     def silver_path(self, table_key: str) -> str:
         """
@@ -268,6 +271,14 @@ def get_settings() -> ProcessingSettings:
     )
 
     d = cfg.get("delta", {})
+    maintenance = d.get("maintenance", {})
+    maintenance_tables = {
+        str(table_key): {
+            "partition_by": [str(column) for column in policy.get("partition_by", [])],
+            "zorder_by": [str(column) for column in policy.get("zorder_by", [])],
+        }
+        for table_key, policy in maintenance.get("tables", {}).items()
+    }
     delta = DeltaSettings(
         bucket=      _env("DELTA_BUCKET", d.get("bucket", "binance-datalake")),
         silver_base= d.get("silver_base", "delta/silver"),
