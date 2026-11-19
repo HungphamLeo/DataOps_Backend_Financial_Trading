@@ -399,6 +399,7 @@ class VWAPStreamingJob(BaseProcessingJob):
                 F.col("trade.symbol").alias("symbol"),
                 F.col("trade.price").alias("price"),
                 F.col("trade.size").alias("size"),
+                F.col("trade.side").alias("side"),
                 F.col("trade.ts_ms").cast("long").alias("ts_ms"),
             )
             .filter(F.col("price") > 0)
@@ -408,10 +409,54 @@ class VWAPStreamingJob(BaseProcessingJob):
                 (F.col("ts_ms") / F.lit(1000.0)).cast(TimestampType()),
             )
             .filter(F.col("event_time").isNotNull())
-            .withColumn(
-                "notional",
-                F.col("price") * F.col("size"),
+        )
+
+        # ST14 defense-in-depth: validate replayed/direct Kafka records a second
+        # time before they enter stateful Spark aggregation.
+        from dataops_processing.contracts.validator import validate_trade
+
+        @F.udf(returnType="string")
+        def st14_contract_reason_udf(
+            symbol: str,
+            price: float,
+            quantity: float,
+            side: str,
+            ts_ms: int,
+        ) -> str:
+            """
+            Return comma-separated ST14 violation codes for one Spark trade row.
+
+            An empty string means the row passed the data contract and may enter
+            the VWAP stateful aggregation. Invalid rows are filtered before
+            state or sink publication.
+            """
+            result = validate_trade(
+                symbol=symbol,
+                price=price,
+                quantity=quantity,
+                side=side,
+                event_time_ms=ts_ms,
+                max_clock_drift_seconds=5,
             )
+            if result.is_valid:
+                return ""
+            return ",".join(result.reason_codes())
+
+        parsed = (
+            parsed
+            .withColumn(
+                "st14_violation",
+                st14_contract_reason_udf(
+                    F.col("symbol"),
+                    F.col("price"),
+                    F.col("size"),
+                    F.col("side"),
+                    F.col("ts_ms"),
+                ),
+            )
+            .filter(F.col("st14_violation") == "")
+            .drop("st14_violation")
+            .withColumn("notional", F.col("price") * F.col("size"))
         )
 
         # ST12: chỉ chia tải cho hot symbols; các symbol còn lại dùng salt 0.

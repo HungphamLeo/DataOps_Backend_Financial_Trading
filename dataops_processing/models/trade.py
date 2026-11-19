@@ -107,27 +107,35 @@ class TradeEvent:
         trade_id = str(data.get("tradeId", ""))
         idempotency_key = str(data.get("idempotencyKey", ""))
 
-        if not idempotency_key:
-        # ST13 fallback cho event cũ chưa mang key.
-        # Không được dùng Kafka offset vì replay trên partition khác sẽ đổi key.
-            import hashlib
-
-            payload = (
-                f"binance|{symbol}|{trade_id}|{int(ts_ms)}"
-            )
-            idempotency_key = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
         if not symbol or price is None or size is None or ts_ms is None:
             return None
-        if float(price) <= 0 or float(size) <= 0:
+        try:
+            normalized_price = float(price)
+            normalized_size = float(size)
+            normalized_ts_ms = int(ts_ms)
+        except (TypeError, ValueError, OverflowError):
             return None
+        if (
+            normalized_price <= 0
+            or normalized_size <= 0
+            or normalized_ts_ms <= 0
+        ):
+            return None
+
+        if not idempotency_key:
+            # ST13 fallback for old events that predate idempotency_key.
+            # Replay safety comes from trade identity, not Kafka offset.
+            import hashlib
+
+            payload = f"binance|{symbol}|{trade_id}|{normalized_ts_ms}"
+            idempotency_key = hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
         return cls(
             symbol=str(symbol),
-            price=float(price),
-            size=float(size),
+            price=normalized_price,
+            size=normalized_size,
             side=str(data.get("side", "buy")),
-            ts_ms=int(ts_ms),
+            ts_ms=normalized_ts_ms,
             trade_id=trade_id,
             idempotency_key=idempotency_key,
            )

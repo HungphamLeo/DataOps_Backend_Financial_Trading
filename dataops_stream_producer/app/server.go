@@ -12,12 +12,30 @@ import (
 	"dataops-stream-producer/utils"
 	"fmt"
 	"log"
+	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func NewServer() error {
 	fmt.Printf("%s [data-stream-producer] Starting\n", utils.GetTimeNow())
+
+	metricsPort := os.Getenv("METRICS_PORT")
+	if metricsPort == "" {
+		metricsPort = "2112"
+	}
+	metricsServer := &http.Server{
+		Addr:    ":" + metricsPort,
+		Handler: promhttp.Handler(),
+	}
+	go func() {
+		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("[Metrics] ST14 metrics server error: %v", err)
+		}
+	}()
 
 	// 1. Load config từ .env
 	cfg, err := configuration.FromEnv()
@@ -75,6 +93,10 @@ func NewServer() error {
 
 	// 7. Block cho đến khi Ctrl+C hoặc SIGTERM
 	<-ctx.Done()
+
+	if err := metricsServer.Shutdown(context.Background()); err != nil {
+		log.Printf("[Metrics] shutdown error: %v", err)
+	}
 
 	fmt.Printf("%s [data-stream-producer] Shutting down gracefully...\n", utils.GetTimeNow())
 	return nil

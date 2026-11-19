@@ -52,10 +52,12 @@ package producer
 import (
 	"context"
 	"dataops-stream-producer/constants"
+	"dataops-stream-producer/pkg/contracts"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,6 +70,16 @@ type Producer interface {
 	PublishTrade(ctx context.Context, instID string, event TradeEvent) error
 	PublishOrderBook(ctx context.Context, instID string, event OrderBookEvent) error
 	PublishLiquidation(ctx context.Context, instID string, event LiquidationEvent) error
+
+	// PublishContractViolation quarantines an upstream payload that violates ST14.
+	PublishContractViolation(
+		ctx context.Context,
+		originalTopic string,
+		key string,
+		payload []byte,
+		reason string,
+	) error
+
 	// TCBS — VN stocks streaming ingestion
 	PublishTCBSMarket(ctx context.Context, symbol string, event TCBSMarketEvent) error
 	PublishTCBSBSA(ctx context.Context, ticker string, event TCBSBSAEvent) error
@@ -79,20 +91,20 @@ type Producer interface {
 
 // kafkaProducer concrete implementation dùng Sarama (IBM/sarama — official Go Kafka client)
 type kafkaProducer struct {
-	producer     sarama.SyncProducer // synchronous producer — block cho đến khi broker ACK
-	resilience   *KafkaResilience
-    // schemaClient *SchemaRegistryClient
+	producer   sarama.SyncProducer // synchronous producer — block cho đến khi broker ACK
+	resilience *KafkaResilience
+	// schemaClient *SchemaRegistryClient
 	schemaClient *SchemaRegistryClient
 	dlqProducer  sarama.SyncProducer // Dead Letter Queue producer
 
 	// Schema IDs: đăng ký 1 lần khi khởi động, cache lại để reuse
-	tradeSchemaID      int
-	obSchemaID         int
-	liqSchemaID        int
-	tcbsMarketID       int
-	tcbsBSAID          int
-	tcbsIntradayID     int
-	tcbsDerivativeID   int
+	tradeSchemaID    int
+	obSchemaID       int
+	liqSchemaID      int
+	tcbsMarketID     int
+	tcbsBSAID        int
+	tcbsIntradayID   int
+	tcbsDerivativeID int
 
 	mu sync.RWMutex // bảo vệ schema IDs khi nhiều goroutines đọc/ghi
 }
@@ -208,22 +220,24 @@ func NewProducer(brokers []string, schemaRegistryURL string) (Producer, error) {
 // registerSchemas đăng ký tất cả Avro schemas với Confluent Schema Registry lúc startup.
 //
 // Flow:
-//   1. Đọc file .avsc từ disk (e.g. "pkg/schemas/binance_trade_event.avsc").
-//   2. POST schema lên Schema Registry endpoint /subjects/{subject}/versions.
-//   3. Nếu schema đã tồn tại và COMPATIBLE → trả về schema_id hiện có.
-//   4. Nếu schema đã tồn tại nhưng INCOMPATIBLE → lỗi (breaking change bị chặn).
-//   5. Cache schema_id trong struct field → dùng trong serializeAvro().
+//  1. Đọc file .avsc từ disk (e.g. "pkg/schemas/binance_trade_event.avsc").
+//  2. POST schema lên Schema Registry endpoint /subjects/{subject}/versions.
+//  3. Nếu schema đã tồn tại và COMPATIBLE → trả về schema_id hiện có.
+//  4. Nếu schema đã tồn tại nhưng INCOMPATIBLE → lỗi (breaking change bị chặn).
+//  5. Cache schema_id trong struct field → dùng trong serializeAvro().
 //
 // Schema compatibility = BACKWARD (default của Confluent Schema Registry):
-//   → Schema mới phải đọc được data được produce bởi schema CŨ.
-//   → Cho phép: thêm field có default value, xóa field không có default.
-//   → Không cho phép: đổi kiểu dữ liệu, thêm field bắt buộc không có default.
-//   → Ví dụ: thêm field "fee_rate float = 0.0" → backward compatible.
-//             đổi "price float" → "price string" → KHÔNG compatible → deploy fail.
+//
+//	→ Schema mới phải đọc được data được produce bởi schema CŨ.
+//	→ Cho phép: thêm field có default value, xóa field không có default.
+//	→ Không cho phép: đổi kiểu dữ liệu, thêm field bắt buộc không có default.
+//	→ Ví dụ: thêm field "fee_rate float = 0.0" → backward compatible.
+//	          đổi "price float" → "price string" → KHÔNG compatible → deploy fail.
 //
 // Tại sao đăng ký lúc STARTUP thay vì mỗi lần serialize?
-//   → Nếu đăng ký mỗi lần: HTTP call tới Schema Registry cho mỗi message → latency spike.
-//   → Startup: đăng ký 1 lần, cache schema_id → serialize chỉ cần prepend 5-byte header.
+//
+//	→ Nếu đăng ký mỗi lần: HTTP call tới Schema Registry cho mỗi message → latency spike.
+//	→ Startup: đăng ký 1 lần, cache schema_id → serialize chỉ cần prepend 5-byte header.
 func (p *kafkaProducer) registerSchemas() error {
 	// Kiểm tra xem Schema Registry URL có cấu hình không
 	if p.schemaClient == nil {
@@ -287,15 +301,17 @@ func (p *kafkaProducer) registerSchemas() error {
 // PublishTrade serialize TradeEvent → Avro bytes → publish lên Kafka topic binance.trade.ticks.
 //
 // MESSAGE KEY = instID (ví dụ: "BTCUSDT"):
-//   → BinancePartitioner dùng key để chọn partition (BTC→P0, ETH→P1, ...).
-//   → Ordering guarantee: tất cả BTCUSDT trades → cùng partition → đúng thứ tự thời gian.
-//   → QUAN TRỌNG với time-series: nếu T1=85000 và T2=85100 đến khác partition,
-//     consumer có thể nhận T2 trước T1 → tính VWAP sai, volume bar sai.
+//
+//	→ BinancePartitioner dùng key để chọn partition (BTC→P0, ETH→P1, ...).
+//	→ Ordering guarantee: tất cả BTCUSDT trades → cùng partition → đúng thứ tự thời gian.
+//	→ QUAN TRỌNG với time-series: nếu T1=85000 và T2=85100 đến khác partition,
+//	  consumer có thể nhận T2 trước T1 → tính VWAP sai, volume bar sai.
 //
 // Timestamp = time.UnixMilli(event.TsMs):
-//   → Kafka lưu event time (thời điểm trade thực tế trên sàn) thay vì ingestion time.
-//   → Spark Structured Streaming dùng event time này để định nghĩa window boundaries.
-//   → Cho phép Watermark hoạt động chính xác dù message đến muộn (late arrival).
+//
+//	→ Kafka lưu event time (thời điểm trade thực tế trên sàn) thay vì ingestion time.
+//	→ Spark Structured Streaming dùng event time này để định nghĩa window boundaries.
+//	→ Cho phép Watermark hoạt động chính xác dù message đến muộn (late arrival).
 func (p *kafkaProducer) PublishTrade(ctx context.Context, instID string, event TradeEvent) error {
 	ApplyTradeIdempotencyKey(&event, "binance")
 	payload, err := p.serializeAvro(p.tradeSchemaID, event)
@@ -312,8 +328,8 @@ func (p *kafkaProducer) PublishTrade(ctx context.Context, instID string, event T
 	}
 
 	if err := p.sendWithResilience(msg); err != nil {
-    log.Printf("[Producer] load shedding topic=%s error=%v", msg.Topic, err)
-    return err
+		log.Printf("[Producer] load shedding topic=%s error=%v", msg.Topic, err)
+		return err
 	}
 
 	return nil
@@ -455,20 +471,22 @@ func (p *kafkaProducer) PublishTCBSDerivative(ctx context.Context, symbol string
 // serializeAvro encode event thành Confluent Wire Format.
 //
 // WIRE FORMAT (5-byte header + payload):
-//   Byte 0:    0x00 — "Confluent magic byte", phân biệt với plain JSON (không có byte này).
-//   Bytes 1-4: schema_id dưới dạng big-endian int32.
-//              Consumer dùng schema_id để gọi Schema Registry GET /schemas/ids/{id}
-//              và lấy schema để deserialize — không cần embed schema vào message.
-//   Bytes 5+:  payload (hiện tại là JSON bytes, không phải Avro binary).
-//              NOTE: Đây là trade-off — Avro binary cần Avro library để encode/decode.
-//              JSON fallback cho phép debug dễ hơn (readable bằng kafka-console-consumer).
-//              Khi cần tối ưu bandwidth thật sự → switch sang hlinkedhashmap Avro binary.
+//
+//	Byte 0:    0x00 — "Confluent magic byte", phân biệt với plain JSON (không có byte này).
+//	Bytes 1-4: schema_id dưới dạng big-endian int32.
+//	           Consumer dùng schema_id để gọi Schema Registry GET /schemas/ids/{id}
+//	           và lấy schema để deserialize — không cần embed schema vào message.
+//	Bytes 5+:  payload (hiện tại là JSON bytes, không phải Avro binary).
+//	           NOTE: Đây là trade-off — Avro binary cần Avro library để encode/decode.
+//	           JSON fallback cho phép debug dễ hơn (readable bằng kafka-console-consumer).
+//	           Khi cần tối ưu bandwidth thật sự → switch sang hlinkedhashmap Avro binary.
 //
 // FALLBACK khi schemaID <= 0 (Schema Registry không khả dụng):
-//   → Gửi plain JSON bytes (không có 5-byte header).
-//   → Consumer (dataops_processing/models/trade.py) handle cả 2 cases:
-//     strip_confluent_header() kiểm tra magic byte 0x00 trước khi parse.
-//   → Cho phép chạy dev mode không cần Schema Registry service.
+//
+//	→ Gửi plain JSON bytes (không có 5-byte header).
+//	→ Consumer (dataops_processing/models/trade.py) handle cả 2 cases:
+//	  strip_confluent_header() kiểm tra magic byte 0x00 trước khi parse.
+//	→ Cho phép chạy dev mode không cần Schema Registry service.
 func (p *kafkaProducer) serializeAvro(schemaID int, event interface{}) ([]byte, error) {
 	jsonBytes, err := json.Marshal(event)
 	if err != nil {
@@ -491,14 +509,16 @@ func (p *kafkaProducer) serializeAvro(schemaID int, event interface{}) ([]byte, 
 // sendToDLQ route message lỗi vào Dead Letter Queue topic tương ứng.
 //
 // DLQ message structure:
-//   { "event": <original_payload>, "error": "<error_string>", "timestamp": <unix_ms> }
+//
+//	{ "event": <original_payload>, "error": "<error_string>", "timestamp": <unix_ms> }
 //
 // Tại sao trả về originalErr thay vì DLQ error?
-//   → Caller (e.g. PublishTrade) biết rằng message không được ghi vào main topic.
-//   → Caller có thể log, increment metric, hoặc alert về vấn đề này.
-//   → DLQ write failure được log riêng nhưng không override original error.
-//   → Nguyên tắc: nếu cả main topic lẫn DLQ đều fail → log và tiếp tục.
-//     Message bị mất là ít tệ hơn crash toàn bộ producer (trade-off chấp nhận được).
+//
+//	→ Caller (e.g. PublishTrade) biết rằng message không được ghi vào main topic.
+//	→ Caller có thể log, increment metric, hoặc alert về vấn đề này.
+//	→ DLQ write failure được log riêng nhưng không override original error.
+//	→ Nguyên tắc: nếu cả main topic lẫn DLQ đều fail → log và tiếp tục.
+//	  Message bị mất là ít tệ hơn crash toàn bộ producer (trade-off chấp nhận được).
 func (p *kafkaProducer) sendToDLQ(dlqTopic string, key string, event interface{}, originalErr error) error {
 	dlqPayload, err := json.Marshal(map[string]interface{}{
 		"event":     event,
@@ -525,28 +545,114 @@ func (p *kafkaProducer) sendToDLQ(dlqTopic string, key string, event interface{}
 	return originalErr // trả về error gốc để caller biết
 }
 
+// PublishContractViolation sends an upstream payload that failed ST14 validation
+// to the dedicated contract violation DLQ.
+//
+// Parameters:
+//   - ctx: request/context cancellation value.
+//   - originalTopic: canonical topic that the message would otherwise enter.
+//   - key: Kafka key, normally the trading symbol.
+//   - payload: original raw upstream payload. It is preserved for investigation
+//     and replay after the upstream root cause is fixed.
+//   - reason: stable ST14 violation code.
+//
+// Returns:
+//   - error: returned only when the DLQ write fails.
+//
+// This method MUST NOT publish invalid data to the main trade or orderbook topic.
+func (p *kafkaProducer) PublishContractViolation(
+	ctx context.Context,
+	originalTopic string,
+	key string,
+	payload []byte,
+	reason string,
+) error {
+	source := "binance"
+	if strings.Contains(originalTopic, "orderbook") {
+		source = "binance_orderbook"
+	} else if strings.Contains(originalTopic, "trade") {
+		source = "binance_trade"
+	}
+	contracts.RecordViolation(reason, source)
+
+	dlqPayload, err := json.Marshal(map[string]interface{}{
+		"source":         "binance",
+		"original_topic": originalTopic,
+		"reason":         reason,
+		"received_at_ms": time.Now().UnixMilli(),
+		"event":          json.RawMessage(payload),
+	})
+	if err != nil {
+		log.Printf(
+			"[ST14] failed to marshal contract violation payload: %v",
+			err,
+		)
+		return err
+	}
+
+	dlqMessage := &sarama.ProducerMessage{
+		Topic: constants.TopicContractViolationsDLQ,
+		Key:   sarama.StringEncoder(key),
+		Value: sarama.ByteEncoder(dlqPayload),
+		Headers: []sarama.RecordHeader{
+			{
+				Key:   []byte("original-topic"),
+				Value: []byte(originalTopic),
+			},
+			{
+				Key:   []byte("failure-reason"),
+				Value: []byte(reason),
+			},
+			{
+				Key:   []byte("source"),
+				Value: []byte("binance"),
+			},
+		},
+	}
+
+	if _, _, err := p.dlqProducer.SendMessage(dlqMessage); err != nil {
+		log.Printf(
+			"[ST14] contract violation DLQ write failed topic=%s key=%s reason=%s error=%v",
+			constants.TopicContractViolationsDLQ,
+			key,
+			reason,
+			err,
+		)
+		return err
+	}
+
+	log.Printf(
+		"[ST14] quarantined invalid upstream record topic=%s key=%s reason=%s",
+		originalTopic,
+		key,
+		reason,
+	)
+
+	return nil
+}
+
 func (p *kafkaProducer) Close() error {
-    if p.resilience != nil {
-        p.resilience.Close()
-    }
+	if p.resilience != nil {
+		p.resilience.Close()
+	}
 
-    var closeErr error
-    if err := p.producer.Close(); err != nil {
-        closeErr = err
-    }
+	var closeErr error
+	if err := p.producer.Close(); err != nil {
+		closeErr = err
+	}
 
-    if err := p.dlqProducer.Close(); err != nil && closeErr == nil {
-        closeErr = err
-    }
+	if err := p.dlqProducer.Close(); err != nil && closeErr == nil {
+		closeErr = err
+	}
 
-    return closeErr
+	return closeErr
 }
 
 func (p *kafkaProducer) sendWithResilience(msg *sarama.ProducerMessage) error {
-    if p.resilience == nil {
-        _, _, err := p.producer.SendMessage(msg)
-        return err
-    }
+	if p.resilience == nil {
+		_, _, err := p.producer.SendMessage(msg)
+		return err
+	}
 
-    return p.resilience.Send(msg)
+	return p.resilience.Send(msg)
 }

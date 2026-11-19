@@ -1,0 +1,19 @@
+# ST14 — In-stream Data Contract cho dữ liệu upstream Binance/TCBS.
+trade:
+  # Giá phải là số hữu hạn và lớn hơn 0.
+  price_must_be_positive: true
+
+  # Khối lượng phải là số hữu hạn và lớn hơn 0.
+  quantity_must_be_positive: true
+
+  # Sàn chỉ được phép trả buy hoặc sell.
+  allowed_sides:
+    - buy
+    - sell
+
+  # EventTime không được lệch quá 5 giây so với clock của ingestion node.
+  max_clock_drift_seconds: 5
+
+orderbook:
+  # Giá bid cao nhất không được lớn hơn giá ask thấp nhất.
+  bid_must_be_below_ask: true

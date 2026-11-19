@@ -179,6 +179,7 @@ for t in platform.dlq \
          binance.trade.ticks.dlq \
          binance.orderbook.snapshot.dlq \
          binance.liquidation.events.dlq \
+         trading.contract_violations.dlq \
          tcbs.market.snapshot.dlq \
          tcbs.bsa.events.dlq \
          tcbs.intraday.ticks.dlq \

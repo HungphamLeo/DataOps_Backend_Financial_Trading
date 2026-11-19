@@ -45,7 +45,9 @@ package websocket
 
 import (
 	"context"
+	"dataops-stream-producer/constants"
 	"dataops-stream-producer/pkg/configuration"
+	"dataops-stream-producer/pkg/contracts"
 	"dataops-stream-producer/pkg/producer"
 	"dataops-stream-producer/redis"
 	"dataops-stream-producer/utils"
@@ -66,14 +68,22 @@ type BinanceProducer struct {
 	cfg      *configuration.Config
 	producer producer.Producer
 	redis    redis.Service
+	contract *contracts.Config
 	wg       sync.WaitGroup
 }
 
 func NewBinanceProducer(cfg *configuration.Config, prod producer.Producer, redis redis.Service) *BinanceProducer {
+	contract, err := contracts.LoadConfig(
+		"config/data_contracts.yaml",
+	)
+	if err != nil {
+		panic(fmt.Sprintf("ST14 contract configuration error: %v", err))
+	}
 	return &BinanceProducer{
 		cfg:      cfg,
 		producer: prod,
 		redis:    redis,
+		contract: contract,
 	}
 }
 
@@ -203,14 +213,61 @@ func (p *BinanceProducer) handleMessage(symbol string, raw []byte) {
 		var rawTrade BinanceRawTrade
 		if err := json.Unmarshal(envelope.Data, &rawTrade); err != nil {
 			log.Printf("[BinanceProducer] [%s] unmarshal trade error: %v", symbol, err)
+			_ = p.producer.PublishContractViolation(
+				ctx,
+				constants.TopicBinanceTradeTicks,
+				symbol,
+				raw,
+				string(contracts.ViolationMalformedNumeric),
+			)
 			return
 		}
 
-		price, _ := strconv.ParseFloat(rawTrade.Price, 64)
-		size, _ := strconv.ParseFloat(rawTrade.Quantity, 64)
+		price, priceErr := strconv.ParseFloat(rawTrade.Price, 64)
+		if priceErr != nil {
+			_ = p.producer.PublishContractViolation(
+				ctx,
+				constants.TopicBinanceTradeTicks,
+				symbol,
+				raw,
+				string(contracts.ViolationMalformedNumeric),
+			)
+			return
+		}
+
+		size, quantityErr := strconv.ParseFloat(rawTrade.Quantity, 64)
+		if quantityErr != nil {
+			_ = p.producer.PublishContractViolation(
+				ctx,
+				constants.TopicBinanceTradeTicks,
+				symbol,
+				raw,
+				string(contracts.ViolationMalformedNumeric),
+			)
+			return
+		}
 		side := "buy"
 		if rawTrade.IsBuyerMaker {
 			side = "sell" // Buyer is maker => Seller is taker (aggressive)
+		}
+		violations := p.contract.ValidateTrade(
+			price,
+			size,
+			side,
+			rawTrade.TradeTime,
+		)
+		if len(violations) > 0 {
+			log.Printf("[BinanceProducer] [%s] trade validation violations: %v", symbol, violations)
+			for _, violation := range violations {
+				_ = p.producer.PublishContractViolation(
+					ctx,
+					constants.TopicBinanceTradeTicks,
+					symbol,
+					raw,
+					string(violation),
+				)
+			}
+			return
 		}
 
 		// Cache latest trade tick — snapshot thuần cho real-time dashboard / API query nhanh.
@@ -245,26 +302,109 @@ func (p *BinanceProducer) handleMessage(symbol string, raw []byte) {
 	case strings.Contains(envelope.Stream, "@depth"):
 		var rawDepth BinanceRawDepth
 		if err := json.Unmarshal(envelope.Data, &rawDepth); err != nil {
-			log.Printf("[BinanceProducer] [%s] unmarshal depth error: %v", symbol, err)
+			log.Printf(
+				"[ST14] [%s] unmarshal depth error: %v",
+				symbol,
+				err,
+			)
+			_ = p.producer.PublishContractViolation(
+				ctx,
+				constants.TopicBinanceOrderBookSnapshot,
+				symbol,
+				raw,
+				string(contracts.ViolationMalformedNumeric),
+			)
 			return
 		}
 
 		bids := make([]producer.PriceLevel, 0, len(rawDepth.Bids))
-		for _, b := range rawDepth.Bids {
-			if len(b) >= 2 {
-				px, _ := strconv.ParseFloat(b[0], 64)
-				qty, _ := strconv.ParseFloat(b[1], 64)
-				bids = append(bids, producer.PriceLevel{Price: px, Quantity: qty})
+		bidPairs := make([]contracts.PricePair, 0, len(rawDepth.Bids))
+
+		for _, bid := range rawDepth.Bids {
+			if len(bid) < 2 {
+				_ = p.producer.PublishContractViolation(
+					ctx,
+					constants.TopicBinanceOrderBookSnapshot,
+					symbol,
+					raw,
+					string(contracts.ViolationInvalidOrderBook),
+				)
+				return
 			}
+
+			price, priceErr := strconv.ParseFloat(bid[0], 64)
+			quantity, quantityErr := strconv.ParseFloat(bid[1], 64)
+			if priceErr != nil || quantityErr != nil {
+				_ = p.producer.PublishContractViolation(
+					ctx,
+					constants.TopicBinanceOrderBookSnapshot,
+					symbol,
+					raw,
+					string(contracts.ViolationMalformedNumeric),
+				)
+				return
+			}
+
+			bids = append(bids, producer.PriceLevel{
+				Price:    price,
+				Quantity: quantity,
+			})
+			bidPairs = append(bidPairs, contracts.PricePair{
+				Price:    price,
+				Quantity: quantity,
+			})
 		}
 
 		asks := make([]producer.PriceLevel, 0, len(rawDepth.Asks))
-		for _, a := range rawDepth.Asks {
-			if len(a) >= 2 {
-				px, _ := strconv.ParseFloat(a[0], 64)
-				qty, _ := strconv.ParseFloat(a[1], 64)
-				asks = append(asks, producer.PriceLevel{Price: px, Quantity: qty})
+		askPairs := make([]contracts.PricePair, 0, len(rawDepth.Asks))
+
+		for _, ask := range rawDepth.Asks {
+			if len(ask) < 2 {
+				_ = p.producer.PublishContractViolation(
+					ctx,
+					constants.TopicBinanceOrderBookSnapshot,
+					symbol,
+					raw,
+					string(contracts.ViolationInvalidOrderBook),
+				)
+				return
 			}
+
+			price, priceErr := strconv.ParseFloat(ask[0], 64)
+			quantity, quantityErr := strconv.ParseFloat(ask[1], 64)
+			if priceErr != nil || quantityErr != nil {
+				_ = p.producer.PublishContractViolation(
+					ctx,
+					constants.TopicBinanceOrderBookSnapshot,
+					symbol,
+					raw,
+					string(contracts.ViolationMalformedNumeric),
+				)
+				return
+			}
+
+			asks = append(asks, producer.PriceLevel{
+				Price:    price,
+				Quantity: quantity,
+			})
+			askPairs = append(askPairs, contracts.PricePair{
+				Price:    price,
+				Quantity: quantity,
+			})
+		}
+
+		violations := p.contract.ValidateOrderBook(bidPairs, askPairs)
+		if len(violations) > 0 {
+			for _, violation := range violations {
+				_ = p.producer.PublishContractViolation(
+					ctx,
+					constants.TopicBinanceOrderBookSnapshot,
+					symbol,
+					raw,
+					string(violation),
+				)
+			}
+			return
 		}
 
 		checksum := int32(rawDepth.LastUpdateID)
@@ -278,7 +418,11 @@ func (p *BinanceProducer) handleMessage(symbol string, raw []byte) {
 		}
 
 		if err := p.producer.PublishOrderBook(ctx, symbol, obEvent); err != nil {
-			log.Printf("[BinanceProducer] [%s] publish orderbook error: %v", symbol, err)
+			log.Printf(
+				"[BinanceProducer] [%s] publish orderbook error: %v",
+				symbol,
+				err,
+			)
 		}
 	}
 }
@@ -290,16 +434,16 @@ type BinanceCombinedStreamMsg struct {
 }
 
 type BinanceRawTrade struct {
-	EventType    string `json:"e"`
-	EventTime    int64  `json:"E"`
-	Symbol       string `json:"s"`
-	TradeID      int64  `json:"t"`
-	Price        string `json:"p"`
-	Quantity     string `json:"q"`
-	BuyerOrderID int64  `json:"b"`
-	SellerOrderID int64 `json:"a"`
-	TradeTime    int64  `json:"T"`
-	IsBuyerMaker bool   `json:"m"`
+	EventType     string `json:"e"`
+	EventTime     int64  `json:"E"`
+	Symbol        string `json:"s"`
+	TradeID       int64  `json:"t"`
+	Price         string `json:"p"`
+	Quantity      string `json:"q"`
+	BuyerOrderID  int64  `json:"b"`
+	SellerOrderID int64  `json:"a"`
+	TradeTime     int64  `json:"T"`
+	IsBuyerMaker  bool   `json:"m"`
 }
 
 type BinanceRawDepth struct {

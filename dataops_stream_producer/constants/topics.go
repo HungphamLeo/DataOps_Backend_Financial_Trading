@@ -15,19 +15,19 @@ const (
 	TopicBinanceLiquidations = TopicBinanceLiquidation
 
 	// TCBS topics — thay thế VPS cho streaming ingestion
-	TopicTCBSMarketSnapshot    = "tcbs.market.snapshot"     // tickerCommons full snapshot
-	TopicTCBSBSA               = "tcbs.bsa.events"          // Buy/Sell Analysis per ticker
-	TopicTCBSIntradayTicks     = "tcbs.intraday.ticks"      // tick-by-tick intraday history
-	TopicTCBSDerivContracts    = "tcbs.derivative.contracts" // WSS real-time phái sinh VN30F
+	TopicTCBSMarketSnapshot = "tcbs.market.snapshot"      // tickerCommons full snapshot
+	TopicTCBSBSA            = "tcbs.bsa.events"           // Buy/Sell Analysis per ticker
+	TopicTCBSIntradayTicks  = "tcbs.intraday.ticks"       // tick-by-tick intraday history
+	TopicTCBSDerivContracts = "tcbs.derivative.contracts" // WSS real-time phái sinh VN30F
 
 	// Aliases cho producer.go
 	TopicTCBSMarket   = TopicTCBSMarketSnapshot
 	TopicTCBSBSAAlias = TopicTCBSBSA
 
 	// Alert topics (output của Spark streaming)
-	TopicAlertFundingAnomaly  = "binance.alerts.funding-anomaly"
-	TopicAlertLiquidation     = "binance.alerts.liquidation"
-	TopicAlertTCBSBSAAnomaly  = "tcbs.alerts.bsa-anomaly"
+	TopicAlertFundingAnomaly = "binance.alerts.funding-anomaly"
+	TopicAlertLiquidation    = "binance.alerts.liquidation"
+	TopicAlertTCBSBSAAnomaly = "tcbs.alerts.bsa-anomaly"
 
 	// Dead Letter Queue topics
 	TopicDLQ                    = "platform.dlq"
@@ -41,7 +41,11 @@ const (
 
 	// Consumer group IDs
 	GroupSparkStreaming = "spark-streaming-group"
-	GroupAlerts        = "alert-group"
-	GroupInfluxDB      = "influxdb-group"
-	GroupAnalyticsAPI  = "api-query-group"
+	GroupAlerts         = "alert-group"
+	GroupInfluxDB       = "influxdb-group"
+	GroupAnalyticsAPI   = "api-query-group"
+
+	// ST14 — dedicated in-stream contract violations DLQ.
+	// Violations are quarantined here instead of entering the bronze/silver pipeline.
+	TopicContractViolationsDLQ = "trading.contract_violations.dlq"
 )

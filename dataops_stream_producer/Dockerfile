@@ -29,6 +29,7 @@ WORKDIR /app
 
 COPY --from=builder /build/dataops-stream-producer /app/dataops-stream-producer
 COPY --from=builder /build/pkg/schemas /app/pkg/schemas
+COPY --from=builder /build/config /app/config
 
 RUN chown -R appuser:appgroup /app
 
