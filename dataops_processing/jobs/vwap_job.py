@@ -244,15 +244,21 @@ def _write_vwap_batch(
 
     final_df = _merge_vwap_salt_partials(batch_df, interval)
 
-    # ST13: txnAppId phải ổn định khi dùng lại cùng checkpoint.
-    # Nếu tạo checkpoint mới, hãy đổi txnAppId để batch ID bắt đầu lại không bị bỏ qua.
-    (
-        final_df.write
-        .format("delta")
-        .mode("append")
-        .option("txnAppId", "vwap-job-st12")
-        .option("txnVersion", batch_id)
-        .save(delta_path)
+    # ST13: Write-Audit-Publish thay vì append trực tiếp.
+    # Ghi staging, audit batch, rồi MERGE vào bảng Silver chính.
+    from dataops_processing.jobs.wap_sink import write_audit_publish_vwap
+
+    wap_audit = write_audit_publish_vwap(
+        spark=batch_df.sparkSession,
+        final_path=delta_path,
+        staging_path=f"{delta_path}_staging/batch_{batch_id}",
+        batch_df=final_df,
+        batch_id=batch_id,
+    )
+    logger.info(
+        "ST13 WAP published batch_id=%d rows=%d",
+        batch_id,
+        wap_audit.row_count,
     )
 
     rows: list[dict[str, Any]] = []
@@ -365,6 +371,8 @@ class VWAPStreamingJob(BaseProcessingJob):
             StructField("size", DoubleType(), nullable=False),
             StructField("side", StringType(), nullable=True),
             StructField("ts_ms", LongType(), nullable=False),
+            StructField("trade_id", StringType(), nullable=True),
+            StructField("idempotency_key", StringType(), nullable=False),
         ])
 
         @F.udf(returnType=trade_schema)
@@ -380,6 +388,8 @@ class VWAPStreamingJob(BaseProcessingJob):
             .select(
                 F.col("partition").alias("kafka_partition"),
                 F.col("offset").alias("kafka_offset"),
+                F.col("trade.trade_id").alias("trade_id"),
+                F.col("trade.idempotency_key").alias("idempotency_key"),
                 parse_trade_udf(F.col("value")).alias("trade"),
             )
             .filter(F.col("trade").isNotNull())

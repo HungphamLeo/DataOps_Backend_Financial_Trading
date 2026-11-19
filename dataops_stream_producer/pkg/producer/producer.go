@@ -297,6 +297,7 @@ func (p *kafkaProducer) registerSchemas() error {
 //   → Spark Structured Streaming dùng event time này để định nghĩa window boundaries.
 //   → Cho phép Watermark hoạt động chính xác dù message đến muộn (late arrival).
 func (p *kafkaProducer) PublishTrade(ctx context.Context, instID string, event TradeEvent) error {
+	ApplyTradeIdempotencyKey(&event, "binance")
 	payload, err := p.serializeAvro(p.tradeSchemaID, event)
 	if err != nil {
 		return p.sendToDLQ(constants.TopicBinanceTradesDLQ, instID, event, err)

@@ -237,7 +237,7 @@ func (p *BinanceProducer) handleMessage(symbol string, raw []byte) {
 			ProducedMs: time.Now().UnixMilli(),
 			InstType:   "SPOT",
 		}
-
+		producer.ApplyTradeIdempotencyKey(&tradeEvent, "binance")
 		if err := p.producer.PublishTrade(ctx, symbol, tradeEvent); err != nil {
 			log.Printf("[BinanceProducer] [%s] publish trade error: %v", symbol, err)
 		}

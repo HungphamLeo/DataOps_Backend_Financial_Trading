@@ -52,8 +52,16 @@ class TradeEvent:
     Dùng __slots__ để giảm memory footprint trên executor.
     """
 
-    __slots__ = ("symbol", "price", "size", "side", "ts_ms", "notional")
-
+    __slots__ = (
+        "symbol",
+        "price",
+        "size",
+        "side",
+        "ts_ms",
+        "trade_id",
+        "idempotency_key",
+        "notional",
+    )
     def __init__(
         self,
         symbol: str,
@@ -61,12 +69,16 @@ class TradeEvent:
         size: float,
         side: str,
         ts_ms: int,
+        trade_id: str = "",
+        idempotency_key: str = "",
     ) -> None:
         self.symbol   = symbol
         self.price    = price
         self.size     = size
         self.side     = side
         self.ts_ms    = ts_ms
+        self.trade_id = trade_id
+        self.idempotency_key = idempotency_key
         self.notional = price * size   # VWAP numerator component — pre-computed
 
     @classmethod
@@ -86,11 +98,24 @@ class TradeEvent:
             data = json.loads(payload)
         except (ValueError, UnicodeDecodeError):
             return None
-
+        
+           
         symbol = data.get("instId")
         price  = data.get("price")
         size   = data.get("size")
         ts_ms  = data.get("tsMs")
+        trade_id = str(data.get("tradeId", ""))
+        idempotency_key = str(data.get("idempotencyKey", ""))
+
+        if not idempotency_key:
+        # ST13 fallback cho event cũ chưa mang key.
+        # Không được dùng Kafka offset vì replay trên partition khác sẽ đổi key.
+            import hashlib
+
+            payload = (
+                f"binance|{symbol}|{trade_id}|{int(ts_ms)}"
+            )
+            idempotency_key = hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
         if not symbol or price is None or size is None or ts_ms is None:
             return None
@@ -103,8 +128,23 @@ class TradeEvent:
             size=float(size),
             side=str(data.get("side", "buy")),
             ts_ms=int(ts_ms),
-        )
+            trade_id=trade_id,
+            idempotency_key=idempotency_key,
+           )
 
     def to_tuple(self) -> tuple:
-        """Trả về tuple cho Spark UDF return (khớp với trade_schema StructType)."""
-        return (self.symbol, self.price, self.size, self.side, self.ts_ms)
+        """
+        ST13: Trả tuple khớp trade_schema và giữ trade_id/idempotency_key.
+
+        Returns:
+            Tuple gồm symbol, price, size, side, ts_ms, trade_id và idempotency_key.
+        """
+        return (
+            self.symbol,
+            self.price,
+            self.size,
+            self.side,
+            self.ts_ms,
+            self.trade_id,
+            self.idempotency_key,
+        )

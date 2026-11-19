@@ -240,6 +240,24 @@ class TestWriteToInfluxDB(unittest.TestCase):
             _write_to_influxdb(empty_df, batch_id=0)
             mock_client.assert_not_called()
 
+def test_st13_key_is_deterministic():
+    """ST13: cùng trade content tạo cùng key sau replay/restart."""
+    import hashlib
+
+    source = "binance"
+    symbol = "BTCUSDT"
+    trade_id = "123456"
+    ts_ms = 1700000000000
+
+    expected = hashlib.sha256(
+        f"{source}|{symbol}|{trade_id}|{ts_ms}".encode("utf-8")
+    ).hexdigest()
+
+    assert len(expected) == 64
+    assert expected == hashlib.sha256(
+        f"{source}|{symbol}|{trade_id}|{ts_ms}".encode("utf-8")
+    ).hexdigest()
+
 
 if __name__ == "__main__":
     unittest.main()

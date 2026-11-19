@@ -52,7 +52,14 @@
         "name": "InstrumentType",
         "symbols": ["SPOT", "FUTURES", "SWAP", "OPTION"]
       },
-      "doc": "Instrument type: SPOT=현물, SWAP=perpetual futures, FUTURES=dated futures"
-    }
+
+      "doc": "Instrument type: SPOT=BTC, SWAP=perpetual futures, FUTURES=dated futures"
+    },
+    {
+    "name": "idempotencyKey",
+    "type": "string",
+    "default": "",
+    "doc": "ST13 deterministic key: sha256(source + symbol + tradeId + tsMs)"
+  }
   ]
 }

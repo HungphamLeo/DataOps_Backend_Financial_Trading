@@ -140,6 +140,7 @@ message BinanceTradeEvent {
   double quantity     = 4;
   string side         = 5; // "buy" | "sell"
   int64  timestamp_ms = 6;
+  string idempotency_key = 7; // ST13
 }
 
 message StreamAlertsRequest {

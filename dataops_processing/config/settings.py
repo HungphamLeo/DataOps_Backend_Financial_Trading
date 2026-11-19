@@ -288,6 +288,13 @@ def get_settings() -> ProcessingSettings:
         bucket=      _env("DELTA_BUCKET", d.get("bucket", "binance-datalake")),
         silver_base= d.get("silver_base", "delta/silver"),
         tables=      d.get("tables", {"vwap_1m": "vwap_1m", "volume_bars": "volume_bars"}),
+        maintenance_target_file_size_bytes=int(
+            maintenance.get("target_file_size_bytes", 536870912)
+        ),
+        maintenance_vacuum_retention_hours=int(
+            maintenance.get("vacuum_retention_hours", 168)
+        ),
+        maintenance_tables=maintenance_tables,
     )
 
     s = cfg.get("spark", {})

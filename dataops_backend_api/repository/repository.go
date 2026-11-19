@@ -3,10 +3,10 @@
 package repository
 
 import (
-	"fmt"
 	"dataops-backend-api/configuration"
 	"dataops-backend-api/models"
 	"dataops-backend-api/utils"
+	"fmt"
 	"log"
 	"time"
 
@@ -56,7 +56,8 @@ func InitializeDatabase(cfg *configuration.Config) (*Gorm, error) {
 	// ClusterConfig phải migrate trước User/UserSession để seed row có thể chạy ngay sau.
 	// Fencing Token table cần tồn tại trước khi bất kỳ write handler nào chạy.
 	err = DB.AutoMigrate(
-		&models.ClusterConfig{}, // ST01: Fencing Token — singleton row id=1
+		&models.ClusterConfig{},  // ST01: Fencing Token — singleton row id=1
+		&models.ProcessedEvent{}, // ST13: At-least-once replay deduplication
 		&models.User{},
 		&models.UserSession{},
 	)

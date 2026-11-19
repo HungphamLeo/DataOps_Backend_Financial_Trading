@@ -256,6 +256,7 @@ message CanonicalTrade {
   int64                     ts_ms      = 7;
   bool                      is_confirm = 8;
   string                    source     = 9;
+  string                    idempotency_key = 10; // ST13 — append-only field
 }
 
 // CanonicalOrder — Normalized order record.

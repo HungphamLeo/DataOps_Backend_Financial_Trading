@@ -37,7 +37,17 @@ type TradeEvent struct {
 	ProducedMs  int64   `json:"producedAtMs"` // khi producer gửi lên Kafka
 	InstType    string  `json:"instType"`    // "SPOT" | "SWAP" | "FUTURES"
 }
-
+type TradeEvent struct {
+    InstID          string  `json:"instId"`
+    TradeID         string  `json:"tradeId"`
+    Price           float64 `json:"price"`
+    Size            float64 `json:"size"`
+    Side            string  `json:"side"`
+    TsMs            int64   `json:"tsMs"`
+    ProducedMs      int64   `json:"producedAtMs"`
+    InstType        string  `json:"instType"`
+    IdempotencyKey  string  `json:"idempotencyKey"` // ST13
+}
 // PriceLevel là 1 level trong orderbook (bid hoặc ask)
 type PriceLevel struct {
 	Price     float64 `json:"price"`
